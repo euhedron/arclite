@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+mod ai;
 mod cli;
 mod commands;
 mod output;
@@ -21,6 +22,7 @@ pub fn run() -> ExitCode {
     let result = match &cli.command {
         Command::Doctor(args) => commands::doctor::run(args, &cli.global),
         Command::Inspect(args) => commands::inspect::run(args, &cli.global),
+        Command::Summarize(args) => commands::summarize::run(args, &cli.global),
     };
 
     match result {

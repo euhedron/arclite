@@ -43,3 +43,20 @@ fn inspect_json_reports_counts_and_manifest() {
     let manifests = value["manifests"].as_array().unwrap();
     assert!(manifests.iter().any(|m| m == "Cargo.toml"));
 }
+
+#[test]
+fn summarize_dry_run_makes_no_call_and_estimates() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let assert = Command::cargo_bin("arclite")
+        .unwrap()
+        .args(["summarize", dir, "--dry-run", "--json"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(value["dry_run"], true);
+    assert!(value["estimate"]["approx_tokens"].as_u64().is_some());
+    assert!(value["prompt"].as_str().unwrap().contains("repository"));
+}

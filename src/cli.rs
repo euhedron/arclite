@@ -32,6 +32,8 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Walk a repository and report structured facts about it.
     Inspect(InspectArgs),
+    /// Synthesize a brief assessment of a repository via the Claude CLI.
+    Summarize(SummarizeArgs),
 }
 
 /// Arguments for `arclite doctor`.
@@ -44,4 +46,18 @@ pub struct InspectArgs {
     /// Path to the repository or directory to inspect (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
+}
+
+/// Arguments for `arclite summarize`.
+#[derive(Debug, Args)]
+pub struct SummarizeArgs {
+    /// Path to the repository or directory to assess (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Model to use (a Claude model id). Required for a real call — arclite picks none for you.
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
+    #[arg(long)]
+    pub dry_run: bool,
 }

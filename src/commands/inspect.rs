@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use anyhow::Context;
 use ignore::WalkBuilder;
@@ -22,22 +23,22 @@ const MANIFESTS: &[&str] = &[
     "CMakeLists.txt",
 ];
 
-#[derive(Serialize)]
-struct InspectReport {
-    path: String,
-    is_git_repo: bool,
-    files: usize,
-    dirs: usize,
-    bytes: u64,
-    manifests: Vec<String>,
-    by_extension: BTreeMap<String, usize>,
+#[derive(Debug, Serialize)]
+pub struct InspectReport {
+    pub path: String,
+    pub is_git_repo: bool,
+    pub files: usize,
+    pub dirs: usize,
+    pub bytes: u64,
+    pub manifests: Vec<String>,
+    pub by_extension: BTreeMap<String, usize>,
 }
 
-/// Walk a repository and report structured facts about it. Deterministic — no LLM.
-pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    anyhow::ensure!(args.path.exists(), "cannot access {}", args.path.display());
-    let root = std::path::absolute(&args.path)
-        .with_context(|| format!("cannot resolve {}", args.path.display()))?;
+/// Walk a repository/directory and collect structured facts. Deterministic — no LLM.
+pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
+    anyhow::ensure!(path.exists(), "cannot access {}", path.display());
+    let root =
+        std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))?;
 
     let mut files = 0usize;
     let mut dirs = 0usize;
@@ -87,7 +88,7 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .map(|m| (*m).to_owned())
         .collect();
 
-    let report = InspectReport {
+    Ok(InspectReport {
         path: root.display().to_string(),
         is_git_repo: root.join(".git").exists(),
         files,
@@ -95,7 +96,12 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         bytes,
         manifests,
         by_extension,
-    };
+    })
+}
+
+/// Report structured repo facts (the `inspect` command).
+pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    let report = gather(&args.path)?;
 
     let mut ranked: Vec<(&String, &usize)> = report.by_extension.iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
