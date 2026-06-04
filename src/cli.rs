@@ -60,4 +60,8 @@ pub struct SummarizeArgs {
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
     pub dry_run: bool,
+    /// Allow a Claude tool during synthesis (repeatable). Default: none — summarize is pure
+    /// text synthesis, so it runs with no tools, which is far cheaper. Add only if needed.
+    #[arg(long = "allow-tool", value_name = "TOOL")]
+    pub allow_tool: Vec<String>,
 }

@@ -91,7 +91,16 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
 /// (`--strict-mcp-config`), a neutral working directory (so the target repo's
 /// CLAUDE.md is not auto-loaded), and the prompt passed over stdin (avoiding
 /// shell-quoting pitfalls). Costs real tokens.
-pub fn synthesize(prompt: &str, model: &str) -> anyhow::Result<Synthesis> {
+///
+/// `allowed_tools` is a major cost lever — Claude Code's tool schemas dominate
+/// the context. An empty slice restricts to no tools (cheapest, ~10x less than
+/// the full default — right for pure text synthesis); a non-empty slice allows
+/// exactly those tools.
+pub fn synthesize(
+    prompt: &str,
+    model: &str,
+    allowed_tools: &[String],
+) -> anyhow::Result<Synthesis> {
     // `claude` is an npm shim; on Windows it must be invoked via cmd.
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
@@ -107,11 +116,17 @@ pub fn synthesize(prompt: &str, model: &str) -> anyhow::Result<Synthesis> {
         "--model",
         model,
         "--strict-mcp-config",
-    ])
-    .current_dir(std::env::temp_dir())
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    ]);
+    cmd.arg("--allowedTools");
+    if allowed_tools.is_empty() {
+        cmd.arg(""); // allowlist of none → no tool schemas loaded (minimal context)
+    } else {
+        cmd.args(allowed_tools);
+    }
+    cmd.current_dir(std::env::temp_dir())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()

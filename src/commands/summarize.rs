@@ -27,6 +27,7 @@ struct SummarizeOutput {
 struct DryRunOutput<'a> {
     dry_run: bool,
     model: Option<&'a str>,
+    allowed_tools: &'a [String],
     estimate: ai::Estimate,
     note: &'static str,
     prompt: &'a str,
@@ -41,9 +42,15 @@ pub fn run(args: &SummarizeArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if args.dry_run {
         let estimate = ai::estimate(&prompt);
         let note = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
+        let tools_desc = if args.allow_tool.is_empty() {
+            "none (cheapest — pure synthesis uses no tools)".to_owned()
+        } else {
+            args.allow_tool.join(", ")
+        };
         let human = format!(
-            "[dry run — no AI call, $0.00]\nmodel    {}\nprompt   {} chars (~{} tokens)\nnote     {}\n\n{}",
+            "[dry run — no AI call, $0.00]\nmodel    {}\ntools    {}\nprompt   {} chars (~{} tokens)\nnote     {}\n\n{}",
             args.model.as_deref().unwrap_or("(not set)"),
+            tools_desc,
             estimate.chars,
             estimate.approx_tokens,
             note,
@@ -52,6 +59,7 @@ pub fn run(args: &SummarizeArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         let out = DryRunOutput {
             dry_run: true,
             model: args.model.as_deref(),
+            allowed_tools: &args.allow_tool,
             estimate,
             note,
             prompt: &prompt,
@@ -65,7 +73,7 @@ pub fn run(args: &SummarizeArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         );
     };
 
-    let synthesis = ai::synthesize(&prompt, model)?;
+    let synthesis = ai::synthesize(&prompt, model, &args.allow_tool)?;
     let out = SummarizeOutput {
         synthesis: synthesis.text,
         usage: synthesis.usage,
