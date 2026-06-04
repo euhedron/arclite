@@ -35,8 +35,9 @@ struct InspectReport {
 
 /// Walk a repository and report structured facts about it. Deterministic — no LLM.
 pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let root = std::fs::canonicalize(&args.path)
-        .with_context(|| format!("cannot access {}", args.path.display()))?;
+    anyhow::ensure!(args.path.exists(), "cannot access {}", args.path.display());
+    let root = std::path::absolute(&args.path)
+        .with_context(|| format!("cannot resolve {}", args.path.display()))?;
 
     let mut files = 0usize;
     let mut dirs = 0usize;
