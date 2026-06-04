@@ -17,10 +17,16 @@ use crate::output::emit;
 /// deliberately trading quality for cost; a small model gives unrealistic signal.
 const DEFAULT_MODEL: &str = "opus";
 
-/// Per-file char cap and total char budget across all `--include` paths, keeping
-/// context (and cost) bounded; truncation is always surfaced in the run's sources.
-const INCLUDE_FILE_CAP: usize = 4_000;
-const INCLUDE_TOTAL_BUDGET: usize = 60_000;
+/// Per-file char cap and total char budget across all `--include` paths. Sized for
+/// *auditing* — whole source files should fit — while staying bounded; truncation is
+/// always surfaced in the run's sources. Evolve as signals warrant.
+const INCLUDE_FILE_CAP: usize = 32_000;
+const INCLUDE_TOTAL_BUDGET: usize = 256_000;
+
+/// Caps for the auto-included README and manifest bodies — lighter context than
+/// `--include`d files (which exist to be read in full).
+const README_CAP: usize = 4_000;
+const MANIFEST_CAP: usize = 2_000;
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
 
@@ -127,6 +133,57 @@ pub fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Re
     Ok(format!("\nRules:\n{text}\n"))
 }
 
+/// Assembled repo context plus a record of every source and what was excluded.
+pub struct Context {
+    pub text: String,
+    pub sources: Vec<String>,
+    pub excluded: Vec<String>,
+}
+
+/// Assemble the standard repo context shared by every synthesis command: the scan
+/// summary, README + manifest bodies, any `--include`d files/dirs, and rules —
+/// tracking each source (and what's excluded by default) for the run report. The
+/// commands differ only in the prompt they wrap around this, never in grounding.
+pub fn gather_context(
+    path: &Path,
+    includes: &[PathBuf],
+    rules_dir: Option<&Path>,
+) -> anyhow::Result<Context> {
+    let report = crate::commands::inspect::gather(path)?;
+    let root = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut text = format!(
+        "Repository scan (JSON):\n{}\n",
+        serde_json::to_string_pretty(&report)?
+    );
+    let mut sources = vec!["repository scan".to_owned()];
+
+    if let Some(readme) = read_capped(&root.join("README.md"), README_CAP) {
+        sources.push(format!("README.md ({} chars)", readme.chars().count()));
+        text.push_str(&format!("\nREADME:\n{readme}\n"));
+    }
+    for name in &report.manifests {
+        if let Some(body) = read_capped(&root.join(name), MANIFEST_CAP) {
+            sources.push(format!("{name} ({} chars)", body.chars().count()));
+            text.push_str(&format!("\n{name}:\n{body}\n"));
+        }
+    }
+    text.push_str(&gather_includes(includes, &mut sources));
+    text.push_str(&gather_rules(rules_dir, &mut sources)?);
+
+    let excluded = if includes.is_empty() {
+        vec!["the repo's source files (--include <path> to add)".to_owned()]
+    } else {
+        Vec::new()
+    };
+
+    Ok(Context {
+        text,
+        sources,
+        excluded,
+    })
+}
+
 /// The exact parameters a run used — reported alongside every result so nothing is opaque.
 #[derive(Serialize)]
 struct RunReport<'a> {
@@ -204,15 +261,19 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
 
     let synthesis = ai::synthesize(prompt, model, opts.allowed_tools)?;
     let usage = synthesis.usage;
+    // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
+    let cost = usage
+        .cost_usd
+        .map_or_else(|| "unknown".to_owned(), |c| format!("${c:.4}"));
     let human = format!(
-        "{}\n\nrun: {}\ncost: in {}  cache-write {}  cache-read {}  out {} | ${:.4}",
+        "{}\n\nrun: {}\ncost: in {}  cache-write {}  cache-read {}  out {} | {}",
         synthesis.text,
         report.human(),
         usage.input_tokens,
         usage.cache_creation_input_tokens,
         usage.cache_read_input_tokens,
         usage.output_tokens,
-        usage.cost_usd,
+        cost,
     );
     let out = SynthOutput {
         run: report,

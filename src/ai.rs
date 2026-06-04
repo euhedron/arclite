@@ -12,7 +12,8 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
-    pub cost_usd: f64,
+    /// `None` when the CLI omitted cost — surfaced as "unknown", never a misleading $0.00.
+    pub cost_usd: Option<f64>,
 }
 
 /// A synthesis result: the model's text plus what it cost.
@@ -95,7 +96,7 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
             output_tokens: usage.output_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
             cache_read_input_tokens: usage.cache_read_input_tokens,
-            cost_usd: parsed.total_cost_usd.unwrap_or(0.0),
+            cost_usd: parsed.total_cost_usd,
         },
     })
 }
