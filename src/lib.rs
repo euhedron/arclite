@@ -8,6 +8,7 @@ mod ai;
 mod cli;
 mod commands;
 mod output;
+mod synth;
 
 use cli::{Cli, Command};
 
@@ -23,6 +24,7 @@ pub fn run() -> ExitCode {
         Command::Doctor(args) => commands::doctor::run(args, &cli.global),
         Command::Inspect(args) => commands::inspect::run(args, &cli.global),
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
+        Command::Suggest(args) => commands::suggest::run(args, &cli.global),
     };
 
     match result {

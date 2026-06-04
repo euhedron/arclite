@@ -33,7 +33,9 @@ pub enum Command {
     /// Walk a repository and report structured facts about it.
     Inspect(InspectArgs),
     /// Synthesize a brief assessment of a repository via the Claude CLI.
-    Summarize(SummarizeArgs),
+    Summarize(SynthArgs),
+    /// Synthesize a prioritized list of suggestions for a repository via the Claude CLI.
+    Suggest(SynthArgs),
 }
 
 /// Arguments for `arclite doctor`.
@@ -48,10 +50,10 @@ pub struct InspectArgs {
     pub path: PathBuf,
 }
 
-/// Arguments for `arclite summarize`.
+/// Shared arguments for the synthesis commands (`summarize`, `suggest`).
 #[derive(Debug, Args)]
-pub struct SummarizeArgs {
-    /// Path to the repository or directory to assess (defaults to the current directory).
+pub struct SynthArgs {
+    /// Path to the repository or directory (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
     /// Model to use (a Claude model id). Required for a real call — arclite picks none for you.
@@ -60,8 +62,8 @@ pub struct SummarizeArgs {
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
     pub dry_run: bool,
-    /// Allow a Claude tool during synthesis (repeatable). Default: none — summarize is pure
-    /// text synthesis, so it runs with no tools, which is far cheaper. Add only if needed.
+    /// Allow a Claude tool during synthesis (repeatable). Default: none — these commands are pure
+    /// text synthesis, so they run with no tools, which is far cheaper. Add only if needed.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,
 }
