@@ -24,7 +24,7 @@ It shouldn't require someone to know how the system works -- the original arc pr
 
 ## Specification
 
-- Linux:
+- **Platforms**: cross-platform — Windows, macOS, and Linux all first-class (built in Rust; ships as a single static binary per platform)
 
 - **CLI**: should be able to do and see anything, using flags
 - **Linting**
@@ -67,6 +67,9 @@ It shouldn't require someone to know how the system works -- the original arc pr
 - Dashboard?
 - Agent-agnostic? (e.g. Claude Code + Codex + any)
 - Should prompts be stored as Markdown files with frontmatter or JSON/JSONL files? Same question for things like todos,
+- **Distribution / install**: how does each dev get arclite on their OS — `cargo install`, prebuilt per-OS binaries from CI releases, `cargo-binstall`, Homebrew/Scoop?
+- **CI**: build / test / release across Windows, macOS, and Linux — needs a git remote + provider (e.g. GitHub Pipelines, to match the other repos).
+- **LLM "synthesis" step**: how arclite calls a model for the non-deterministic part — Claude via CLI (`claude -p`), an SDK, or provider-agnostic? (relates to "Agent-agnostic?" above)
 -
 
 ## Related Repositories
