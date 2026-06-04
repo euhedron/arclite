@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 /// Top-level arclite command-line interface.
@@ -28,8 +30,18 @@ pub struct GlobalArgs {
 pub enum Command {
     /// Report runtime, environment, and available tooling.
     Doctor(DoctorArgs),
+    /// Walk a repository and report structured facts about it.
+    Inspect(InspectArgs),
 }
 
 /// Arguments for `arclite doctor`.
 #[derive(Debug, Args)]
 pub struct DoctorArgs {}
+
+/// Arguments for `arclite inspect`.
+#[derive(Debug, Args)]
+pub struct InspectArgs {
+    /// Path to the repository or directory to inspect (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+}

@@ -20,6 +20,7 @@ pub fn run() -> ExitCode {
 
     let result = match &cli.command {
         Command::Doctor(args) => commands::doctor::run(args, &cli.global),
+        Command::Inspect(args) => commands::inspect::run(args, &cli.global),
     };
 
     match result {
