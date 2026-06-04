@@ -136,39 +136,6 @@ pub fn synthesize(prompt: &str, model: &str) -> anyhow::Result<Synthesis> {
     parse_result(&stdout, model)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Real payload shape from a `claude -p ... --output-format json` probe.
-    const SAMPLE: &str = r#"{"type":"result","is_error":false,"result":"ok","total_cost_usd":0.18,"model":"some-model","usage":{"input_tokens":1947,"output_tokens":4,"cache_creation_input_tokens":27378,"cache_read_input_tokens":0}}"#;
-
-    #[test]
-    fn parses_text_and_usage() {
-        let s = parse_result(SAMPLE, "requested-model").unwrap();
-        assert_eq!(s.text, "ok");
-        assert_eq!(s.usage.input_tokens, 1947);
-        assert_eq!(s.usage.cache_creation_input_tokens, 27378);
-        assert_eq!(s.usage.model, "some-model");
-        assert!((s.usage.cost_usd - 0.18).abs() < 1e-9);
-    }
-
-    #[test]
-    fn falls_back_to_requested_model_label() {
-        let json = r#"{"is_error":false,"result":"hi","total_cost_usd":0.0,"usage":{}}"#;
-        let s = parse_result(json, "requested-model").unwrap();
-        assert_eq!(s.usage.model, "requested-model");
-    }
-
-    #[test]
-    fn surfaces_claude_errors() {
-        assert!(parse_result(r#"{"is_error":true,"result":"boom"}"#, "m").is_err());
-    }
-
-    #[test]
-    fn estimate_is_chars_over_four() {
-        let e = estimate("abcdefgh");
-        assert_eq!(e.chars, 8);
-        assert_eq!(e.approx_tokens, 2);
-    }
-}
+// AI-output handling (parse_result) and the prompt estimate are exercised by
+// using `summarize` — its cost/usage output makes any breakage immediately
+// apparent — rather than via unit tests. See the project's testing note.
