@@ -46,16 +46,46 @@ pub struct SynthOptions<'a> {
     pub json: bool,
 }
 
-/// Read a file as text, capped at `max_chars` (char-safe) to keep context bounded.
-pub fn read_capped(path: &Path, max_chars: usize) -> Option<String> {
+/// A file's text capped to a budget: the (possibly truncated) body, the original
+/// char count, and whether it was cut — so any truncation is reportable, not silent.
+pub struct Capped {
+    pub body: String,
+    pub original_chars: usize,
+    pub truncated: bool,
+}
+
+/// Read a file as text, capped at `max_chars` (char-safe), retaining enough to report
+/// exactly what (if anything) was cut.
+pub fn read_capped(path: &Path, max_chars: usize) -> Option<Capped> {
     let text = std::fs::read_to_string(path).ok()?;
-    if text.chars().count() > max_chars {
-        Some(format!(
-            "{}\n…[truncated]",
-            text.chars().take(max_chars).collect::<String>()
-        ))
+    let original_chars = text.chars().count();
+    if original_chars > max_chars {
+        Some(Capped {
+            body: format!(
+                "{}\n…[truncated]",
+                text.chars().take(max_chars).collect::<String>()
+            ),
+            original_chars,
+            truncated: true,
+        })
     } else {
-        Some(text)
+        Some(Capped {
+            body: text,
+            original_chars,
+            truncated: false,
+        })
+    }
+}
+
+/// A `sources` label for a capped file, making truncation explicit (which + by how much).
+fn source_label(name: impl std::fmt::Display, cap: &Capped, max_chars: usize) -> String {
+    if cap.truncated {
+        format!(
+            "{name} ({} chars, truncated to {max_chars})",
+            cap.original_chars
+        )
+    } else {
+        format!("{name} ({} chars)", cap.original_chars)
     }
 }
 
@@ -95,15 +125,11 @@ pub fn gather_includes(paths: &[PathBuf], sources: &mut Vec<String>) -> String {
                 break;
             }
             match read_capped(file, INCLUDE_FILE_CAP) {
-                Some(body) => {
-                    used += body.chars().count();
+                Some(cap) => {
+                    used += cap.body.chars().count();
                     included += 1;
-                    sources.push(format!(
-                        "{} ({} chars)",
-                        file.display(),
-                        body.chars().count()
-                    ));
-                    ctx.push_str(&format!("\n{}:\n{body}\n", file.display()));
+                    sources.push(source_label(file.display(), &cap, INCLUDE_FILE_CAP));
+                    ctx.push_str(&format!("\n{}:\n{}\n", file.display(), cap.body));
                 }
                 None if !is_dir => {
                     sources.push(format!("{} (unreadable — skipped)", file.display()));
@@ -113,8 +139,9 @@ pub fn gather_includes(paths: &[PathBuf], sources: &mut Vec<String>) -> String {
         }
         if is_dir && included < total {
             sources.push(format!(
-                "…{included} of {total} files under {} included (rest skipped: budget or unreadable)",
-                path.display()
+                "…{included} of {total} files under {} included (rest skipped: {}k-char budget reached or unreadable)",
+                path.display(),
+                INCLUDE_TOTAL_BUDGET / 1000
             ));
         }
     }
@@ -158,14 +185,14 @@ pub fn gather_context(
     );
     let mut sources = vec!["repository scan".to_owned()];
 
-    if let Some(readme) = read_capped(&root.join("README.md"), README_CAP) {
-        sources.push(format!("README.md ({} chars)", readme.chars().count()));
-        text.push_str(&format!("\nREADME:\n{readme}\n"));
+    if let Some(cap) = read_capped(&root.join("README.md"), README_CAP) {
+        sources.push(source_label("README.md", &cap, README_CAP));
+        text.push_str(&format!("\nREADME:\n{}\n", cap.body));
     }
     for name in &report.manifests {
-        if let Some(body) = read_capped(&root.join(name), MANIFEST_CAP) {
-            sources.push(format!("{name} ({} chars)", body.chars().count()));
-            text.push_str(&format!("\n{name}:\n{body}\n"));
+        if let Some(cap) = read_capped(&root.join(name), MANIFEST_CAP) {
+            sources.push(source_label(name, &cap, MANIFEST_CAP));
+            text.push_str(&format!("\n{name}:\n{}\n", cap.body));
         }
     }
     text.push_str(&gather_includes(includes, &mut sources));
