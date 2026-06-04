@@ -80,11 +80,12 @@ pub fn run(args: &SummarizeArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     };
     let u = &out.usage;
     let human = format!(
-        "{}\n\n— {} | in {} (+{} cache) / out {} tokens | ${:.4}",
+        "{}\n\n— {} | in {}  cache-write {}  cache-read {}  out {} | ${:.4}",
         out.synthesis,
         u.model,
         u.input_tokens,
         u.cache_creation_input_tokens,
+        u.cache_read_input_tokens,
         u.output_tokens,
         u.cost_usd,
     );
