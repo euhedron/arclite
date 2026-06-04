@@ -2,7 +2,7 @@
 name = "arclite"
 version = "0.0.0"
 edition = "2024"
-description = "Agent-first CLI for cross-repo code intelligence and auditing — a Linux-native successor to arc."
+description = "Agent-first, cross-platform CLI for cross-repo code intelligence and auditing — a successor to arc."
 publish = false
 
 [[bin]]

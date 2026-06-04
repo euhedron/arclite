@@ -8,6 +8,7 @@ mod ai;
 mod cli;
 mod commands;
 mod output;
+mod rules;
 mod synth;
 
 use cli::{Cli, Command};

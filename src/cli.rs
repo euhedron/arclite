@@ -56,7 +56,8 @@ pub struct SynthArgs {
     /// Path to the repository or directory (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Model to use (a Claude model id). Required for a real call — arclite picks none for you.
+    /// Model to use (a Claude model id). Defaults to the best available (`opus`); set this to
+    /// configure *down* for cost. A small model gives unrealistic signal when judging output.
     #[arg(long)]
     pub model: Option<String>,
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
@@ -66,4 +67,12 @@ pub struct SynthArgs {
     /// text synthesis, so they run with no tools, which is far cheaper. Add only if needed.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,
+    /// Directory of Markdown rule files to weigh the synthesis against (anti-patterns,
+    /// standards, principles, …). Each rule's text is included in the AI's context.
+    #[arg(long, value_name = "DIR")]
+    pub rules: Option<PathBuf>,
+    /// Include a file or directory in the context (repeatable; capped + bounded). Directories
+    /// are walked gitignore-aware — e.g. `--include src`. Default: none.
+    #[arg(long, value_name = "PATH")]
+    pub include: Vec<PathBuf>,
 }

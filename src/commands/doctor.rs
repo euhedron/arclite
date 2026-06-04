@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use serde::Serialize;
 
 use crate::cli::{DoctorArgs, GlobalArgs};
@@ -27,8 +25,8 @@ struct Tools {
 
 /// Return the trimmed first line of `<cmd> --version`, or `None` if the command
 /// is missing or exits non-zero.
-fn probe(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd).arg("--version").output().ok()?;
+fn probe(program: &str) -> Option<String> {
+    let output = crate::ai::command(program).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }

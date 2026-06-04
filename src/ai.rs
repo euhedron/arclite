@@ -38,6 +38,20 @@ pub fn estimate(prompt: &str) -> Estimate {
     }
 }
 
+/// Build a [`Command`] for an external program. On Windows, npm-style `.cmd`
+/// shims (e.g. `claude`) can't be launched by `Command::new` directly, so wrap
+/// the call in `cmd /C`. Shared by `doctor`'s probe and [`synthesize`] so the
+/// two never disagree about whether a tool is present.
+pub fn command(program: &str) -> Command {
+    if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", program]);
+        c
+    } else {
+        Command::new(program)
+    }
+}
+
 // The subset of `claude -p --output-format json` we read.
 #[derive(Deserialize)]
 struct ClaudeJson {
@@ -101,14 +115,7 @@ pub fn synthesize(
     model: &str,
     allowed_tools: &[String],
 ) -> anyhow::Result<Synthesis> {
-    // `claude` is an npm shim; on Windows it must be invoked via cmd.
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "claude"]);
-        c
-    } else {
-        Command::new("claude")
-    };
+    let mut cmd = command("claude");
     cmd.args([
         "-p",
         "--output-format",

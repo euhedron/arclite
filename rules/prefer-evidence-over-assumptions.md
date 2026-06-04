@@ -1,0 +1,1 @@
+Base claims about versions, editions, dependencies, APIs, and tooling on the provided context (manifests, lockfiles, build output) rather than on training-cutoff knowledge, which may be stale. Do not assert that something is outdated, invalid, deprecated, or broken unless the provided context supports it; when unsure, recommend verifying it rather than stating it as fact.

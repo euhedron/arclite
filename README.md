@@ -15,7 +15,7 @@ Commands today:
 - **`summarize`** — synthesize a brief assessment of a repo from its facts (AI).
 - **`suggest`** — synthesize a prioritized list of what's worth attention (AI).
 
-Every AI call uses an explicit model (no default), runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and reports its token usage + cost.
+Every AI call defaults to the best model (`opus`) — configurable *down* for cost via `--model` — runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and **reports the exact parameters it used** (model, tools, every context source) alongside its token usage + cost.
 
 ## Background
 
@@ -47,7 +47,7 @@ It shouldn't require someone to know how the system works — the original arc p
 - **Auditing / Gates**: check/audit a repo against selected rules; configurable, usable both on demand and passively (e.g. commit hooks).
 - **Linting**: surface drift/violations against rules (see the "lexicon" item in the Roadmap).
 - **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, etc.) — content storage and structure compatibility.
-- **AI use**: deterministic until synthesis; explicit model, configurable tools, observable cost (see Principles).
+- **AI use**: deterministic until synthesis; best-by-default but configurable model, configurable tools, observable cost + fully reported run parameters (see Principles).
 
 ## Features / Use Cases
 
@@ -68,7 +68,7 @@ It shouldn't require someone to know how the system works — the original arc p
 - **Leverage derivation/transclusion.**
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the synthesis/judgment step.
 - **Trace, resolve, evolve** — unexpected/sub-par results are signal: make them traceable, diagnose, then improve the system.
-- **Sensible, observable, configurable AI spend** — no arbitrary defaults; surface cost; balance context utilization against value.
+- **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); surface cost; report every run parameter; balance context utilization against value.
 - **No hardcoding. No arbitrary conventions. DRY.**
 - **Adversarial** — build in self-checking.
 - **Shared substrates; single source of truth.**
@@ -92,7 +92,7 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 
 ## Open Questions/Ideas
 
-- **Rules — format & lifecycle.** How should rules (anti-patterns, standards, principles, best practices, …) be stored/shared by arclite, its users, and across repos? *Leaning (not canon) toward Markdown + YAML frontmatter, one rule per file:* frontmatter for selectable metadata (`id`, `kind`, `scope`, `applies-to`, `severity`, `tags`, `source`) so a run can include subsets; body for the human-readable rule + rationale + examples (what enters the AI's context). Each rule becomes an addressable, traceable lever. (Same question as prompt storage below — likely one unified approach.)
+- **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its **filename (stem) is the `id`** (single source, no drift), its **contents are the body** (what enters the AI's context). Frontmatter/attributes for *selective inclusion* (`kind`, `scope`, `tags`, …) get added only when something actually filters on them — not before. Open: rename-stability of filename-ids; whether prompts/todos share the same format.
 - **Rules — extraction & application.** Point arclite at a repo (e.g. `streamline`) to *extract* rules; aggregate them; configurably include some/all in any AI run (targeted or passive). The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
 - **IDE & linter integration** — what would integrating with IDEs and linters mean/imply? (To be explored.)
 - **Storage format** — should prompts (and rules, todos, …) be stored as Markdown + frontmatter, or JSON/JSONL?
