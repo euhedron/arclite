@@ -1,0 +1,17 @@
+# GitHub Pipelines — build, test, and lint arclite on Linux.
+# This verifies the non-Windows build is clean and needs none of the
+# Windows-only toolchain workarounds (corp-TLS check-revoke, MinGW dlltool):
+# on Linux there is no `windows-sys` dependency at all.
+image: rust:latest
+
+pipelines:
+  default:
+    - step:
+        name: build / test / lint (linux)
+        script:
+          - rustc --version && cargo --version
+          - rustup component add clippy rustfmt
+          - cargo build --locked
+          - cargo test --locked
+          - cargo clippy --all-targets --locked -- -D warnings
+          - cargo fmt --check
