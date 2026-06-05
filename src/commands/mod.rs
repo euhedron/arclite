@@ -21,6 +21,7 @@ pub fn run_synthesis(
         &args.include,
         args.rules.as_deref(),
         args.max_file_chars,
+        args.changed,
     )?;
     let prompt = build_prompt(&ctx.text);
     synth::run(

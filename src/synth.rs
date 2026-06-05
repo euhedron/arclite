@@ -176,15 +176,41 @@ pub struct Context {
     pub root: PathBuf,
 }
 
+/// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
+/// backing `--changed`. Empty if git isn't available or nothing has changed.
+fn changed_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(output) = ai::command("git")
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            // porcelain: two status chars, a space, then the path ("old -> new" for renames).
+            let path = line.get(3..)?.trim().trim_matches('"');
+            let path = path.rsplit(" -> ").next().unwrap_or(path);
+            (!path.is_empty()).then(|| root.join(path))
+        })
+        .collect()
+}
+
 /// Assemble the standard repo context shared by every synthesis command: the scan summary,
-/// README + manifest bodies, any `--include`d files/dirs, and rules — tracking each source
-/// (and what's excluded by default) for the run report. `max` is the optional caller cap;
-/// by default files are read whole. Commands differ only in the prompt they wrap around this.
+/// README + manifest bodies, any `--include`d files/dirs (and, with `changed`, git-changed
+/// files), and rules — tracking each source (and what's excluded) for the run report. `max`
+/// is the optional caller cap; by default files are read whole. Commands differ only in the prompt.
 pub fn gather_context(
     path: &Path,
     includes: &[PathBuf],
     rules_dir: Option<&Path>,
     max: Option<usize>,
+    changed: bool,
 ) -> anyhow::Result<Context> {
     let report = crate::commands::inspect::gather(path)?;
     let root = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -215,7 +241,7 @@ pub fn gather_context(
         );
     }
     // Resolve --include paths against the target repo (not arclite's cwd); absolute paths as-is.
-    let includes: Vec<PathBuf> = includes
+    let mut includes: Vec<PathBuf> = includes
         .iter()
         .map(|p| {
             if p.is_absolute() {
@@ -225,11 +251,21 @@ pub fn gather_context(
             }
         })
         .collect();
+    // --changed: scope to git-changed files — same group as --include, not special to any command.
+    if changed {
+        let files = changed_files(&root);
+        sources.push(if files.is_empty() {
+            "changed: no git changes found".to_owned()
+        } else {
+            format!("changed: {} git-changed file(s)", files.len())
+        });
+        includes.extend(files);
+    }
     text.push_str(&gather_includes(&includes, max, &seen, &mut sources));
     text.push_str(&gather_rules(rules_dir, &mut sources)?);
 
     let excluded = if includes.is_empty() {
-        vec!["the repo's source files (--include <path> to add)".to_owned()]
+        vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
     } else {
         Vec::new()
     };
