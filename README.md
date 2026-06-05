@@ -89,12 +89,14 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (would auto-catch drift like Claude Code / Codex / arclite casing). Likely lower priority.
 - [ ] Fully review arc's codebase + feature set; clearly identify what made sense vs. what was sub-optimal/unnecessary.
 - [ ] A **rules** system (see Open Questions).
+- [ ] An `--output <dir>` mode — write the analysis / generated docs into a chosen location (e.g. `arclite suggest <repo> --output <repo>/arclite_docs`) instead of only stdout; dovetails with self-derived docs. *(Prospective-user feedback.)*
 
 ## Open Questions/Ideas
 
 - **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its **filename (stem) is the `id`** (single source, no drift), its **contents are the body** (what enters the AI's context). Frontmatter/attributes for *selective inclusion* (`kind`, `scope`, `tags`, …) get added only when something actually filters on them — not before. Open: rename-stability of filename-ids; whether prompts/todos share the same format.
 - **Rules — extraction & application.** Point arclite at a repo (e.g. `streamline`) to *extract* rules; aggregate them; configurably include some/all in any AI run (targeted or passive). The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
 - **IDE & linter integration** — what would integrating with IDEs and linters mean/imply? (To be explored.)
+- **Auto-context vs `--include` on real repos.** The default synthesis context (scan + root `README` + root-level manifests) is thin on real repos — manifests nest in subprojects (IDA, quant) and root READMEs are often stubs — so `--include` is needed for a substantive run today. Open: should auto-context pull the *detected* subdir manifests, or search wider for docs, vs. keeping a light default + explicit `--include`? (Surfaced exercising arclite on IDA/quant; a ~$1 capped review of quant's R core produced specific, code-grounded findings.)
 - **Storage format** — should prompts (and rules, todos, …) be stored as Markdown + frontmatter, or JSON/JSONL?
 - **Agent-agnostic?** (e.g. Claude Code + Codex + any)
 - **Dashboard?**
