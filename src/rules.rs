@@ -49,10 +49,12 @@ pub fn block(dir: Option<&Path>) -> anyhow::Result<Option<String>> {
     if rules.is_empty() {
         return Ok(None);
     }
+    // One section per rule (not a one-line bullet) so multi-paragraph bodies — e.g. the
+    // body + `_provenance:_` line that `extract` emits — round-trip when fed back via `--rules`.
     let rendered = rules
         .iter()
-        .map(|rule| format!("- [{}] {}", rule.id, rule.body))
+        .map(|rule| format!("## {}\n{}", rule.id, rule.body))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
     Ok(Some(rendered))
 }

@@ -14,6 +14,7 @@ Commands today:
 - **`inspect`** — walk any repo and emit structured facts (languages, layout, manifests, git state).
 - **`summarize`** — synthesize a brief assessment of a repo from its facts (AI).
 - **`suggest`** — synthesize a prioritized list of what's worth attention (AI).
+- **`extract`** — synthesize reusable rules (standards, anti-patterns, principles) from a repo, as candidates to curate (AI).
 
 Every AI call defaults to the best model (`opus`) — configurable *down* for cost via `--model` — runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and **reports the exact parameters it used** (model, tools, every context source) alongside its token usage + cost.
 
@@ -51,11 +52,11 @@ It shouldn't require someone to know how the system works — the original arc p
 
 ## Features / Use Cases
 
-**Working today:** `doctor`, `inspect`, `summarize`, `suggest` (see Overview).
+**Working today:** `doctor`, `inspect`, `summarize`, `suggest`, `extract` (see Overview).
 
 **Direction (not yet built):**
 
-- Extract **rules** from a repo (e.g. point arclite at `streamline`) and aggregate them.
+- Aggregate extracted **rules** across repos and dedup them (`extract` produces per-repo candidates today; cross-repo merge is the open part).
 - Configurably include some/all rules in any AI run — targeted or passive (commit hooks, etc.).
 - Audit / gate a repo against rules; rank/prioritize findings.
 - Search across one or more repos.
