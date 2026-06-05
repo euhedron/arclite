@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand};
 /// Top-level arclite command-line interface.
 #[derive(Debug, Parser)]
 #[command(
-    name = "arclite",
+    name = "arc",
     version,
     about = "Agent-first CLI for cross-repo code intelligence and auditing.",
     arg_required_else_help = true

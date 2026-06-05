@@ -26,18 +26,18 @@ Every AI call defaults to the best model (`opus`) — configurable *down* for co
 
 ```sh
 git clone https://github.com/nikganderson/arclite.git && cd arclite
-cargo install --path .        # installs `arclite`; or `cargo build --release` → target/release/arclite
+cargo install --path .        # installs the `arc` command; or `cargo build --release` → target/release/arc
 ```
 
 **Use** (each command takes a repo path, default `.`):
 
 ```sh
-arclite                                  # self-documenting help
-arclite doctor                           # runtime + tooling check (free)
-arclite inspect <repo>                   # deterministic facts, no AI (free)
-arclite suggest <repo> --include src     # AI review — preview with --dry-run ($0) first
-arclite audit   <repo> --rules rules     # flag only violations of the given rules
-arclite extract <repo> --include src     # propose reusable rules to curate into rules/
+arc                                # self-documenting help (the binary is `arc`; the project is arclite)
+arc doctor                         # runtime + tooling check (free)
+arc inspect <repo>                 # deterministic facts, no AI (free)
+arc suggest <repo> --include src   # AI review — preview with --dry-run ($0) first
+arc audit   <repo> --rules rules   # flag only violations of the given rules
+arc extract <repo> --include src   # propose reusable rules to curate into rules/
 ```
 
 Deterministic commands cost nothing; the AI commands print the model, tools, every context source, and exact token usage + cost, and `--dry-run` previews the prompt at zero spend.

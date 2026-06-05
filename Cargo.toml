@@ -6,7 +6,7 @@ description = "Agent-first, cross-platform CLI for cross-repo code intelligence 
 publish = false
 
 [[bin]]
-name = "arclite"
+name = "arc"
 path = "src/main.rs"
 
 [lib]
