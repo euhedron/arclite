@@ -39,6 +39,8 @@ pub struct InspectReport {
     pub bytes: u64,
     pub manifests: Vec<String>,
     pub by_extension: BTreeMap<String, usize>,
+    /// Entries the walk couldn't read (permission denied, I/O, …) — counted, never silently dropped.
+    pub walk_errors: usize,
 }
 
 /// Walk a repository/directory and collect structured facts. Deterministic — no LLM.
@@ -54,10 +56,10 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     let mut manifest_types: BTreeSet<String> = BTreeSet::new();
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
-    let walk = crate::walk::configured(&root);
+    // Walk errors (permission denied, I/O, …) are counted and reported, not swallowed.
+    let (entries, walk_errors) = crate::walk::entries(&root);
 
-    for entry in walk {
-        let Ok(entry) = entry else { continue };
+    for entry in entries {
         if entry.depth() == 0 {
             continue; // the root itself
         }
@@ -101,6 +103,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
         bytes,
         manifests,
         by_extension,
+        walk_errors,
     })
 }
 
@@ -122,7 +125,7 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         more => format!("{top}\n  … +{more} more (--json for all)"),
     };
 
-    let human = format!(
+    let mut human = format!(
         "path       {}\ngit repo   {}\nfiles      {}\ndirs       {}\nbytes      {}\nmanifests  {}\ntop extensions:\n{}",
         report.path,
         report.is_git_repo,
@@ -140,6 +143,13 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             top
         },
     );
+    // Surface unreadable entries (kept out of the counts above) so the scan isn't quietly partial.
+    if report.walk_errors > 0 {
+        human.push_str(&format!(
+            "\nwalk errors {} (entries arclite couldn't read — see --json)",
+            report.walk_errors
+        ));
+    }
 
     emit(&report, &human, global.json)
 }

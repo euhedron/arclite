@@ -75,16 +75,18 @@ fn source_label(name: impl std::fmt::Display, cap: &Capped) -> String {
     }
 }
 
-/// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped).
-fn walk_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = crate::walk::configured(dir)
-        .flatten()
+/// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped) and the
+/// count of walk errors (unreadable entries) so callers can surface them, not drop them.
+fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
+    let (entries, errors) = crate::walk::entries(dir);
+    let mut files: Vec<PathBuf> = entries
+        .into_iter()
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
         .filter(|p| !crate::walk::in_git_dir(p))
         .collect();
     files.sort();
-    files
+    (files, errors)
 }
 
 /// Expand each `--include` path (a file *or* a directory) into context text, applying the
@@ -104,10 +106,10 @@ fn gather_includes(
     let mut ctx = String::new();
     for path in paths {
         let is_dir = path.is_dir();
-        let files = if is_dir {
+        let (files, walk_errors) = if is_dir {
             walk_files(path)
         } else {
-            vec![path.clone()]
+            (vec![path.clone()], 0)
         };
         let mut unreadable = 0usize;
         for file in &files {
@@ -129,6 +131,13 @@ fn gather_includes(
         if unreadable > 0 {
             sources.push(format!(
                 "{unreadable} unreadable file(s) under {} — skipped",
+                path.display()
+            ));
+        }
+        // Likewise surface entries the walk itself couldn't read (permission denied, I/O, …).
+        if walk_errors > 0 {
+            sources.push(format!(
+                "{walk_errors} unwalkable entr(ies) under {} — skipped",
                 path.display()
             ));
         }
