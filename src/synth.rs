@@ -109,6 +109,7 @@ fn gather_includes(
         } else {
             vec![path.clone()]
         };
+        let mut unreadable = 0usize;
         for file in &files {
             if already_seen(file) {
                 continue; // already auto-included (README/manifest) — don't double-count
@@ -121,8 +122,15 @@ fn gather_includes(
                 None if !is_dir => {
                     sources.push(format!("{} (unreadable — skipped)", file.display()));
                 }
-                None => {}
+                None => unreadable += 1,
             }
+        }
+        // Surface unreadable files walked under a directory, rather than silently dropping them.
+        if unreadable > 0 {
+            sources.push(format!(
+                "{unreadable} unreadable file(s) under {} — skipped",
+                path.display()
+            ));
         }
     }
     ctx
