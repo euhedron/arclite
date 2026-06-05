@@ -21,7 +21,7 @@ Every AI call defaults to the best model (`opus`) — configurable *down* for co
 
 ## Getting started
 
-**Prerequisites:** a Rust toolchain (`cargo`); and, for the AI commands (`summarize`/`suggest`/`extract`/`audit`), the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arclite doctor` verifies both.
+**Prerequisites:** a Rust toolchain (`cargo`); and, for the AI commands (`summarize`/`suggest`/`extract`/`audit`), the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arc doctor` verifies both.
 
 **Build / install:**
 
@@ -105,11 +105,10 @@ Open and unsettled — not a plan, an ordering, or a commitment; like everything
 
 - [ ] Permanently disable the legacy arc MCP server.
 - [ ] Fetch Claude docs → Markdown for read-only, citable reference snippets (cite specific lines; *derive* where valuable once the shape is clear). Sample sources under **References**.
-- [ ] Auditing + AI-driven ranking/prioritization of what to tackle next. *(First cut delivered by `suggest`.)*
+- [ ] AI-driven ranking/prioritization of findings — what to tackle first. *(`suggest` is a first cut; `audit` ships for rule violations.)*
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (would auto-catch drift like Claude Code / Codex / arclite casing). Likely lower priority.
 - [ ] Fully review arc's codebase + feature set; clearly identify what made sense vs. what was sub-optimal/unnecessary.
 - [ ] A **rules** system (see Open Questions).
-- [ ] An `--output <dir>` mode — write the analysis / generated docs into a chosen location (e.g. `arclite suggest <repo> --output <repo>/arclite_docs`) instead of only stdout; dovetails with self-derived docs. *(Prospective-user feedback.)*
 
 ## Open Questions/Ideas
 
@@ -134,10 +133,13 @@ Open and unsettled — not a plan, an ordering, or a commitment; like everything
 
 ## References
 
-Sample Claude Code docs to fetch/cite (see the Roadmap item):
+Claude Code docs arclite leverages or draws on (cite specific behavior; *derive* where valuable — see the Roadmap item):
 
-- <https://code.claude.com/docs/en/settings>
-- <https://code.claude.com/docs/en/permissions>
+- <https://code.claude.com/docs/en/headless> — print/headless mode (`claude -p`): how arclite invokes the CLI.
+- <https://code.claude.com/docs/en/cli-reference> — flags arclite passes (`--output-format json`, `--strict-mcp-config`, `--model`, `--allowedTools`, `--add-dir`).
+- <https://code.claude.com/docs/en/memory> — CLAUDE.md + auto-memory, and the `CLAUDE_CODE_DISABLE_*` env vars arclite sets to isolate the synthesis.
+- <https://code.claude.com/docs/en/settings> — settings layers/precedence.
+- <https://code.claude.com/docs/en/permissions> — the tool-permission model behind `--allowedTools`.
 
 ## Other/Notes/Considerations
 
