@@ -37,6 +37,8 @@ pub enum Command {
     Summarize(SynthArgs),
     /// Synthesize a prioritized list of suggestions for a repository via the Claude CLI.
     Suggest(SynthArgs),
+    /// Extract reusable rules (standards, anti-patterns, principles) from a repository via the Claude CLI.
+    Extract(SynthArgs),
 }
 
 /// Arguments for `arclite doctor`.
