@@ -1,6 +1,6 @@
 # arclite
 
-> *Nothing is canon. Everything can evolve*
+> *Nothing is canon. Everything can evolve.*
 >
 > **NOTE**: This is an experimental project; development is expected to be rapid, and every aspect/feature should be considered in-progress. Agents & users are advised not to treat any part of any file — or any architectural, formatting, or structural decision — as settled (anticipate unfinished, abandoned, or sub-optimal thoughts, sentences, systems, structures, designs, and descriptions). Existing state represents in-progress thinking, not settled decisions.
 
@@ -15,6 +15,7 @@ Commands today:
 - **`summarize`** — synthesize a brief assessment of a repo from its facts (AI).
 - **`suggest`** — synthesize a prioritized list of what's worth attention (AI).
 - **`extract`** — synthesize reusable rules (standards, anti-patterns, principles) from a repo, as candidates to curate (AI).
+- **`audit`** — check a repo against selected rules, reporting only concrete violations (AI).
 
 Every AI call defaults to the best model (`opus`) — configurable *down* for cost via `--model` — runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and **reports the exact parameters it used** (model, tools, every context source) alongside its token usage + cost.
 
@@ -40,7 +41,7 @@ arc audit   <repo> --rules rules   # flag only violations of the given rules
 arc extract <repo> --include src   # propose reusable rules to curate into rules/
 ```
 
-Deterministic commands cost nothing; the AI commands print the model, tools, every context source, and exact token usage + cost, and `--dry-run` previews the prompt at zero spend. Any synthesis command can scope its context to just your git-changed files with `--changed` — a cheap, focused run (e.g. `arc audit --rules rules --changed`).
+Deterministic commands cost nothing; the AI commands print the model, tools, every context source, and exact token usage + cost, and `--dry-run` previews the prompt at zero spend. Any synthesis command can scope its context to just your git-changed files with `--changed` — a cheap, focused run (e.g. `arc audit --rules rules --changed`) — and `--output <dir>` also saves the result as a self-describing Markdown doc.
 
 ## Background
 
@@ -76,13 +77,13 @@ It shouldn't require someone to know how the system works — the original arc p
 
 ## Features / Use Cases
 
-**Working today:** `doctor`, `inspect`, `summarize`, `suggest`, `extract` (see Overview).
+**Working today:** `doctor`, `inspect`, `summarize`, `suggest`, `extract`, `audit` (see Overview).
 
 **Direction (not yet built):**
 
 - Aggregate extracted **rules** across repos and dedup them (`extract` produces per-repo candidates today; cross-repo merge is the open part).
 - Configurably include some/all rules in any AI run — targeted or passive (commit hooks, etc.).
-- Audit / gate a repo against rules; rank/prioritize findings.
+- Gate a repo against rules *passively* (e.g. commit hooks) and rank/prioritize findings — `audit` flags violations on demand today; the passive + ranking parts are open.
 - Search across one or more repos.
 
 ## Principles
@@ -97,12 +98,6 @@ It shouldn't require someone to know how the system works — the original arc p
 - **No hardcoding. No arbitrary conventions. DRY.**
 - **Adversarial** — build in self-checking.
 - **Shared substrates; single source of truth.**
-
-### Anti-patterns
-
-Anti-patterns are themselves a kind of **rule** (see Open Questions). Early example:
-
-- Duplicated code/logic.
 
 ## Roadmap
 
