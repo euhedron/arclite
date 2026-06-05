@@ -18,6 +18,30 @@ Commands today:
 
 Every AI call defaults to the best model (`opus`) — configurable *down* for cost via `--model` — runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and **reports the exact parameters it used** (model, tools, every context source) alongside its token usage + cost.
 
+## Getting started
+
+**Prerequisites:** a Rust toolchain (`cargo`); and, for the AI commands (`summarize`/`suggest`/`extract`/`audit`), the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arclite doctor` verifies both.
+
+**Build / install:**
+
+```sh
+git clone https://github.com/nikganderson/arclite.git && cd arclite
+cargo install --path .        # installs `arclite`; or `cargo build --release` → target/release/arclite
+```
+
+**Use** (each command takes a repo path, default `.`):
+
+```sh
+arclite                                  # self-documenting help
+arclite doctor                           # runtime + tooling check (free)
+arclite inspect <repo>                   # deterministic facts, no AI (free)
+arclite suggest <repo> --include src     # AI review — preview with --dry-run ($0) first
+arclite audit   <repo> --rules rules     # flag only violations of the given rules
+arclite extract <repo> --include src     # propose reusable rules to curate into rules/
+```
+
+Deterministic commands cost nothing; the AI commands print the model, tools, every context source, and exact token usage + cost, and `--dry-run` previews the prompt at zero spend.
+
 ## Background
 
 arclite is a fresh, stripped-down version of — and successor to — the arc project. arc is treated only as a *cautionary tale* (what to avoid) and a *catalog of ideas to evaluate on their merits*; nothing is carried over by default.
@@ -82,10 +106,10 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 
 ## Roadmap
 
-(Folded from the former TODO — not strictly ordered.)
+Open and unsettled — not a plan, an ordering, or a commitment; like everything here it evolves (items get added, dropped, or reshaped as signals warrant).
 
 - [ ] Permanently disable the legacy arc MCP server.
-- [ ] Fetch Claude docs → Markdown for read-only, citable reference snippets (cite specific lines; *derive* where valuable once the shape is clear). Samples: <https://code.claude.com/docs/en/settings>, <https://code.claude.com/docs/en/permissions>.
+- [ ] Fetch Claude docs → Markdown for read-only, citable reference snippets (cite specific lines; *derive* where valuable once the shape is clear). Sample sources under **References**.
 - [ ] Auditing + AI-driven ranking/prioritization of what to tackle next. *(First cut delivered by `suggest`.)*
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (would auto-catch drift like Claude Code / Codex / arclite casing). Likely lower priority.
 - [ ] Fully review arc's codebase + feature set; clearly identify what made sense vs. what was sub-optimal/unnecessary.
@@ -96,9 +120,10 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 
 - **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its **filename (stem) is the `id`** (single source, no drift), its **contents are the body** (what enters the AI's context). Frontmatter/attributes for *selective inclusion* (`kind`, `scope`, `tags`, …) get added only when something actually filters on them — not before. Open: rename-stability of filename-ids; whether prompts/todos share the same format.
 - **Rules — extraction & application.** Point arclite at a repo (e.g. `streamline`) to *extract* rules; aggregate them; configurably include some/all in any AI run (targeted or passive). The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
+- **Audit on changes + hooks (configurable, cost-visible).** Let `audit` scope to *current changes* (staged / diff) rather than the whole repo, and be wirable into git hooks (a commit gate that warns or blocks) so users/agents benefit without remembering to run it. Must be opt-in and **loud about cost and on/off status** — passive per-commit AI spend is precisely arc's failure mode; a hook that hides its cost would repeat it.
 - **IDE & linter integration** — what would integrating with IDEs and linters mean/imply? (To be explored.)
 - **Auto-context vs `--include` on real repos.** The default synthesis context (scan + root `README` + root-level manifests) is thin on real repos — manifests nest in subprojects (IDA, quant) and root READMEs are often stubs — so `--include` is needed for a substantive run today. Open: should auto-context pull the *detected* subdir manifests, or search wider for docs, vs. keeping a light default + explicit `--include`? (Surfaced exercising arclite on IDA/quant; a ~$1 capped review of quant's R core produced specific, code-grounded findings.)
-- **Storage format** — should prompts (and rules, todos, …) be stored as Markdown + frontmatter, or JSON/JSONL?
+- **Prompts as files?** Command prompts are inline in code today. Externalizing them — as **Markdown**, the same substrate as rules ("shared substrates"), rather than JSON/JSONL (which suit structured data, not prose) — would make them tunable without a rebuild and consistent with rules. Logical and on-thesis, but not urgent (inline works); do it when a prompt needs tuning without recompiling.
 - **Agent-agnostic?** (e.g. Claude Code + Codex + any)
 - **Dashboard?**
 - **Distribution / install** — `cargo install`, prebuilt per-OS binaries from CI, `cargo-binstall`, Homebrew/Scoop?
@@ -111,6 +136,13 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 - <https://github.com/nikganderson/arc/src/>
 - <https://github.com/nikganderson/ida/src/>
 - <https://github.com/nikganderson/quant/src/>
+
+## References
+
+Sample Claude Code docs to fetch/cite (see the Roadmap item):
+
+- <https://code.claude.com/docs/en/settings>
+- <https://code.claude.com/docs/en/permissions>
 
 ## Other/Notes/Considerations
 
