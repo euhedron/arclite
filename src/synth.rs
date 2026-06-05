@@ -35,6 +35,8 @@ pub struct SynthOptions<'a> {
     pub command: &'a str,
     /// Optional directory to also write the synthesis into, as `<command>.md`.
     pub output: Option<&'a Path>,
+    /// Load the Claude CLI's ambient user/project memory instead of isolating (default: isolate).
+    pub ambient_memory: bool,
     /// Preview the prompt + estimate without calling the model (zero spend).
     pub dry_run: bool,
     /// Emit machine-readable JSON instead of human text.
@@ -313,6 +315,9 @@ pub fn gather_context(
 struct RunReport<'a> {
     model: &'a str,
     tools: Vec<&'a str>,
+    /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
+    /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
+    memory: &'a str,
     context: &'a [String],
     excluded: &'a [String],
 }
@@ -325,9 +330,10 @@ impl RunReport<'_> {
             self.tools.join(",")
         };
         let mut line = format!(
-            "model={}  tools={}  context=[{}]",
+            "model={}  tools={}  memory={}  context=[{}]",
             self.model,
             tools,
+            self.memory,
             self.context.join(", ")
         );
         if !self.excluded.is_empty() {
@@ -363,6 +369,11 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     let report = RunReport {
         model,
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
+        memory: if opts.ambient_memory {
+            "ambient"
+        } else {
+            "isolated"
+        },
         context: opts.sources,
         excluded: opts.excluded,
     };
@@ -396,7 +407,13 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         return emit(&out, &human, opts.json);
     }
 
-    let synthesis = ai::synthesize(prompt, model, opts.allowed_tools, opts.dir)?;
+    let synthesis = ai::synthesize(
+        prompt,
+        model,
+        opts.allowed_tools,
+        opts.dir,
+        opts.ambient_memory,
+    )?;
     let usage = synthesis.usage;
     // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
     let cost = usage

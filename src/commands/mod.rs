@@ -35,6 +35,7 @@ pub fn run_synthesis(
             excluded: &ctx.excluded,
             command,
             output: args.output.as_deref(),
+            ambient_memory: args.ambient_memory,
             dry_run: args.dry_run,
             json: global.json,
         },

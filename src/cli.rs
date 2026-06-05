@@ -93,4 +93,9 @@ pub struct SynthArgs {
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]
     pub output: Option<PathBuf>,
+    /// Load the Claude CLI's ambient memory (your user/project `CLAUDE.md` + auto-memory) into the
+    /// synthesis. Default: off — arclite isolates the run so the reported context is authoritative
+    /// and reproducible across machines. Enable to deliberately apply your own CLAUDE.md standards.
+    #[arg(long)]
+    pub ambient_memory: bool,
 }
