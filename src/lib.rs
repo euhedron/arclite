@@ -27,6 +27,7 @@ pub fn run() -> ExitCode {
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),
+        Command::Audit(args) => commands::audit::run(args, &cli.global),
     };
 
     match result {

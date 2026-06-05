@@ -39,6 +39,8 @@ pub enum Command {
     Suggest(SynthArgs),
     /// Extract reusable rules (standards, anti-patterns, principles) from a repository via the Claude CLI.
     Extract(SynthArgs),
+    /// Audit a repository against selected rules, reporting only violations, via the Claude CLI.
+    Audit(SynthArgs),
 }
 
 /// Arguments for `arclite doctor`.
