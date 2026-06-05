@@ -31,12 +31,16 @@ pub struct Estimate {
     pub approx_tokens: usize,
 }
 
+/// Rough chars-per-token ratio for the zero-cost prompt estimate — approximate, and only a
+/// pre-spend gauge; the real, billed token counts come back from the CLI after the call.
+const CHARS_PER_TOKEN: usize = 4;
+
 #[must_use]
 pub fn estimate(prompt: &str) -> Estimate {
     let chars = prompt.chars().count();
     Estimate {
         chars,
-        approx_tokens: chars.div_ceil(4),
+        approx_tokens: chars.div_ceil(CHARS_PER_TOKEN),
     }
 }
 

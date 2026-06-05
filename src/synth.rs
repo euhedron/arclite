@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use ignore::WalkBuilder;
 use serde::Serialize;
 
 use crate::ai;
@@ -78,15 +77,11 @@ fn source_label(name: impl std::fmt::Display, cap: &Capped) -> String {
 
 /// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped).
 fn walk_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = WalkBuilder::new(dir)
-        .hidden(false)
-        .parents(false)
-        .git_global(false)
-        .build()
+    let mut files: Vec<PathBuf> = crate::walk::configured(dir)
         .flatten()
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
-        .filter(|p| !p.components().any(|c| c.as_os_str() == ".git"))
+        .filter(|p| !crate::walk::in_git_dir(p))
         .collect();
     files.sort();
     files
@@ -145,6 +140,25 @@ fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Result
     Ok(format!("\nRules:\n{text}\n"))
 }
 
+/// Read `path` (capped) and, if present, append it to the context as `label` — recording the
+/// source and its canonical path so `--include` won't double-count it.
+fn add_file(
+    path: &Path,
+    label: &str,
+    max: Option<usize>,
+    text: &mut String,
+    sources: &mut Vec<String>,
+    seen: &mut Vec<PathBuf>,
+) {
+    if let Some(cap) = read_file(path, max) {
+        sources.push(source_label(label, &cap));
+        text.push_str(&format!("\n{label}:\n{}\n", cap.body));
+        if let Ok(c) = std::fs::canonicalize(path) {
+            seen.push(c);
+        }
+    }
+}
+
 /// Assembled repo context, a record of every source and what was excluded, and the repo
 /// root (granted to tools when any are allowed).
 pub struct Context {
@@ -174,23 +188,23 @@ pub fn gather_context(
     let mut sources = vec!["repository scan".to_owned()];
     let mut seen: Vec<PathBuf> = Vec::new();
 
-    let readme = root.join("README.md");
-    if let Some(cap) = read_file(&readme, max) {
-        sources.push(source_label("README.md", &cap));
-        text.push_str(&format!("\nREADME:\n{}\n", cap.body));
-        if let Ok(c) = std::fs::canonicalize(&readme) {
-            seen.push(c);
-        }
-    }
+    add_file(
+        &root.join("README.md"),
+        "README.md",
+        max,
+        &mut text,
+        &mut sources,
+        &mut seen,
+    );
     for &name in crate::commands::inspect::MANIFEST_NAMES {
-        let manifest = root.join(name);
-        if let Some(cap) = read_file(&manifest, max) {
-            sources.push(source_label(name, &cap));
-            text.push_str(&format!("\n{name}:\n{}\n", cap.body));
-            if let Ok(c) = std::fs::canonicalize(&manifest) {
-                seen.push(c);
-            }
-        }
+        add_file(
+            &root.join(name),
+            name,
+            max,
+            &mut text,
+            &mut sources,
+            &mut seen,
+        );
     }
     // Resolve --include paths against the target repo (not arclite's cwd); absolute paths as-is.
     let includes: Vec<PathBuf> = includes

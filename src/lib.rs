@@ -10,6 +10,7 @@ mod commands;
 mod output;
 mod rules;
 mod synth;
+mod walk;
 
 use cli::{Cli, Command};
 

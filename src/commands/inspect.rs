@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Context;
-use ignore::WalkBuilder;
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, InspectArgs};
@@ -28,6 +27,9 @@ pub const MANIFEST_NAMES: &[&str] = &[
 /// Manifest file *extensions* (e.g. .NET projects/solutions), reported as `*.ext`.
 const MANIFEST_EXTS: &[&str] = &["csproj", "sln", "fsproj", "vbproj"];
 
+/// How many top extensions the human `inspect` view lists before summarizing the rest.
+const TOP_EXTENSIONS: usize = 10;
+
 #[derive(Debug, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -52,11 +54,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     let mut manifest_types: BTreeSet<String> = BTreeSet::new();
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
-    let walk = WalkBuilder::new(&root)
-        .hidden(false)
-        .parents(false)
-        .git_global(false)
-        .build();
+    let walk = crate::walk::configured(&root);
 
     for entry in walk {
         let Ok(entry) = entry else { continue };
@@ -64,10 +62,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
             continue; // the root itself
         }
         let path = entry.path();
-        if path
-            .components()
-            .any(|c| c.as_os_str().to_str() == Some(".git"))
-        {
+        if crate::walk::in_git_dir(path) {
             continue;
         }
         match entry.file_type() {
@@ -117,10 +112,15 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
     let top = ranked
         .iter()
-        .take(10)
+        .take(TOP_EXTENSIONS)
         .map(|(ext, count)| format!("  {ext:<14} {count}"))
         .collect::<Vec<_>>()
         .join("\n");
+    // Surface the elision so the text view doesn't silently hide extensions (--json has them all).
+    let top = match report.by_extension.len().saturating_sub(TOP_EXTENSIONS) {
+        0 => top,
+        more => format!("{top}\n  … +{more} more (--json for all)"),
+    };
 
     let human = format!(
         "path       {}\ngit repo   {}\nfiles      {}\ndirs       {}\nbytes      {}\nmanifests  {}\ntop extensions:\n{}",
