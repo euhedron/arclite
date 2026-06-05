@@ -71,8 +71,13 @@ pub struct SynthArgs {
     /// standards, principles, …). Each rule's text is included in the AI's context.
     #[arg(long, value_name = "DIR")]
     pub rules: Option<PathBuf>,
-    /// Include a file or directory in the context (repeatable; capped + bounded). Directories
-    /// are walked gitignore-aware — e.g. `--include src`. Default: none.
+    /// Include a file or directory in the context (repeatable). Directories are walked
+    /// gitignore-aware — e.g. `--include src`. Files are read in full by default.
     #[arg(long, value_name = "PATH")]
     pub include: Vec<PathBuf>,
+    /// Optional compression: cap each included file (and the README/manifests) at N chars.
+    /// Default: none — files are read in full; capping is never automatic, and any cut is
+    /// surfaced in the run's sources.
+    #[arg(long, value_name = "N")]
+    pub max_file_chars: Option<usize>,
 }

@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, bail};
@@ -110,11 +111,13 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
 /// `allowed_tools` is a major cost lever — Claude Code's tool schemas dominate
 /// the context. An empty slice restricts to no tools (cheapest, ~10x less than
 /// the full default — right for pure text synthesis); a non-empty slice allows
-/// exactly those tools.
+/// exactly those tools, and grants them read access to `dir` (the repo) via
+/// `--add-dir`, since the working directory is neutral.
 pub fn synthesize(
     prompt: &str,
     model: &str,
     allowed_tools: &[String],
+    dir: &Path,
 ) -> anyhow::Result<Synthesis> {
     let mut cmd = command("claude");
     cmd.args([
@@ -130,6 +133,8 @@ pub fn synthesize(
         cmd.arg(""); // allowlist of none → no tool schemas loaded (minimal context)
     } else {
         cmd.args(allowed_tools);
+        // cwd is neutral (below), so grant the allowed tools read access to the repo.
+        cmd.arg("--add-dir").arg(dir);
     }
     cmd.current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())

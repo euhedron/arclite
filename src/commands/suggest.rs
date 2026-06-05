@@ -3,7 +3,12 @@ use crate::synth::{self, SynthOptions};
 
 /// Synthesize a prioritized list of suggestions for a repository (the `suggest` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let ctx = synth::gather_context(&args.path, &args.include, args.rules.as_deref())?;
+    let ctx = synth::gather_context(
+        &args.path,
+        &args.include,
+        args.rules.as_deref(),
+        args.max_file_chars,
+    )?;
 
     let prompt = format!(
         "You are reviewing a code repository to advise where attention is best spent.\n\n\
@@ -20,6 +25,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         &SynthOptions {
             model: args.model.as_deref(),
             allowed_tools: &args.allow_tool,
+            dir: &ctx.root,
             sources: &ctx.sources,
             excluded: &ctx.excluded,
             dry_run: args.dry_run,

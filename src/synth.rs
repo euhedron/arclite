@@ -17,25 +17,17 @@ use crate::output::emit;
 /// deliberately trading quality for cost; a small model gives unrealistic signal.
 const DEFAULT_MODEL: &str = "opus";
 
-/// Per-file char cap and total char budget across all `--include` paths. Sized for
-/// *auditing* — whole source files should fit — while staying bounded; truncation is
-/// always surfaced in the run's sources. Evolve as signals warrant.
-const INCLUDE_FILE_CAP: usize = 32_000;
-const INCLUDE_TOTAL_BUDGET: usize = 256_000;
-
-/// Caps for the auto-included README and manifest bodies — lighter context than
-/// `--include`d files (which exist to be read in full).
-const README_CAP: usize = 4_000;
-const MANIFEST_CAP: usize = 2_000;
-
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
 
 /// Configuration shared by every synthesis-backed command.
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
     pub model: Option<&'a str>,
-    /// Claude tools to allow (empty = none = cheapest; a cost lever).
+    /// Claude tools to allow (empty = none = cheapest; a cost lever). When non-empty the
+    /// run is granted read access to `dir`, so the tools can actually reach the repo.
     pub allowed_tools: &'a [String],
+    /// Repository root, granted to allowed tools via `--add-dir`.
+    pub dir: &'a Path,
     /// Human-readable descriptions of the context pieces included (for the run report).
     pub sources: &'a [String],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
@@ -46,46 +38,41 @@ pub struct SynthOptions<'a> {
     pub json: bool,
 }
 
-/// A file's text capped to a budget: the (possibly truncated) body, the original
-/// char count, and whether it was cut — so any truncation is reportable, not silent.
-pub struct Capped {
-    pub body: String,
-    pub original_chars: usize,
-    pub truncated: bool,
+/// A file's text, optionally capped: the body, its original char count, and the cap it
+/// was truncated to (if any) — so any truncation is reportable, never silent.
+struct Capped {
+    body: String,
+    original_chars: usize,
+    truncated_to: Option<usize>,
 }
 
-/// Read a file as text, capped at `max_chars` (char-safe), retaining enough to report
-/// exactly what (if anything) was cut.
-pub fn read_capped(path: &Path, max_chars: usize) -> Option<Capped> {
+/// Read a file as text. `max` is an *optional, caller-chosen* cap (a compression knob);
+/// by default (`None`) the whole file is read — context elision is never automatic.
+fn read_file(path: &Path, max: Option<usize>) -> Option<Capped> {
     let text = std::fs::read_to_string(path).ok()?;
     let original_chars = text.chars().count();
-    if original_chars > max_chars {
-        Some(Capped {
+    match max {
+        Some(cap) if original_chars > cap => Some(Capped {
             body: format!(
-                "{}\n…[truncated]",
-                text.chars().take(max_chars).collect::<String>()
+                "{}\n…[truncated by arclite at {cap} chars]",
+                text.chars().take(cap).collect::<String>()
             ),
             original_chars,
-            truncated: true,
-        })
-    } else {
-        Some(Capped {
+            truncated_to: Some(cap),
+        }),
+        _ => Some(Capped {
             body: text,
             original_chars,
-            truncated: false,
-        })
+            truncated_to: None,
+        }),
     }
 }
 
-/// A `sources` label for a capped file, making truncation explicit (which + by how much).
-fn source_label(name: impl std::fmt::Display, cap: &Capped, max_chars: usize) -> String {
-    if cap.truncated {
-        format!(
-            "{name} ({} chars, truncated to {max_chars})",
-            cap.original_chars
-        )
-    } else {
-        format!("{name} ({} chars)", cap.original_chars)
+/// A `sources` label for a file, making any caller-applied truncation explicit.
+fn source_label(name: impl std::fmt::Display, cap: &Capped) -> String {
+    match cap.truncated_to {
+        Some(to) => format!("{name} ({} chars, truncated to {to})", cap.original_chars),
+        None => format!("{name} ({} chars)", cap.original_chars),
     }
 }
 
@@ -105,12 +92,21 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Expand each `--include` path (a file *or* a directory) into capped context text,
-/// pushing a human description of every file included (or skipped) onto `sources`.
-/// Directories are walked gitignore-aware; the total is bounded and any truncation reported.
-pub fn gather_includes(paths: &[PathBuf], sources: &mut Vec<String>) -> String {
+/// Expand each `--include` path (a file *or* a directory) into context text, applying the
+/// optional caller cap and skipping anything already in `seen` (canonical paths of files
+/// auto-added as README/manifests) so they aren't double-counted. Dirs walked gitignore-aware.
+fn gather_includes(
+    paths: &[PathBuf],
+    max: Option<usize>,
+    seen: &[PathBuf],
+    sources: &mut Vec<String>,
+) -> String {
+    let already_seen = |p: &Path| {
+        std::fs::canonicalize(p)
+            .map(|c| seen.contains(&c))
+            .unwrap_or(false)
+    };
     let mut ctx = String::new();
-    let mut used = 0usize;
     for path in paths {
         let is_dir = path.is_dir();
         let files = if is_dir {
@@ -118,17 +114,13 @@ pub fn gather_includes(paths: &[PathBuf], sources: &mut Vec<String>) -> String {
         } else {
             vec![path.clone()]
         };
-        let total = files.len();
-        let mut included = 0usize;
         for file in &files {
-            if used >= INCLUDE_TOTAL_BUDGET {
-                break;
+            if already_seen(file) {
+                continue; // already auto-included (README/manifest) — don't double-count
             }
-            match read_capped(file, INCLUDE_FILE_CAP) {
+            match read_file(file, max) {
                 Some(cap) => {
-                    used += cap.body.chars().count();
-                    included += 1;
-                    sources.push(source_label(file.display(), &cap, INCLUDE_FILE_CAP));
+                    sources.push(source_label(file.display(), &cap));
                     ctx.push_str(&format!("\n{}:\n{}\n", file.display(), cap.body));
                 }
                 None if !is_dir => {
@@ -137,19 +129,12 @@ pub fn gather_includes(paths: &[PathBuf], sources: &mut Vec<String>) -> String {
                 None => {}
             }
         }
-        if is_dir && included < total {
-            sources.push(format!(
-                "…{included} of {total} files under {} included (rest skipped: {}k-char budget reached or unreadable)",
-                path.display(),
-                INCLUDE_TOTAL_BUDGET / 1000
-            ));
-        }
     }
     ctx
 }
 
 /// Render the Markdown rules in `dir` (if any) as a context block, noting the source.
-pub fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Result<String> {
+fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Result<String> {
     let Some(dir) = dir else {
         return Ok(String::new());
     };
@@ -160,21 +145,24 @@ pub fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Re
     Ok(format!("\nRules:\n{text}\n"))
 }
 
-/// Assembled repo context plus a record of every source and what was excluded.
+/// Assembled repo context, a record of every source and what was excluded, and the repo
+/// root (granted to tools when any are allowed).
 pub struct Context {
     pub text: String,
     pub sources: Vec<String>,
     pub excluded: Vec<String>,
+    pub root: PathBuf,
 }
 
-/// Assemble the standard repo context shared by every synthesis command: the scan
-/// summary, README + manifest bodies, any `--include`d files/dirs, and rules —
-/// tracking each source (and what's excluded by default) for the run report. The
-/// commands differ only in the prompt they wrap around this, never in grounding.
+/// Assemble the standard repo context shared by every synthesis command: the scan summary,
+/// README + manifest bodies, any `--include`d files/dirs, and rules — tracking each source
+/// (and what's excluded by default) for the run report. `max` is the optional caller cap;
+/// by default files are read whole. Commands differ only in the prompt they wrap around this.
 pub fn gather_context(
     path: &Path,
     includes: &[PathBuf],
     rules_dir: Option<&Path>,
+    max: Option<usize>,
 ) -> anyhow::Result<Context> {
     let report = crate::commands::inspect::gather(path)?;
     let root = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -184,18 +172,27 @@ pub fn gather_context(
         serde_json::to_string_pretty(&report)?
     );
     let mut sources = vec!["repository scan".to_owned()];
+    let mut seen: Vec<PathBuf> = Vec::new();
 
-    if let Some(cap) = read_capped(&root.join("README.md"), README_CAP) {
-        sources.push(source_label("README.md", &cap, README_CAP));
+    let readme = root.join("README.md");
+    if let Some(cap) = read_file(&readme, max) {
+        sources.push(source_label("README.md", &cap));
         text.push_str(&format!("\nREADME:\n{}\n", cap.body));
-    }
-    for name in &report.manifests {
-        if let Some(cap) = read_capped(&root.join(name), MANIFEST_CAP) {
-            sources.push(source_label(name, &cap, MANIFEST_CAP));
-            text.push_str(&format!("\n{name}:\n{}\n", cap.body));
+        if let Ok(c) = std::fs::canonicalize(&readme) {
+            seen.push(c);
         }
     }
-    text.push_str(&gather_includes(includes, &mut sources));
+    for name in &report.manifests {
+        let manifest = root.join(name);
+        if let Some(cap) = read_file(&manifest, max) {
+            sources.push(source_label(name, &cap));
+            text.push_str(&format!("\n{name}:\n{}\n", cap.body));
+            if let Ok(c) = std::fs::canonicalize(&manifest) {
+                seen.push(c);
+            }
+        }
+    }
+    text.push_str(&gather_includes(includes, max, &seen, &mut sources));
     text.push_str(&gather_rules(rules_dir, &mut sources)?);
 
     let excluded = if includes.is_empty() {
@@ -208,6 +205,7 @@ pub fn gather_context(
         text,
         sources,
         excluded,
+        root,
     })
 }
 
@@ -286,7 +284,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         return emit(&out, &human, opts.json);
     }
 
-    let synthesis = ai::synthesize(prompt, model, opts.allowed_tools)?;
+    let synthesis = ai::synthesize(prompt, model, opts.allowed_tools, opts.dir)?;
     let usage = synthesis.usage;
     // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
     let cost = usage
