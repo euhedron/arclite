@@ -255,10 +255,13 @@ pub fn gather_context(
         &mut sources,
         &mut seen,
     );
-    for &name in crate::commands::inspect::MANIFEST_NAMES {
+    // Include the manifests inspect actually detected (root *or* nested) — keeping the scan's
+    // findings and the synthesis context consistent, and making default runs substantive on real
+    // repos whose manifests live in subprojects (e.g. IDA's nested .csproj/.sln), not at the root.
+    for rel in &report.manifest_paths {
         add_file(
-            &root.join(name),
-            name,
+            &root.join(rel),
+            rel,
             max,
             &mut text,
             &mut sources,

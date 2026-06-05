@@ -10,7 +10,7 @@ use crate::output::emit;
 /// Fixed manifest filenames that hint at a repo's stack/ecosystem — matched *anywhere*
 /// in the tree (real repos nest them in subprojects), gitignore-aware so vendored copies
 /// (e.g. `node_modules`) are excluded.
-pub const MANIFEST_NAMES: &[&str] = &[
+const MANIFEST_NAMES: &[&str] = &[
     "Cargo.toml",
     "package.json",
     "pyproject.toml",
@@ -38,6 +38,9 @@ pub struct InspectReport {
     pub dirs: usize,
     pub bytes: u64,
     pub manifests: Vec<String>,
+    /// Relative paths of the manifest files actually found (root *or* nested) — what the synthesis
+    /// context includes, so the scan's findings and that context can't drift apart.
+    pub manifest_paths: Vec<String>,
     pub by_extension: BTreeMap<String, usize>,
     /// Entries the walk couldn't read (permission denied, I/O, …) — counted, never silently dropped.
     pub walk_errors: usize,
@@ -54,6 +57,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     let mut bytes = 0u64;
     let mut by_extension: BTreeMap<String, usize> = BTreeMap::new();
     let mut manifest_types: BTreeSet<String> = BTreeSet::new();
+    let mut manifest_paths: Vec<String> = Vec::new();
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
     // Walk errors (permission denied, I/O, …) are counted and reported, not swallowed.
@@ -74,10 +78,12 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
                 if let Ok(md) = entry.metadata() {
                     bytes += md.len();
                 }
+                let mut is_manifest = false;
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
                     && MANIFEST_NAMES.contains(&name)
                 {
                     manifest_types.insert(name.to_owned());
+                    is_manifest = true;
                 }
                 let ext = path
                     .extension()
@@ -86,6 +92,10 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
                     .to_owned();
                 if MANIFEST_EXTS.contains(&ext.as_str()) {
                     manifest_types.insert(format!("*.{ext}"));
+                    is_manifest = true;
+                }
+                if is_manifest && let Ok(rel) = path.strip_prefix(&root) {
+                    manifest_paths.push(rel.to_string_lossy().into_owned());
                 }
                 *by_extension.entry(ext).or_insert(0) += 1;
             }
@@ -94,6 +104,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     }
 
     let manifests: Vec<String> = manifest_types.into_iter().collect();
+    manifest_paths.sort();
 
     Ok(InspectReport {
         path: root.display().to_string(),
@@ -102,6 +113,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
         dirs,
         bytes,
         manifests,
+        manifest_paths,
         by_extension,
         walk_errors,
     })
