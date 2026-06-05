@@ -2,7 +2,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 
 /// Synthesize a prioritized list of suggestions for a repository (the `suggest` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    super::run_synthesis(args, global, |ctx| {
+    super::run_synthesis(args, global, "suggest", |ctx| {
         format!(
             "You are reviewing a code repository to advise where attention is best spent.\n\n\
              {ctx}\n\

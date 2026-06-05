@@ -14,6 +14,7 @@ use crate::synth::{self, SynthOptions};
 pub fn run_synthesis(
     args: &SynthArgs,
     global: &GlobalArgs,
+    command: &str,
     build_prompt: impl FnOnce(&str) -> String,
 ) -> anyhow::Result<()> {
     let ctx = synth::gather_context(
@@ -32,6 +33,8 @@ pub fn run_synthesis(
             dir: &ctx.root,
             sources: &ctx.sources,
             excluded: &ctx.excluded,
+            command,
+            output: args.output.as_deref(),
             dry_run: args.dry_run,
             json: global.json,
         },

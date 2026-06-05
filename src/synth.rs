@@ -31,6 +31,10 @@ pub struct SynthOptions<'a> {
     pub sources: &'a [String],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
+    /// Command name (e.g. "suggest") — names the `--output` file and labels the doc's provenance.
+    pub command: &'a str,
+    /// Optional directory to also write the synthesis into, as `<command>.md`.
+    pub output: Option<&'a Path>,
     /// Preview the prompt + estimate without calling the model (zero spend).
     pub dry_run: bool,
     /// Emit machine-readable JSON instead of human text.
@@ -145,16 +149,24 @@ fn gather_includes(
     ctx
 }
 
-/// Render the Markdown rules in `dir` (if any) as a context block, noting the source.
+/// Render the Markdown rules in `dir` (if any) as a context block, recording exactly which
+/// rule ids were included — surfaced like every other run parameter, never hidden.
 fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Result<String> {
     let Some(dir) = dir else {
         return Ok(String::new());
     };
-    let Some(text) = crate::rules::block(Some(dir))? else {
+    let rules = crate::rules::load(dir)?;
+    if rules.is_empty() {
+        sources.push(format!("rules: none found in {}", dir.display()));
         return Ok(String::new());
-    };
-    sources.push(format!("rules: {}", dir.display()));
-    Ok(format!("\nRules:\n{text}\n"))
+    }
+    let ids = rules
+        .iter()
+        .map(|r| r.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    sources.push(format!("rules ({}): {ids}", rules.len()));
+    Ok(format!("\nRules:\n{}\n", crate::rules::render(&rules)))
 }
 
 /// Read `path` (capped) and, if present, append it to the context as `label` — recording the
@@ -327,6 +339,8 @@ struct SynthOutput<'a> {
     run: RunReport<'a>,
     synthesis: String,
     usage: ai::Usage,
+    /// Path written by `--output`, if any (so the run report says where the doc went).
+    output: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -335,6 +349,8 @@ struct DryRunOutput<'a> {
     run: RunReport<'a>,
     estimate: ai::Estimate,
     note: &'static str,
+    /// Where `--output` *would* write on a real run, if set.
+    output_target: Option<String>,
     prompt: &'a str,
 }
 
@@ -350,19 +366,28 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
 
     if opts.dry_run {
         let estimate = ai::estimate(prompt);
-        let human = format!(
-            "[dry run — no AI call, $0.00]\nrun: {}\nprompt: {} chars (~{} tokens)\nnote: {}\n\n{}",
+        let output_target = opts.output.map(|dir| {
+            dir.join(format!("{}.md", opts.command))
+                .display()
+                .to_string()
+        });
+        let mut human = format!(
+            "[dry run — no AI call, $0.00]\nrun: {}\nprompt: {} chars (~{} tokens)\nnote: {}",
             report.human(),
             estimate.chars,
             estimate.approx_tokens,
             DRY_RUN_NOTE,
-            prompt,
         );
+        if let Some(target) = &output_target {
+            human.push_str(&format!("\noutput: would write {target} on a real run"));
+        }
+        human.push_str(&format!("\n\n{prompt}"));
         let out = DryRunOutput {
             dry_run: true,
             run: report,
             estimate,
             note: DRY_RUN_NOTE,
+            output_target,
             prompt,
         };
         return emit(&out, &human, opts.json);
@@ -374,7 +399,19 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     let cost = usage
         .cost_usd
         .map_or_else(|| "unknown".to_owned(), |c| format!("${c:.4}"));
-    let human = format!(
+    // --output: persist the synthesis as a self-describing doc (provenance header keeps it honest).
+    let written = match opts.output {
+        Some(dir) => Some(write_output(
+            dir,
+            opts.command,
+            &synthesis.text,
+            model,
+            opts.sources.len(),
+            &cost,
+        )?),
+        None => None,
+    };
+    let mut human = format!(
         "{}\n\nrun: {}\ncost: in {}  cache-write {}  cache-read {}  out {} | {}",
         synthesis.text,
         report.human(),
@@ -384,10 +421,35 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         usage.output_tokens,
         cost,
     );
+    if let Some(path) = &written {
+        human.push_str(&format!("\nwrote: {}", path.display()));
+    }
     let out = SynthOutput {
         run: report,
         synthesis: synthesis.text,
         usage,
+        output: written.map(|p| p.display().to_string()),
     };
     emit(&out, &human, opts.json)
+}
+
+/// Write the synthesis to `<dir>/<command>.md` with a short provenance header, so the generated
+/// doc is self-describing (model, sources, cost) and clearly not hand-maintained. Returns the path.
+fn write_output(
+    dir: &Path,
+    command: &str,
+    text: &str,
+    model: &str,
+    n_sources: usize,
+    cost: &str,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| anyhow::anyhow!("could not create output dir {}: {e}", dir.display()))?;
+    let path = dir.join(format!("{command}.md"));
+    let body = format!(
+        "<!-- Generated by `arc {command}` — model={model}, {n_sources} context source(s), cost {cost}. Self-derived; do not hand-maintain. -->\n\n{text}\n"
+    );
+    std::fs::write(&path, &body)
+        .map_err(|e| anyhow::anyhow!("could not write {}: {e}", path.display()))?;
+    Ok(path)
 }

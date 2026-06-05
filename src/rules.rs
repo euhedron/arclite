@@ -41,20 +41,13 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
     Ok(rules)
 }
 
-/// Load rules from an optional directory and render them as a prompt block.
-/// Returns `None` when no directory is given or it contains no rules.
-pub fn block(dir: Option<&Path>) -> anyhow::Result<Option<String>> {
-    let Some(dir) = dir else { return Ok(None) };
-    let rules = load(dir)?;
-    if rules.is_empty() {
-        return Ok(None);
-    }
-    // One section per rule (not a one-line bullet) so multi-paragraph bodies — e.g. the
-    // body + `_provenance:_` line that `extract` emits — round-trip when fed back via `--rules`.
-    let rendered = rules
+/// Render rules as a prompt block — one section per rule (not a one-line bullet) so
+/// multi-paragraph bodies (e.g. the body + `_provenance:_` line that `extract` emits)
+/// round-trip when fed back via `--rules`.
+pub fn render(rules: &[Rule]) -> String {
+    rules
         .iter()
         .map(|rule| format!("## {}\n{}", rule.id, rule.body))
         .collect::<Vec<_>>()
-        .join("\n\n");
-    Ok(Some(rendered))
+        .join("\n\n")
 }

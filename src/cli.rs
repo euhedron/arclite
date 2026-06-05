@@ -89,4 +89,8 @@ pub struct SynthArgs {
     /// Works with any synthesis command — e.g. a cheap, focused `arc audit --changed`. Default: off.
     #[arg(long)]
     pub changed: bool,
+    /// Also write the synthesis to `<DIR>/<command>.md` — a self-describing generated doc (the
+    /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
+    #[arg(long, value_name = "DIR")]
+    pub output: Option<PathBuf>,
 }
