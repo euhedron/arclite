@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Context;
@@ -8,8 +8,10 @@ use serde::Serialize;
 use crate::cli::{GlobalArgs, InspectArgs};
 use crate::output::emit;
 
-/// Manifest files that hint at a repo's stack/ecosystem.
-const MANIFESTS: &[&str] = &[
+/// Fixed manifest filenames that hint at a repo's stack/ecosystem — matched *anywhere*
+/// in the tree (real repos nest them in subprojects), gitignore-aware so vendored copies
+/// (e.g. `node_modules`) are excluded.
+pub const MANIFEST_NAMES: &[&str] = &[
     "Cargo.toml",
     "package.json",
     "pyproject.toml",
@@ -22,6 +24,9 @@ const MANIFESTS: &[&str] = &[
     "composer.json",
     "CMakeLists.txt",
 ];
+
+/// Manifest file *extensions* (e.g. .NET projects/solutions), reported as `*.ext`.
+const MANIFEST_EXTS: &[&str] = &["csproj", "sln", "fsproj", "vbproj"];
 
 #[derive(Debug, Serialize)]
 pub struct InspectReport {
@@ -44,6 +49,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     let mut dirs = 0usize;
     let mut bytes = 0u64;
     let mut by_extension: BTreeMap<String, usize> = BTreeMap::new();
+    let mut manifest_types: BTreeSet<String> = BTreeSet::new();
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
     let walk = WalkBuilder::new(&root)
@@ -71,22 +77,26 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
                 if let Ok(md) = entry.metadata() {
                     bytes += md.len();
                 }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && MANIFEST_NAMES.contains(&name)
+                {
+                    manifest_types.insert(name.to_owned());
+                }
                 let ext = path
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("(none)")
                     .to_owned();
+                if MANIFEST_EXTS.contains(&ext.as_str()) {
+                    manifest_types.insert(format!("*.{ext}"));
+                }
                 *by_extension.entry(ext).or_insert(0) += 1;
             }
             _ => {}
         }
     }
 
-    let manifests: Vec<String> = MANIFESTS
-        .iter()
-        .filter(|m| root.join(m).is_file())
-        .map(|m| (*m).to_owned())
-        .collect();
+    let manifests: Vec<String> = manifest_types.into_iter().collect();
 
     Ok(InspectReport {
         path: root.display().to_string(),

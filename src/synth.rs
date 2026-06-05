@@ -182,7 +182,7 @@ pub fn gather_context(
             seen.push(c);
         }
     }
-    for name in &report.manifests {
+    for &name in crate::commands::inspect::MANIFEST_NAMES {
         let manifest = root.join(name);
         if let Some(cap) = read_file(&manifest, max) {
             sources.push(source_label(name, &cap));
