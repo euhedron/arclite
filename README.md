@@ -103,6 +103,7 @@ Anti-patterns are themselves a kind of **rule** (see Open Questions). Early exam
 - **Distribution / install** — `cargo install`, prebuilt per-OS binaries from CI, `cargo-binstall`, Homebrew/Scoop?
 - **CI** — build/test/release across Windows, macOS, Linux. *(GitHub Pipelines for Linux is in place; macOS/Windows would need runners.)*
 - **LLM "synthesis" step** — Claude via CLI (`claude -p`), an SDK, or provider-agnostic?
+- **Reclaim the `arc` name?** Eventually rename this repo (here + on GitHub) and take the `arc` CLI command/alias, superseding the legacy arc others may still have installed (this machine, Tom's, …). As the successor, arclite inheriting the name fits — but tentative; depends, not a directive.
 
 ## Related Repositories
 
