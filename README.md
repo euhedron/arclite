@@ -73,7 +73,7 @@ It shouldn't require someone to know how the system works — the original arc p
 - **Auditing / Gates**: check/audit a repo against selected rules; configurable, usable both on demand and passively (e.g. commit hooks).
 - **Linting**: surface drift/violations against rules (see the "lexicon" item in the Roadmap).
 - **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, etc.) — content storage and structure compatibility.
-- **AI use**: deterministic until synthesis; best-by-default but configurable model, configurable tools, observable cost + fully reported run parameters (see Principles).
+- **AI use**: deterministic until synthesis; best-by-default but configurable model, configurable tools, observable cost + fully reported run parameters (see Principles). The synthesis subprocess runs with ambient memory disabled (no user/project `CLAUDE.md` or auto-memory auto-loaded), so the reported context is authoritative and runs reproduce across machines.
 
 ## Features / Use Cases
 
