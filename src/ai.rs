@@ -108,9 +108,12 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
 
 /// Run a synthesis through the Claude Code CLI with a deliberately minimal,
 /// controlled context: an explicit model, no inherited MCP servers
-/// (`--strict-mcp-config`), a neutral working directory (so the target repo's
-/// CLAUDE.md is not auto-loaded), and the prompt passed over stdin (avoiding
-/// shell-quoting pitfalls). Costs real tokens.
+/// (`--strict-mcp-config`), no ambient memory (env vars disable user *and*
+/// project CLAUDE.md + auto-memory — a neutral cwd alone does *not*, since the
+/// user-level `~/.claude/CLAUDE.md` loads regardless of cwd), and the prompt
+/// passed over stdin (avoiding shell-quoting pitfalls). So the sources arclite
+/// reports are authoritative, modulo Claude Code's own fixed base (date, env,
+/// tools). Costs real tokens.
 ///
 /// `allowed_tools` is a major cost lever — Claude Code's tool schemas dominate
 /// the context. An empty slice restricts to no tools (cheapest, ~10x less than
@@ -140,6 +143,12 @@ pub fn synthesize(
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
         cmd.arg("--add-dir").arg(dir);
     }
+    // Isolate from ambient context so the sources arclite reports are authoritative: disable
+    // auto-loading of user/project CLAUDE.md and auto-memory. Confirmed necessary — a neutral cwd
+    // alone does NOT stop it, as user-level ~/.claude/CLAUDE.md loads regardless of cwd. These env
+    // vars affect only context loading, not the separate credential store, so auth is unaffected.
+    cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
+    cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     cmd.current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
