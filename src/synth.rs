@@ -192,7 +192,18 @@ pub fn gather_context(
             }
         }
     }
-    text.push_str(&gather_includes(includes, max, &seen, &mut sources));
+    // Resolve --include paths against the target repo (not arclite's cwd); absolute paths as-is.
+    let includes: Vec<PathBuf> = includes
+        .iter()
+        .map(|p| {
+            if p.is_absolute() {
+                p.clone()
+            } else {
+                root.join(p)
+            }
+        })
+        .collect();
+    text.push_str(&gather_includes(&includes, max, &seen, &mut sources));
     text.push_str(&gather_rules(rules_dir, &mut sources)?);
 
     let excluded = if includes.is_empty() {

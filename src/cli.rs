@@ -7,7 +7,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "arclite",
     version,
-    about = "Agent-first CLI for cross-repo code intelligence and auditing."
+    about = "Agent-first CLI for cross-repo code intelligence and auditing.",
+    arg_required_else_help = true
 )]
 pub struct Cli {
     #[command(flatten)]
