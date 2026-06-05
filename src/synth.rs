@@ -186,20 +186,24 @@ pub struct Context {
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
-/// backing `--changed`. Empty if git isn't available or nothing has changed.
-fn changed_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(output) = ai::command("git")
+/// backing `--changed`. `Ok(vec)` lists them (empty = genuinely clean tree); `Err(reason)`
+/// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
+/// as a clean "no changes" result (the no-silent-defaults rule).
+fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = ai::command("git")
         .arg("-C")
         .arg(root)
         .args(["status", "--porcelain"])
         .output()
-    else {
-        return Vec::new();
-    };
+        .map_err(|e| format!("could not run git: {e}"))?;
     if !output.status.success() {
-        return Vec::new();
+        return Err(format!(
+            "git exited with {} (is {} a git repository?)",
+            output.status,
+            root.display()
+        ));
     }
-    String::from_utf8_lossy(&output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
             // porcelain: two status chars, a space, then the path ("old -> new" for renames).
@@ -207,7 +211,7 @@ fn changed_files(root: &Path) -> Vec<PathBuf> {
             let path = path.rsplit(" -> ").next().unwrap_or(path);
             (!path.is_empty()).then(|| root.join(path))
         })
-        .collect()
+        .collect())
 }
 
 /// Assemble the standard repo context shared by every synthesis command: the scan summary,
@@ -261,8 +265,10 @@ pub fn gather_context(
         })
         .collect();
     // --changed: scope to git-changed files — same group as --include, not special to any command.
+    // A git failure aborts loudly rather than silently passing as a clean tree (no-silent-defaults).
     if changed {
-        let files = changed_files(&root);
+        let files = changed_files(&root)
+            .map_err(|reason| anyhow::anyhow!("--changed could not consult git: {reason}"))?;
         sources.push(if files.is_empty() {
             "changed: no git changes found".to_owned()
         } else {
