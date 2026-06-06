@@ -44,17 +44,17 @@ pub fn estimate(prompt: &str) -> Estimate {
     }
 }
 
-/// Build a [`Command`] for an external program. On Windows, npm-style `.cmd`
-/// shims (e.g. `claude`) can't be launched by `Command::new` directly, so wrap
-/// the call in `cmd /C`. Shared by `doctor`'s probe and [`synthesize`] so the
-/// two never disagree about whether a tool is present.
+/// Build a [`Command`] for an external program, resolved to its real path first (via `which`,
+/// respecting Windows `PATHEXT`) and spawned directly — no `cmd /C` wrapper. This lets `std`
+/// apply correct per-target argument quoting, including cmd.exe rules for npm `.cmd` shims like
+/// `claude` (since Rust 1.77), so args containing quotes or spaces — e.g. an inline `--json-schema`
+/// payload — survive intact rather than being mangled by a shell re-parse. Falls back to the bare
+/// name (which then surfaces a normal "not found" error). Shared by `doctor`'s probe and
+/// [`synthesize`] so the two never disagree about whether a tool is present.
 pub fn command(program: &str) -> Command {
-    if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.args(["/C", program]);
-        c
-    } else {
-        Command::new(program)
+    match which::which(program) {
+        Ok(path) => Command::new(path),
+        Err(_) => Command::new(program),
     }
 }
 
