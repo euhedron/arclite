@@ -2,26 +2,25 @@
 
 > *Nothing is canon. Everything can evolve.*
 >
-> **NOTE**: This is an experimental project; development is expected to be rapid, and every aspect/feature should be considered in-progress. Agents & users are advised not to treat any part of any file — or any architectural, formatting, or structural decision — as settled (anticipate unfinished, abandoned, or sub-optimal thoughts, sentences, systems, structures, designs, and descriptions). Existing state represents in-progress thinking, not settled decisions.
+> **NOTE**: This is an experimental project; development is rapid and every aspect/feature should be considered in-progress. Don't treat any part of any file — or any architectural, formatting, or structural decision — as settled (anticipate unfinished, abandoned, or sub-optimal thoughts, systems, and descriptions). Existing state is in-progress thinking, not settled decisions.
 
 ## Overview
 
-arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)** in a way that is **cost-transparent, configurable, and observable**. The aim is to unlock analysis/auditing capabilities that don't already exist, while using AI spend *sensibly*.
+arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)**. Every AI use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending AI *sensibly*.
 
-Commands today:
-
-- **`doctor`** — report runtime, environment, and available tooling.
-- **`inspect`** — walk any repo and emit structured facts (languages, layout, manifests, git state).
-- **`summarize`** — synthesize a brief assessment of a repo from its facts (AI).
-- **`suggest`** — synthesize a prioritized list of what's worth attention (AI).
-- **`extract`** — synthesize reusable rules (standards, anti-patterns, principles) from a repo, as candidates to curate (AI).
-- **`audit`** — check a repo against selected rules, reporting only concrete violations (AI).
-
-Every AI call defaults to the best model (`opus`) — configurable *down* for cost via `--model` — runs with a configurable tool allowlist, can be previewed at zero cost (`--dry-run`), and **reports the exact parameters it used** (model, tools, every context source) alongside its token usage + cost.
+| Command | What it does | AI |
+|---|---|:--:|
+| `doctor` | Report runtime, environment, and available tooling. | — |
+| `inspect` | Walk any repo and emit structured facts (languages, layout, manifests, git state). | — |
+| `summarize` | A brief assessment of a repo from its facts. | ✓ |
+| `suggest` | A prioritized list of what's worth attention. | ✓ |
+| `critique` | Quality defects — redundancy, staleness, gaps — each with a concrete fix. | ✓ |
+| `extract` | Reusable rules (standards, anti-patterns, principles) to curate. | ✓ |
+| `audit` | Check a repo against selected rules, reporting only concrete violations. | ✓ |
 
 ## Getting started
 
-**Prerequisites:** a Rust toolchain (`cargo`); and, for the AI commands (`summarize`/`suggest`/`extract`/`audit`), the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arc doctor` verifies both.
+**Prerequisites:** a Rust toolchain (`cargo`; Rust ≥ 1.85, for edition 2024); and, for the AI commands, the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arc doctor` verifies both.
 
 **Build / install:**
 
@@ -30,104 +29,81 @@ git clone https://github.com/nikganderson/arclite.git && cd arclite
 cargo install --path .        # installs the `arc` command; or `cargo build --release` → target/release/arc
 ```
 
-**Use** (each command takes a repo path, default `.`):
+**Use** — the deterministic commands (`doctor`, `inspect`) cost nothing; the AI commands take a repo path (default `.`):
 
 ```sh
-arc                                # self-documenting help (the binary is `arc`; the project is arclite)
-arc doctor                         # runtime + tooling check (free)
-arc inspect <repo>                 # deterministic facts, no AI (free)
-arc suggest <repo> --include src   # AI review — preview with --dry-run ($0) first
-arc audit   <repo> --rules rules   # flag only violations of the given rules
-arc extract <repo> --include src   # propose reusable rules to curate into rules/
+arc                                  # self-documenting help (the binary is `arc`; the project is arclite)
+arc inspect <repo>                   # deterministic facts, no AI (free)
+arc summarize <repo>                 # brief AI assessment
+arc suggest <repo> --include src     # prioritized review — preview with --dry-run ($0) first
+arc critique <repo> --include src    # find imperfections + concrete fixes
+arc audit   <repo> --rules rules     # flag only violations of the given rules
+arc extract <repo> --include src     # propose reusable rules to curate into rules/
 ```
 
-Deterministic commands cost nothing; the AI commands print the model, tools, every context source, and exact token usage + cost, and `--dry-run` previews the prompt at zero spend. Any synthesis command can scope its context to just your git-changed files with `--changed` — a cheap, focused run (e.g. `arc audit --rules rules --changed`) — and `--output <dir>` also saves the result as a self-describing Markdown doc.
+Shared options on every AI command: `--model` (default `opus`; configure *down* for cost), `--include <path>` (add files/dirs to context), `--changed` (scope context to git-changed files — staged/unstaged/untracked), `--max-file-chars` (cap large files), `--output <dir>` (also save the result as a self-describing Markdown doc), `--ambient-memory` (load your `CLAUDE.md` instead of isolating), `--dry-run` (zero-cost preview), `--json`. Every run echoes the exact parameters it used and its token usage + cost — see [Principles](#principles).
 
-## Background
+## Background & motivation
 
-arclite is a fresh, stripped-down version of — and successor to — the arc project. arc is treated only as a *cautionary tale* (what to avoid) and a *catalog of ideas to evaluate on their merits*; nothing is carried over by default.
+arclite is a fresh, stripped-down **successor to** the legacy `arc` project — treated only as a *cautionary tale* and a *catalog of ideas to evaluate on merit*; nothing carries over by default. It is **not** meant to replace Claude Code or other tools (it can't keep up); the goal is to unlock new, efficient analysis/auditing workflows that don't already exist — *without* requiring users to understand its internals (arc was not user-friendly).
 
-## Motivation
+Two arc failure modes arclite must avoid:
 
-**Aspects worth carrying over from legacy arc (each judged on merit):**
+- **Unsustainable AI spend** — arc's automations consumed usage at an unsustainable, opaque rate. arclite makes every AI use configurable, observable, and balanced.
+- **Complexity outgrowing comprehension** — arc became too complex for new developers to understand or benefit from. arclite must stay intuitive as it grows.
 
-- Self-derived & generated README/docs — users/agents shouldn't have to hand-maintain them.
-
-**Two failure modes from arc that arclite must avoid:**
-
-- **Unsustainable AI spend** — arc's automations consumed usage at an unsustainable, often opaque rate. arclite makes every AI use configurable, observable, and balanced.
-- **Complexity outgrowing comprehension** — arc became too complex for new developers to understand, use, or benefit from. arclite must stay intuitive as it grows.
-
-## Purpose/Goal
-
-arclite is not meant to *replace* Claude Code or other tools — it can't compete or keep up. The goal is to unlock new, powerful, efficient analysis and auditing capabilities/insights/workflows that don't already exist.
-
-It shouldn't require someone to know how the system works — the original arc project was not user-friendly.
+Worth carrying over (on merit): self-derived/generated docs — users/agents shouldn't have to hand-maintain them.
 
 ## Specification
 
-- **Platforms**: cross-platform — Windows, macOS, and Linux all first-class (built in Rust; ships as a single static binary per platform).
+- **Platforms**: targets Windows, macOS, and Linux (built in Rust; ships as a single self-contained binary per platform). Linux is CI-built today; macOS/Windows runners are pending (see [Open questions](#open-questions)).
 - **CLI**: should be able to do and see anything, via flags.
-- **Scope**: multi / any / cross repo — point it at any repository (e.g. `quant`, `streamline`).
-- **Intelligence**: extract **rules** — coding standards, anti-patterns, principles, best practices, and the like — from a repo (or repos), aggregated and reusable.
-- **Auditing / Gates**: check/audit a repo against selected rules; configurable, usable both on demand and passively (e.g. commit hooks).
-- **Linting**: surface drift/violations against rules (see the "lexicon" item in the Roadmap).
-- **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, etc.) — content storage and structure compatibility.
-- **AI use**: deterministic until synthesis; best-by-default but configurable model, configurable tools, observable cost + fully reported run parameters (see Principles). The synthesis subprocess runs with ambient memory disabled (no user/project `CLAUDE.md` or auto-memory auto-loaded), so the reported context is authoritative and runs reproduce across machines.
-
-## Features / Use Cases
-
-**Working today:** `doctor`, `inspect`, `summarize`, `suggest`, `extract`, `audit` (see Overview).
-
-**Direction (not yet built):**
-
-- Aggregate extracted **rules** across repos and dedup them (`extract` produces per-repo candidates today; cross-repo merge is the open part).
-- Configurably include some/all rules in any AI run — targeted or passive (commit hooks, etc.).
-- Gate a repo against rules *passively* (e.g. commit hooks) and rank/prioritize findings — `audit` flags violations on demand today; the passive + ranking parts are open.
-- Search across one or more repos.
+- **Scope**: multi / any / cross repo — point it at any repository.
+- **Intelligence**: extract **rules** — coding standards, anti-patterns, principles, best practices — from a repo (or repos), aggregated and reusable.
+- **Auditing & linting**: check a repo against selected rules and surface drift/violations — on demand (a gate) or passively (e.g. commit hooks). Configurable and cost-visible.
+- **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, …) — content storage and structure compatibility.
+- **AI use**: deterministic until synthesis; AI is reserved for the judgment step, under the cost-transparency guarantees in [Principles](#principles).
 
 ## Principles
 
+The philosophy that defines arclite. (The *code's* own engineering standards — DRY, no hardcoding, single-source — live in `rules/` and are enforced via `audit`, not restated here.)
+
 - **Agent-first, human-accessible** — usable by both agents and people.
-- **Leverage, don't replace** existing and ever-evolving agent tools (e.g. the Claude Code CLI).
+- **Leverage, don't replace** existing, ever-evolving agent tools (e.g. the Claude Code CLI).
 - **Maximally transparent, observable, and honest.**
-- **Leverage derivation/transclusion.**
-- **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the synthesis/judgment step.
+- **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
+- **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); preview at $0 (`--dry-run`); report every run parameter (model, tools, memory isolation, every context source) alongside real token usage + cost; balance context utilization against value.
 - **Trace, resolve, evolve** — unexpected/sub-par results are signal: make them traceable, diagnose, then improve the system.
-- **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); surface cost; report every run parameter; balance context utilization against value.
-- **No hardcoding. No arbitrary conventions. DRY.**
-- **Adversarial** — build in self-checking.
-- **Shared substrates; single source of truth.**
+- **Adversarial** — build in self-checking (arclite is exercised on itself).
+- **Leverage derivation/transclusion.**
 
 ## Roadmap
 
-Open and unsettled — not a plan, an ordering, or a commitment; like everything here it evolves (items get added, dropped, or reshaped as signals warrant).
+Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
 
-- [ ] Permanently disable the legacy arc MCP server.
-- [ ] Fetch Claude docs → Markdown for read-only, citable reference snippets (cite specific lines; *derive* where valuable once the shape is clear). Sample sources under **References**.
-- [ ] AI-driven ranking/prioritization of findings — what to tackle first. *(`suggest` is a first cut; `audit` ships for rule violations.)*
-- [ ] A "lexicon" — canonical project terms + casing that linting enforces (would auto-catch drift like Claude Code / Codex / arclite casing). Likely lower priority.
-- [ ] Fully review arc's codebase + feature set; clearly identify what made sense vs. what was sub-optimal/unnecessary.
-- [ ] A **rules** system (see Open Questions).
+- [ ] Aggregate extracted **rules** across repos and dedup them (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
+- [ ] Configurably include some/all rules in any AI run — targeted or passive.
+- [ ] Gate a repo against rules *passively* (commit hooks) and rank/prioritize findings — `audit` flags violations on demand today; the passive + ranking parts are open.
+- [ ] Search across one or more repos.
+- [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
+- [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.
+- [ ] Permanently retire the legacy arc MCP server.
+- [ ] Fully review arc's codebase + feature set; identify what made sense vs. what was sub-optimal.
 
-## Open Questions/Ideas
+## Open questions
 
-- **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its **filename (stem) is the `id`** (single source, no drift), its **contents are the body** (what enters the AI's context). Frontmatter/attributes for *selective inclusion* (`kind`, `scope`, `tags`, …) get added only when something actually filters on them — not before. Open: rename-stability of filename-ids; whether prompts/todos share the same format.
-- **Rules — extraction & application.** Point arclite at a repo (e.g. `streamline`) to *extract* rules; aggregate them; configurably include some/all in any AI run (targeted or passive). The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
-- **Gating / hooks for any command (configurable, cost-visible).** `--changed` already ships as a *shared* option — it scopes **any** synthesis command's context to git-changed files (staged/unstaged/untracked), not just `audit`. The open part is the passive side: wiring a command into git hooks (a commit gate that warns or blocks) so users/agents benefit without remembering to run it — again **general to any command, not special to `audit`**. Must be opt-in and **loud about cost and on/off status** — passive per-commit AI spend is precisely arc's failure mode; a hook that hides its cost would repeat it.
-- **IDE & linter integration** — what would integrating with IDEs and linters mean/imply? (To be explored.)
-- **Auto-context vs `--include` on real repos.** The default synthesis context (scan + root `README` + root-level manifests) is thin on real repos — manifests nest in subprojects (IDA, quant) and root READMEs are often stubs — so `--include` is needed for a substantive run today. Open: should auto-context pull the *detected* subdir manifests, or search wider for docs, vs. keeping a light default + explicit `--include`? (Surfaced exercising arclite on IDA/quant; a ~$1 capped review of quant's R core produced specific, code-grounded findings.)
-- **Prompts as files?** Command prompts are inline in code today. Externalizing them — as **Markdown**, the same substrate as rules ("shared substrates"), rather than JSON/JSONL (which suit structured data, not prose) — would make them tunable without a rebuild and consistent with rules. Logical and on-thesis, but not urgent (inline works); do it when a prompt needs tuning without recompiling.
-- **Agent-agnostic?** (e.g. Claude Code + Codex + any)
-- **Dashboard?**
-- **Distribution / install** — `cargo install`, prebuilt per-OS binaries from CI, `cargo-binstall`, Homebrew/Scoop?
-- **CI** — build/test/release across Windows, macOS, Linux. *(GitHub Pipelines for Linux is in place; macOS/Windows would need runners.)*
-- **LLM "synthesis" step** — Claude via CLI (`claude -p`), an SDK, or provider-agnostic?
-- **Reclaim the `arc` name?** Eventually rename this repo (here + on GitHub) and take the `arc` CLI command/alias, superseding the legacy arc others may still have installed (this machine, Tom's, …). As the successor, arclite inheriting the name fits — but tentative; depends, not a directive.
+- **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its filename stem is the `id` (single source, no drift), its contents are the body (what enters the AI's context). Frontmatter for *selective inclusion* (`kind`, `scope`, `tags`) gets added only when something actually filters on it. Open: rename-stability of filename-ids; whether prompts/todos share the format.
+- **Rules — extraction & application.** Extract rules from a repo; aggregate them; configurably include some/all in any AI run. The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
+- **Gating / hooks for any command (cost-visible).** `--changed` already ships as a shared option. The open part is the passive side: wiring a command into git hooks (a commit gate that warns or blocks) so users/agents benefit without remembering to run it — general to any command, not special to `audit`. Must be opt-in and **loud about cost and on/off status** — passive per-commit AI spend is precisely arc's failure mode.
+- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` prioritizes, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules). Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb.
+- **Auto-context depth.** The default context includes the *detected* manifests (root or nested) + the root README. Open: search wider for docs vs. keeping a light default + explicit `--include`.
+- **Prompts as files?** Command prompts are inline in code today. Externalizing them as **Markdown** (the same substrate as rules) would make them tunable without a rebuild — do it when a prompt needs tuning without recompiling.
+- **Reclaim the `arc` name.** The binary is *already* `arc` (it shadows any legacy `arc` at install time); the open part is renaming the repo (here + on GitHub) and formally superseding legacy arc.
+- **Agent-agnostic?** (Claude Code + Codex + any.) **Distribution / install?** (`cargo install`, prebuilt per-OS binaries, `cargo-binstall`, Homebrew/Scoop.) **CI** across all three OSes (Linux is in place; macOS/Windows need runners). **Dashboard / IDE / linter integration?**
 
-## Related Repositories
+## Related repositories
 
-- <https://github.com/nikganderson/arc/src/>
+- <https://github.com/nikganderson/arc/src/> — legacy arc (reference-only).
 - <https://github.com/nikganderson/ida/src/>
 - <https://github.com/nikganderson/quant/src/>
 
@@ -140,7 +116,3 @@ Claude Code docs arclite leverages or draws on (cite specific behavior; *derive*
 - <https://code.claude.com/docs/en/memory> — CLAUDE.md + auto-memory, and the `CLAUDE_CODE_DISABLE_*` env vars arclite sets to isolate the synthesis.
 - <https://code.claude.com/docs/en/settings> — settings layers/precedence.
 - <https://code.claude.com/docs/en/permissions> — the tool-permission model behind `--allowedTools`.
-
-## Other/Notes/Considerations
-
-- Consider turning some sections into tables for readability and to avoid repetition.
