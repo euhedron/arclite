@@ -1,8 +1,16 @@
+use super::Structure;
 use crate::cli::{GlobalArgs, SynthArgs};
+
+/// The `suggest` structured-output mode: a `suggestions` array ordered most-important first.
+/// A different shape from audit's findings (rank matters) — stresses the per-command abstraction.
+const SUGGEST_STRUCTURE: Structure = Structure {
+    schema: r#"{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"object","properties":{"rank":{"type":"integer"},"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["rank","suggestion","rationale"]}}},"required":["suggestions"]}"#,
+    note: "\n\nReturn the result as structured data: a `suggestions` array ordered most-important first, each with `rank` (1 = highest), `suggestion` (one line), and `rationale` (one clause).",
+};
 
 /// Synthesize a prioritized list of suggestions for a repository (the `suggest` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    super::run_synthesis(args, global, "suggest", |ctx| {
+    super::run_synthesis(args, global, "suggest", Some(SUGGEST_STRUCTURE), |ctx| {
         format!(
             "You are reviewing a code repository to advise where attention is best spent.\n\n\
              {ctx}\n\

@@ -1,11 +1,20 @@
+use super::Structure;
 use crate::cli::{GlobalArgs, SynthArgs};
+
+/// The `audit` structured-output mode: a `violations` array (empty = clean) — findings as data,
+/// not prose. This is the shape a future gate would read ("non-empty ⇒ block"); no verdict/pass-fail
+/// convention, just the findings themselves.
+const AUDIT_STRUCTURE: Structure = Structure {
+    schema: r#"{"type":"object","properties":{"violations":{"type":"array","items":{"type":"object","properties":{"rule":{"type":"string"},"location":{"type":"string"},"reason":{"type":"string"}},"required":["rule","location","reason"]}}},"required":["violations"]}"#,
+    note: "\n\nReturn the result as structured data: a `violations` array — one object per concrete violation, each with `rule` (the rule id), `location` (file/area), and `reason` (one clause). Empty array if there are none.",
+};
 
 /// Audit a repository against the provided rules, flagging only violations (the `audit` command).
 ///
 /// Where `suggest` gives an open-ended review, `audit` is narrow: enforce exactly the rules in
 /// context (`--rules <dir>`) and report only where the code breaks them.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    super::run_synthesis(args, global, "audit", |ctx| {
+    super::run_synthesis(args, global, "audit", Some(AUDIT_STRUCTURE), |ctx| {
         format!(
             "You are auditing a code repository strictly against the rules provided below (listed \
              under \"Rules\").\n\n\

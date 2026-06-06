@@ -37,6 +37,8 @@ pub struct SynthOptions<'a> {
     pub output: Option<&'a Path>,
     /// Load the Claude CLI's ambient user/project memory instead of isolating (default: isolate).
     pub ambient_memory: bool,
+    /// JSON Schema for structured output (`--structured`), or `None` for free-form prose.
+    pub schema: Option<&'a str>,
     /// Preview the prompt + estimate without calling the model (zero spend).
     pub dry_run: bool,
     /// Emit machine-readable JSON instead of human text.
@@ -350,6 +352,8 @@ struct SynthOutput<'a> {
     usage: ai::Usage,
     /// Path written by `--output`, if any (so the run report says where the doc went).
     output: Option<String>,
+    /// Schema-validated structured result, if `--structured` was used.
+    structured: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -395,6 +399,9 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         if let Some(target) = &output_target {
             human.push_str(&format!("\noutput: would write {target} on a real run"));
         }
+        if opts.schema.is_some() {
+            human.push_str("\nstructured: on — the result will be a schema-validated object");
+        }
         human.push_str(&format!("\n\n{prompt}"));
         let out = DryRunOutput {
             dry_run: true,
@@ -413,18 +420,26 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         opts.allowed_tools,
         opts.dir,
         opts.ambient_memory,
+        opts.schema,
     )?;
     let usage = synthesis.usage;
+    let structured = synthesis.structured;
+    let text = synthesis.text;
     // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
     let cost = usage
         .cost_usd
         .map_or_else(|| "unknown".to_owned(), |c| format!("${c:.4}"));
-    // --output: persist the synthesis as a self-describing doc (provenance header keeps it honest).
+    // Display body: the validated structured object (pretty-printed) when present, else the prose.
+    let body = match &structured {
+        Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| text.clone()),
+        None => text.clone(),
+    };
+    // --output: persist the result as a self-describing doc (provenance header keeps it honest).
     let written = match opts.output {
         Some(dir) => Some(write_output(
             dir,
             opts.command,
-            &synthesis.text,
+            &body,
             model,
             opts.sources.len(),
             &cost,
@@ -433,7 +448,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     };
     let mut human = format!(
         "{}\n\nrun: {}\ncost: in {}  cache-write {}  cache-read {}  out {} | {}",
-        synthesis.text,
+        body,
         report.human(),
         usage.input_tokens,
         usage.cache_creation_input_tokens,
@@ -446,9 +461,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     }
     let out = SynthOutput {
         run: report,
-        synthesis: synthesis.text,
+        synthesis: text,
         usage,
         output: written.map(|p| p.display().to_string()),
+        structured,
     };
     emit(&out, &human, opts.json)
 }

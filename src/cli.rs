@@ -100,4 +100,9 @@ pub struct SynthArgs {
     /// and reproducible across machines. Enable to deliberately apply your own CLAUDE.md standards.
     #[arg(long)]
     pub ambient_memory: bool,
+    /// Emit the command's structured output (a schema-validated typed object) instead of prose,
+    /// where the command defines one (e.g. `audit` violations, `suggest` a ranked list). Optional;
+    /// commands without a structured mode reject it. Compose with `--json` for machine consumption.
+    #[arg(long)]
+    pub structured: bool,
 }

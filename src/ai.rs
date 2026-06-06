@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, bail};
@@ -22,6 +22,9 @@ pub struct Usage {
 pub struct Synthesis {
     pub text: String,
     pub usage: Usage,
+    /// Schema-validated structured output — present only when a `--json-schema` was requested
+    /// (i.e. `--structured`). Read this for the typed result instead of parsing `text`.
+    pub structured: Option<serde_json::Value>,
 }
 
 /// A zero-cost prompt-size estimate (rough heuristic: ~4 chars per token).
@@ -44,18 +47,46 @@ pub fn estimate(prompt: &str) -> Estimate {
     }
 }
 
-/// Build a [`Command`] for an external program, resolved to its real path first (via `which`,
-/// respecting Windows `PATHEXT`) and spawned directly — no `cmd /C` wrapper. This lets `std`
-/// apply correct per-target argument quoting, including cmd.exe rules for npm `.cmd` shims like
-/// `claude` (since Rust 1.77), so args containing quotes or spaces — e.g. an inline `--json-schema`
-/// payload — survive intact rather than being mangled by a shell re-parse. Falls back to the bare
-/// name (which then surfaces a normal "not found" error). Shared by `doctor`'s probe and
-/// [`synthesize`] so the two never disagree about whether a tool is present.
+/// Build a [`Command`] for an external program, resolved to a directly-spawnable executable.
+/// `which` finds it on `PATH` (respecting Windows `PATHEXT`) — but on Windows that lands on the npm
+/// `.cmd` shim, which forwards args through batch `%*`, corrupting quote-heavy args like an inline
+/// `--json-schema` payload (Rust's `.cmd` quoting does not save them — confirmed empirically). So
+/// when `which` returns such a shim, [`shim_target`] resolves the real `.exe` it runs and we spawn
+/// that directly: no shell/batch re-parse, so std's standard argv quoting holds. Falls back to the
+/// bare name (surfacing a normal "not found" error). Shared by `doctor`'s probe and [`synthesize`].
 pub fn command(program: &str) -> Command {
-    match which::which(program) {
-        Ok(path) => Command::new(path),
-        Err(_) => Command::new(program),
+    let exe = which::which(program)
+        .ok()
+        .map(|resolved| shim_target(&resolved).unwrap_or(resolved));
+    match exe {
+        Some(path) => Command::new(path),
+        None => Command::new(program),
     }
+}
+
+/// If `path` is an npm-style `.cmd` shim, return the `.exe` it actually invokes — resolving the
+/// shim's `%dp0%` (= its own directory) placeholder. `None` for non-shims or if no `.exe` resolves,
+/// so callers fall back to the original path.
+fn shim_target(path: &Path) -> Option<PathBuf> {
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd"))
+    {
+        return None;
+    }
+    let body = std::fs::read_to_string(path).ok()?;
+    let dir = path.parent()?;
+    // npm shim runs e.g. `"%dp0%\node_modules\…\claude.exe"   %*`; pull that quoted .exe out.
+    body.split('"')
+        .filter(|tok| tok.to_ascii_lowercase().ends_with(".exe"))
+        .find_map(|tok| {
+            let rel = tok
+                .trim_start_matches("%dp0%")
+                .trim_start_matches(['\\', '/']);
+            let candidate = dir.join(rel);
+            candidate.is_file().then_some(candidate)
+        })
 }
 
 // The subset of `claude -p --output-format json` we read.
@@ -66,6 +97,8 @@ struct ClaudeJson {
     total_cost_usd: Option<f64>,
     usage: Option<ClaudeUsage>,
     model: Option<String>,
+    /// Present when `--json-schema` was passed: the validated, typed result.
+    structured_output: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -103,6 +136,7 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
             cache_read_input_tokens: usage.cache_read_input_tokens,
             cost_usd: parsed.total_cost_usd,
         },
+        structured: parsed.structured_output,
     })
 }
 
@@ -126,6 +160,7 @@ pub fn synthesize(
     allowed_tools: &[String],
     dir: &Path,
     ambient_memory: bool,
+    json_schema: Option<&str>,
 ) -> anyhow::Result<Synthesis> {
     let mut cmd = command("claude");
     cmd.args([
@@ -143,6 +178,12 @@ pub fn synthesize(
         cmd.args(allowed_tools);
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
         cmd.arg("--add-dir").arg(dir);
+    }
+    // Structured output (`--structured`): the result returns as a schema-validated `structured_output`
+    // object, never scraped from prose. The which-resolved direct spawn (see `command`) passes this
+    // quote-heavy arg through intact, where the old `cmd /C` path would have mangled it.
+    if let Some(schema) = json_schema {
+        cmd.arg("--json-schema").arg(schema);
     }
     // By default, isolate from ambient context so the sources arclite reports are authoritative:
     // disable auto-loading of user/project CLAUDE.md and auto-memory. Confirmed necessary — a

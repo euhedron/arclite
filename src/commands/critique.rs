@@ -7,7 +7,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// redundancy, inconsistency, staleness, gaps, dead weight, and consolidation/clarity opportunities,
 /// each with a concrete fix. Reach for it to harden a codebase or its docs against their own sloppiness.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    super::run_synthesis(args, global, "critique", |ctx| {
+    super::run_synthesis(args, global, "critique", None, |ctx| {
         format!(
             "You are performing a rigorous critical review of a repository and its documentation to \
              surface quality defects worth fixing — not a priority list, and not rule violations, but \
