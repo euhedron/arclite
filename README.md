@@ -111,7 +111,9 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 Claude Code docs arclite leverages or draws on (cite specific behavior; *derive* where valuable — see the Roadmap item):
 
 - <https://code.claude.com/docs/en/headless> — print/headless mode (`claude -p`): how arclite invokes the CLI.
-- <https://code.claude.com/docs/en/cli-reference> — flags arclite passes (`--output-format json`, `--strict-mcp-config`, `--model`, `--allowedTools`, `--add-dir`).
+- <https://code.claude.com/docs/en/cli-reference> — flags arclite passes (`--output-format json`, `--json-schema`, `--strict-mcp-config`, `--model`, `--allowedTools`, `--add-dir`, and `--max-budget-usd` as a prospective hard cost cap).
+- <https://code.claude.com/docs/en/agent-sdk/structured-outputs> — `--json-schema` → a validated `structured_output` field: how arclite gets *typed* verdicts/findings (gating, ranking) instead of parsing prose.
 - <https://code.claude.com/docs/en/memory> — CLAUDE.md + auto-memory, and the `CLAUDE_CODE_DISABLE_*` env vars arclite sets to isolate the synthesis.
+- <https://code.claude.com/docs/en/hooks> — Claude Code's hook events: an agent-loop surface a hook can use to invoke `arc` (complementary to git hooks; arclite stays a citizen of existing hook systems rather than replacing them).
 - <https://code.claude.com/docs/en/settings> — settings layers/precedence.
 - <https://code.claude.com/docs/en/permissions> — the tool-permission model behind `--allowedTools`.
