@@ -29,6 +29,7 @@ pub fn run() -> ExitCode {
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),
         Command::Audit(args) => commands::audit::run(args, &cli.global),
+        Command::Critique(args) => commands::critique::run(args, &cli.global),
     };
 
     match result {

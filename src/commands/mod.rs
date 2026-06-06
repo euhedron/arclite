@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod critique;
 pub mod doctor;
 pub mod extract;
 pub mod inspect;

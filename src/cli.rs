@@ -41,6 +41,8 @@ pub enum Command {
     Extract(SynthArgs),
     /// Audit a repository against selected rules, reporting only violations, via the Claude CLI.
     Audit(SynthArgs),
+    /// Critically review a repo + its docs for quality defects (redundancy, staleness, gaps) via the Claude CLI.
+    Critique(SynthArgs),
 }
 
 /// Arguments for `arclite doctor`.
