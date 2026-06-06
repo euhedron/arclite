@@ -87,7 +87,6 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.
-- [ ] Permanently retire the legacy arc MCP server.
 - [ ] Fully review arc's codebase + feature set; identify what made sense vs. what was sub-optimal.
 
 ## Open questions
