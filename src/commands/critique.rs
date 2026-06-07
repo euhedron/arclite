@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use crate::cli::{GlobalArgs, SynthArgs};
 
 /// Critically review a repository and its docs for quality defects worth fixing (the `critique` command).
@@ -6,7 +8,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// `audit` flags violations of provided rules, `summarize` describes — `critique` hunts imperfection:
 /// redundancy, inconsistency, staleness, gaps, dead weight, and consolidation/clarity opportunities,
 /// each with a concrete fix. Reach for it to harden a codebase or its docs against their own sloppiness.
-pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "critique", None, |ctx| {
         format!(
             "You are performing a rigorous critical review of a repository and its documentation to \

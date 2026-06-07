@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use crate::cli::{GlobalArgs, SynthArgs};
 
 /// Extract reusable rules (standards, anti-patterns, principles) from a repository (the `extract` command).
@@ -5,7 +7,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// `suggest` finds repo-specific issues; `extract` abstracts the recurring ones — and the
 /// standards a repo enforces — into discrete, repo-agnostic rules. Output is *candidate* rules
 /// for a human to curate into a rules dir; they shape every future run, so quality matters.
-pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "extract", None, |ctx| {
         format!(
             "You are extracting reusable engineering rules from a code repository — coding \

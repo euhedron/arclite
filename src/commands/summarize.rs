@@ -1,7 +1,9 @@
+use std::process::ExitCode;
+
 use crate::cli::{GlobalArgs, SynthArgs};
 
 /// Synthesize a brief assessment of a repository (the `summarize` command).
-pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "summarize", None, |ctx| {
         format!(
             "You are assessing a code repository from the context below.\n\n\

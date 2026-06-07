@@ -24,9 +24,14 @@ use cli::{Cli, Command};
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
 
+    // Deterministic commands always succeed-or-error (mapped to SUCCESS); the synthesis commands
+    // return their own ExitCode so an opt-in gate (`--fail-on-findings`) can surface as a distinct
+    // non-zero code without being an error — predictable exit codes keep arclite scriptable.
     let result = match &cli.command {
-        Command::Doctor(args) => commands::doctor::run(args, &cli.global),
-        Command::Inspect(args) => commands::inspect::run(args, &cli.global),
+        Command::Doctor(args) => commands::doctor::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Inspect(args) => {
+            commands::inspect::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),
@@ -35,7 +40,7 @@ pub fn run() -> ExitCode {
     };
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) => {
             eprintln!("arclite: {err:#}");
             ExitCode::FAILURE

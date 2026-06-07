@@ -16,6 +16,9 @@ pub struct Settings {
     pub default_model: Option<String>,
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
+    /// The settings files actually loaded (user then project), in layer order — surfaced in every
+    /// run's output so which configuration is active is disclosed, never inferred.
+    pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
 
@@ -58,6 +61,7 @@ impl Settings {
         };
         let raw: Raw = serde_json::from_str(&text)
             .with_context(|| format!("invalid settings file {}", path.display()))?;
+        self.active.push(path.to_path_buf());
         let dir = path.parent().unwrap_or(Path::new("."));
         if raw.defaults.model.is_some() {
             self.default_model = raw.defaults.model;

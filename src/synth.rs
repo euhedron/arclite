@@ -6,6 +6,7 @@
 //! (model, tools, context sources) so output is never judged blind to its setup.
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use serde::Serialize;
 
@@ -17,6 +18,10 @@ use crate::output::emit;
 const DEFAULT_MODEL: &str = "opus";
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
+
+/// Exit code when an opt-in gate (`--fail-on-findings`) blocks — distinct from `1` (arclite error)
+/// so a hook/CI can tell "found violations" apart from "the tool failed". Any non-zero blocks.
+const GATE_BLOCKED_EXIT: u8 = 2;
 
 /// Configuration shared by every synthesis-backed command.
 pub struct SynthOptions<'a> {
@@ -31,6 +36,9 @@ pub struct SynthOptions<'a> {
     pub sources: &'a [String],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
+    /// The active `.arc/settings.json` layers (user then project), surfaced so the configuration in
+    /// effect is disclosed with every run. Empty = no settings file active (built-in defaults only).
+    pub config: &'a [String],
     /// Command name (e.g. "suggest") — names the `--output` file and labels the doc's provenance.
     pub command: &'a str,
     /// Optional directory to also write the synthesis into, as `<command>.md`.
@@ -39,6 +47,10 @@ pub struct SynthOptions<'a> {
     pub ambient_memory: bool,
     /// JSON Schema for structured output (`--structured`), or `None` for free-form prose.
     pub schema: Option<&'a str>,
+    /// When `Some(field)` (from `--fail-on-findings`), block — exit non-zero — if the structured
+    /// output's `field` array is non-empty. `None` = no gating (default). Decoupled policy: the
+    /// synthesis is unchanged; only the process exit code (and a loud line) reflect the gate.
+    pub gate: Option<&'a str>,
     /// Preview the prompt + estimate without calling the model (zero spend).
     pub dry_run: bool,
     /// Emit machine-readable JSON instead of human text.
@@ -327,6 +339,11 @@ struct RunReport<'a> {
     memory: &'a str,
     context: &'a [String],
     excluded: &'a [String],
+    /// Active `.arc/settings.json` layers in effect for this run (empty = built-in defaults only).
+    config: &'a [String],
+    /// The findings field this run gates on (`--fail-on-findings`), or `None`. Recorded as a run
+    /// parameter (for `--json`); the pass/block outcome is shown on its own line to stay legible.
+    gate: Option<&'a str>,
 }
 
 impl RunReport<'_> {
@@ -346,6 +363,14 @@ impl RunReport<'_> {
         if !self.excluded.is_empty() {
             line.push_str(&format!("  excluded=[{}]", self.excluded.join(", ")));
         }
+        line.push_str(&format!(
+            "\nconfig: {}",
+            if self.config.is_empty() {
+                "built-in defaults (no .arc/settings.json active)".to_owned()
+            } else {
+                self.config.join(", ")
+            }
+        ));
         line
     }
 }
@@ -357,6 +382,8 @@ struct SynthOutput<'a> {
     usage: ai::Usage,
     /// Path written by `--output`, if any (so the run report says where the doc went).
     output: Option<String>,
+    /// Path of the run log this run was appended to, if logging was on (disclosed every run).
+    log: Option<String>,
     /// Schema-validated structured result, if `--structured` was used.
     structured: Option<serde_json::Value>,
 }
@@ -374,6 +401,10 @@ struct RunRecord<'a> {
     structured: bool,
     sources: &'a [String],
     usage: &'a ai::Usage,
+    /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
+    /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
+    gate: Option<&'a str>,
+    blocked: bool,
 }
 
 #[derive(Serialize)]
@@ -388,7 +419,7 @@ struct DryRunOutput<'a> {
 }
 
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
-pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
+pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let model = opts.model.unwrap_or(DEFAULT_MODEL);
     let report = RunReport {
         model,
@@ -400,6 +431,8 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         },
         context: opts.sources,
         excluded: opts.excluded,
+        config: opts.config,
+        gate: opts.gate,
     };
 
     if opts.dry_run {
@@ -422,6 +455,19 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         if opts.schema.is_some() {
             human.push_str("\nstructured: on — the result will be a schema-validated object");
         }
+        if let Some(field) = opts.gate {
+            human.push_str(&format!(
+                "\ngate: on — a real run exits {GATE_BLOCKED_EXIT} if `{field}` is non-empty"
+            ));
+        }
+        // Disclose logging status + where real runs would record, even though a dry run logs nothing.
+        match (opts.log, crate::log::path()) {
+            (true, Some(path)) => {
+                human.push_str(&format!("\nlogging: on — real runs append to {}", path.display()));
+            }
+            (false, _) => human.push_str("\nlogging: off (defaults.logging = false)"),
+            (true, None) => {}
+        }
         human.push_str(&format!("\n\n{prompt}"));
         let out = DryRunOutput {
             dry_run: true,
@@ -431,7 +477,8 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
             output_target,
             prompt,
         };
-        return emit(&out, &human, opts.json);
+        emit(&out, &human, opts.json)?;
+        return Ok(ExitCode::SUCCESS);
     }
 
     let synthesis = ai::synthesize(
@@ -454,6 +501,17 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
         Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| text.clone()),
         None => text.clone(),
     };
+    // Opt-in gate: count the declared findings collection *before* `structured` is moved into the
+    // output payload. A non-empty count blocks via a distinct exit code — the synthesis itself is
+    // unchanged; gating is a downstream policy on the result, not a mode baked into the command.
+    let gate_findings = opts.gate.map(|field| {
+        structured
+            .as_ref()
+            .and_then(|v| v.get(field))
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len)
+    });
+    let gate_blocked = gate_findings.is_some_and(|n| n > 0);
     // --output: persist the result as a self-describing doc (provenance header keeps it honest).
     let written = match opts.output {
         Some(dir) => Some(write_output(
@@ -479,9 +537,22 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     if let Some(path) = &written {
         human.push_str(&format!("\nwrote: {}", path.display()));
     }
+    // Gate outcome on its own line so a blocked commit is unmistakable (real run only — the dry-run
+    // path notes that gating is armed instead). Shown for pass too, so "on and clean" isn't silent.
+    if let (Some(field), Some(n)) = (opts.gate, gate_findings) {
+        human.push_str(&format!(
+            "\ngate: {} — {n} `{field}`{}",
+            if gate_blocked { "BLOCKED" } else { "passed" },
+            if gate_blocked {
+                format!(" (exit {GATE_BLOCKED_EXIT})")
+            } else {
+                String::new()
+            },
+        ));
+    }
     // Append a durable run record (real runs only) before emitting — observability that outlives
     // the terminal scrollback. A logging failure warns but never fails the command.
-    if opts.log {
+    let logged = if opts.log {
         let record = RunRecord {
             ts: crate::log::now_secs(),
             command: opts.command,
@@ -491,17 +562,35 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
             structured: opts.schema.is_some(),
             sources: opts.sources,
             usage: &usage,
+            gate: opts.gate,
+            blocked: gate_blocked,
         };
-        crate::log::append(&record);
+        crate::log::append(&record)
+    } else {
+        None
+    };
+    // Disclose where the run was logged (or that logging is off) — the log location is never hidden.
+    match &logged {
+        Some(path) => human.push_str(&format!("\nlogged: {}", path.display())),
+        None if !opts.log => human.push_str("\nlogging: off (defaults.logging = false)"),
+        None => {} // logging on but the append failed — append() already warned to stderr
     }
     let out = SynthOutput {
         run: report,
         synthesis: text,
         usage,
         output: written.map(|p| p.display().to_string()),
+        log: logged.map(|p| p.display().to_string()),
         structured,
     };
-    emit(&out, &human, opts.json)
+    emit(&out, &human, opts.json)?;
+    // The gate's verdict is the process exit code (distinct from error) so a hook enforces on status
+    // alone; SUCCESS when not gating or when the findings collection is empty.
+    Ok(if gate_blocked {
+        ExitCode::from(GATE_BLOCKED_EXIT)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// Write the synthesis to `<dir>/<command>.md` with a short provenance header, so the generated

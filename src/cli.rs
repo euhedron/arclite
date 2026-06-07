@@ -109,4 +109,10 @@ pub struct SynthArgs {
     /// commands without a structured mode reject it. Compose with `--json` for machine consumption.
     #[arg(long)]
     pub structured: bool,
+    /// Gate on the command's findings: exit non-zero (code 2) if its structured findings collection
+    /// is non-empty (e.g. `audit` violations, `suggest` suggestions) — for enforcement in git hooks/
+    /// CI, where a hook blocks on exit status alone. Opt-in; implies `--structured`; rejected by
+    /// commands that emit no findings (e.g. `summarize`). Off by default — no command gates unless asked.
+    #[arg(long)]
+    pub fail_on_findings: bool,
 }
