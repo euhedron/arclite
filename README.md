@@ -37,11 +37,13 @@ arc inspect <repo>                   # deterministic facts, no AI (free)
 arc summarize <repo>                 # brief AI assessment
 arc suggest <repo> --include src     # prioritized review — preview with --dry-run ($0) first
 arc critique <repo> --include src    # find imperfections + concrete fixes
-arc audit   <repo> --rules rules     # flag only violations of the given rules
-arc extract <repo> --include src     # propose reusable rules to curate into rules/
+arc audit   <repo> --ruleset <id>    # flag violations of a ruleset (or the repo's configured default)
+arc extract <repo> --include src     # propose reusable rules to curate into a ruleset
 ```
 
-Shared options on every AI command: `--model` (default `opus`; configure *down* for cost), `--include <path>` (add files/dirs to context), `--changed` (scope context to git-changed files — staged/unstaged/untracked), `--max-file-chars` (cap large files), `--output <dir>` (also save the result as a self-describing Markdown doc), `--ambient-memory` (load your `CLAUDE.md` instead of isolating), `--dry-run` (zero-cost preview), `--json`. Every run echoes the exact parameters it used and its token usage + cost — see [Principles](#principles).
+Shared options on every AI command: `--ruleset <id>` (apply a named ruleset from settings) or `--rules <dir>` (an ad-hoc rule directory); `--structured` (emit a typed, schema-validated object instead of prose where the command defines one — e.g. `audit` violations, `suggest` a ranked list); `--model` (default `opus`; configure *down* for cost); `--include <path>` (add files/dirs to context); `--changed` (scope context to git-changed files — staged/unstaged/untracked); `--max-file-chars` (cap large files); `--output <dir>` (also save the result as a self-describing Markdown doc); `--ambient-memory` (load your `CLAUDE.md` instead of isolating); `--dry-run` (zero-cost preview); `--json`. Every run echoes the exact parameters it used and its token usage + cost — see [Principles](#principles).
+
+**Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset) and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
 
 ## Background & motivation
 
@@ -59,7 +61,7 @@ Worth carrying over (on merit): self-derived/generated docs — users/agents sho
 - **Platforms**: targets Windows, macOS, and Linux (built in Rust; ships as a single self-contained binary per platform). Linux is CI-built today; macOS/Windows runners are pending (see [Open questions](#open-questions)).
 - **CLI**: should be able to do and see anything, via flags.
 - **Scope**: multi / any / cross repo — point it at any repository.
-- **Intelligence**: extract **rules** — coding standards, anti-patterns, principles, best practices — from a repo (or repos), aggregated and reusable.
+- **Rules as composable levers**: rules (coding standards, anti-patterns, principles) are reusable *levers* — not just prompts or memory. They're extracted from repos, curated, and composed into named **rulesets** that any command applies; a ruleset's sources span scopes — your own (`~/.arc/`), a project's (`<repo>/.arc/`), and shared pools — so broadly-useful rules get shared while the rest stay local.
 - **Auditing & linting**: check a repo against selected rules and surface drift/violations — on demand (a gate) or passively (e.g. commit hooks). Configurable and cost-visible.
 - **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, …) — content storage and structure compatibility.
 - **AI use**: deterministic until synthesis; AI is reserved for the judgment step, under the cost-transparency guarantees in [Principles](#principles).
@@ -81,8 +83,8 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 
 Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
 
-- [ ] Aggregate extracted **rules** across repos and dedup them (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
-- [ ] Configurably include some/all rules in any AI run — targeted or passive.
+- [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
+- [ ] Per-run logs + metrics (command/gate frequency, audit pass-rate over time, cost) — to see whether the rules are earning their keep.
 - [ ] Gate a repo against rules *passively* (commit hooks) and rank/prioritize findings — `audit` flags violations on demand today; the passive + ranking parts are open.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
@@ -91,8 +93,8 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 
 ## Open questions
 
-- **Rules — format & lifecycle.** v1 is intentionally minimal: a rule is a **Markdown file** — its filename stem is the `id` (single source, no drift), its contents are the body (what enters the AI's context). Frontmatter for *selective inclusion* (`kind`, `scope`, `tags`) gets added only when something actually filters on it. Open: rename-stability of filename-ids; whether prompts/todos share the format.
-- **Rules — extraction & application.** Extract rules from a repo; aggregate them; configurably include some/all in any AI run. The edition-2024 false positive from an early `suggest` run is a case in point — a version rule, or a "only flag violations of the provided rules" mode, would change the outcome *traceably*.
+- **Rules — format & lifecycle.** A rule is a **Markdown file** (filename stem = `id`, contents = body). Rulesets compose *sources* (dirs/files of rules) and are defined in `.arc/settings.json`, layered user then project — that part ships. Open: frontmatter for *selective inclusion* (`kind`, `scope`, `tags`), added only when something filters on it; rename-stability of filename-ids; whether prompts/todos share the format.
+- **Rules — sharing & evolution.** `extract` mines candidates; curate them into a ruleset; `--ruleset` composes them into any run (ships). Open: cross-repo aggregation + dedup of rules that recur in 2+ places (promote to a shared pool), provenance-driven merge, and visibility into the scope of rules in play. (The edition-2024 false positive from an early `suggest` run is the kind of thing a sharpened rule resolves *traceably*.)
 - **Gating / hooks for any command (cost-visible).** `--changed` already ships as a shared option. The open part is the passive side: wiring a command into git hooks (a commit gate that warns or blocks) so users/agents benefit without remembering to run it — general to any command, not special to `audit`. Must be opt-in and **loud about cost and on/off status** — passive per-commit AI spend is precisely arc's failure mode.
 - **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` prioritizes, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules). Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb.
 - **Auto-context depth.** The default context includes the *detected* manifests (root or nested) + the root README. Open: search wider for docs vs. keeping a light default + explicit `--include`.
