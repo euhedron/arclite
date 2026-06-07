@@ -74,10 +74,14 @@ pub struct SynthArgs {
     /// text synthesis, so they run with no tools, which is far cheaper. Add only if needed.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,
-    /// Directory of Markdown rule files to weigh the synthesis against (anti-patterns,
-    /// standards, principles, …). Each rule's text is included in the AI's context.
+    /// Directory of Markdown rule files to weigh the synthesis against (anti-patterns, standards,
+    /// principles, …). Ad-hoc override that takes precedence over `--ruleset` and the default.
     #[arg(long, value_name = "DIR")]
     pub rules: Option<PathBuf>,
+    /// Use a named ruleset from `.arc/settings.json` (composing its sources). Overrides the
+    /// configured `defaults.ruleset`; `--rules <DIR>` overrides both.
+    #[arg(long, value_name = "ID")]
+    pub ruleset: Option<String>,
     /// Include a file or directory in the context (repeatable). Directories are walked
     /// gitignore-aware — e.g. `--include src`. Files are read in full by default.
     #[arg(long, value_name = "PATH")]

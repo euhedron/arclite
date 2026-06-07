@@ -9,6 +9,7 @@ mod cli;
 mod commands;
 mod output;
 mod rules;
+mod settings;
 mod synth;
 mod walk;
 

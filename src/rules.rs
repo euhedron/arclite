@@ -7,7 +7,8 @@
 //! (kind, scope, tags, …) can be added later, once something actually filters on
 //! them — not before.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
@@ -15,6 +16,19 @@ use anyhow::Context;
 pub struct Rule {
     pub id: String,
     pub body: String,
+}
+
+/// Load a single `.md` file as a rule (filename stem = id, trimmed contents = body).
+fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
+    let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
+        return Ok(None);
+    };
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read rule {}", path.display()))?;
+    Ok(Some(Rule {
+        id,
+        body: body.trim().to_owned(),
+    }))
 }
 
 /// Load all `*.md` rules from `dir` (filename stem = id, file contents = body).
@@ -27,18 +41,31 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
-            continue;
-        };
-        let body = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read rule {}", path.display()))?;
-        rules.push(Rule {
-            id,
-            body: body.trim().to_owned(),
-        });
+        if let Some(rule) = rule_from_file(&path)? {
+            rules.push(rule);
+        }
     }
     rules.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(rules)
+}
+
+/// Load rules from multiple sources (each a directory of `.md` files or a single `.md` file),
+/// deduped by id with later sources winning — so a project ruleset can override a shared pool's
+/// rule of the same id. Missing or non-Markdown sources are skipped.
+pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<Vec<Rule>> {
+    let mut by_id: BTreeMap<String, Rule> = BTreeMap::new();
+    for src in sources {
+        if src.is_dir() {
+            for rule in load(src)? {
+                by_id.insert(rule.id.clone(), rule);
+            }
+        } else if src.extension().and_then(|e| e.to_str()) == Some("md")
+            && let Some(rule) = rule_from_file(src)?
+        {
+            by_id.insert(rule.id.clone(), rule);
+        }
+    }
+    Ok(by_id.into_values().collect())
 }
 
 /// Render rules as a prompt block — one section per rule (not a one-line bullet) so

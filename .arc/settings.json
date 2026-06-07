@@ -1,0 +1,10 @@
+{
+  "defaults": {
+    "ruleset": "self"
+  },
+  "rulesets": {
+    "self": {
+      "sources": ["rules"]
+    }
+  }
+}

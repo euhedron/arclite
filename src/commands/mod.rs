@@ -29,10 +29,16 @@ pub fn run_synthesis(
     structure: Option<Structure>,
     build_prompt: impl FnOnce(&str) -> String,
 ) -> anyhow::Result<()> {
+    let settings = crate::settings::Settings::load(&args.path)?;
+    let rule_sources = resolve_rule_sources(args, &settings)?;
+    let model = args
+        .model
+        .clone()
+        .or_else(|| settings.default_model.clone());
     let ctx = synth::gather_context(
         &args.path,
         &args.include,
-        args.rules.as_deref(),
+        &rule_sources,
         args.max_file_chars,
         args.changed,
     )?;
@@ -50,7 +56,7 @@ pub fn run_synthesis(
     synth::run(
         &prompt,
         &SynthOptions {
-            model: args.model.as_deref(),
+            model: model.as_deref(),
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,
@@ -63,4 +69,26 @@ pub fn run_synthesis(
             json: global.json,
         },
     )
+}
+
+/// Resolve which rule sources to load, in precedence order: an ad-hoc `--rules <path>`, else a
+/// named `--ruleset <id>` (or the configured `defaults.ruleset`) from settings, else none.
+fn resolve_rule_sources(
+    args: &SynthArgs,
+    settings: &crate::settings::Settings,
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    if let Some(path) = &args.rules {
+        return Ok(vec![path.clone()]);
+    }
+    let Some(id) = args
+        .ruleset
+        .as_deref()
+        .or(settings.default_ruleset.as_deref())
+    else {
+        return Ok(Vec::new());
+    };
+    settings
+        .ruleset(id)
+        .map(<[std::path::PathBuf]>::to_vec)
+        .ok_or_else(|| anyhow::anyhow!("ruleset `{id}` is not defined in .arc/settings.json"))
 }

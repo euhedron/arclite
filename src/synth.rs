@@ -155,13 +155,16 @@ fn gather_includes(
 
 /// Render the Markdown rules in `dir` (if any) as a context block, recording exactly which
 /// rule ids were included — surfaced like every other run parameter, never hidden.
-fn gather_rules(dir: Option<&Path>, sources: &mut Vec<String>) -> anyhow::Result<String> {
-    let Some(dir) = dir else {
+fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::Result<String> {
+    if rule_sources.is_empty() {
         return Ok(String::new());
-    };
-    let rules = crate::rules::load(dir)?;
+    }
+    let rules = crate::rules::load_sources(rule_sources)?;
     if rules.is_empty() {
-        sources.push(format!("rules: none found in {}", dir.display()));
+        sources.push(format!(
+            "rules: none found in {} source(s)",
+            rule_sources.len()
+        ));
         return Ok(String::new());
     }
     let ids = rules
@@ -237,7 +240,7 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 pub fn gather_context(
     path: &Path,
     includes: &[PathBuf],
-    rules_dir: Option<&Path>,
+    rule_sources: &[PathBuf],
     max: Option<usize>,
     changed: bool,
 ) -> anyhow::Result<Context> {
@@ -296,7 +299,7 @@ pub fn gather_context(
         includes.extend(files);
     }
     text.push_str(&gather_includes(&includes, max, &seen, &mut sources));
-    text.push_str(&gather_rules(rules_dir, &mut sources)?);
+    text.push_str(&gather_rules(rule_sources, &mut sources)?);
 
     let excluded = if includes.is_empty() {
         vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
