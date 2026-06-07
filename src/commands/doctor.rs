@@ -9,6 +9,7 @@ struct Report {
     runtime: Runtime,
     cwd: String,
     tools: Tools,
+    logs: Logs,
 }
 
 #[derive(Serialize)]
@@ -21,6 +22,14 @@ struct Runtime {
 struct Tools {
     git: Option<String>,
     claude: Option<String>,
+}
+
+/// Where per-run records are logged and how many exist — so logging is discoverable (on by
+/// default) without each run announcing it. `path` is `None` only if the home dir is unknown.
+#[derive(Serialize)]
+struct Logs {
+    path: Option<String>,
+    runs: usize,
 }
 
 /// Return the trimmed first line of `<cmd> --version`, or `None` if the command
@@ -49,16 +58,22 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             git: probe("git"),
             claude: probe("claude"),
         },
+        logs: Logs {
+            path: crate::log::path().map(|p| p.display().to_string()),
+            runs: crate::log::count(),
+        },
     };
 
     let human = format!(
-        "arclite {}\nos      {} / {}\ncwd     {}\ngit     {}\nclaude  {}",
+        "arclite {}\nos      {} / {}\ncwd     {}\ngit     {}\nclaude  {}\nlogs    {} ({} runs)",
         report.arclite,
         report.runtime.os,
         report.runtime.arch,
         report.cwd,
         report.tools.git.as_deref().unwrap_or("not found"),
         report.tools.claude.as_deref().unwrap_or("not found"),
+        report.logs.path.as_deref().unwrap_or("unavailable (no home dir)"),
+        report.logs.runs,
     );
 
     emit(&report, &human, global.json)

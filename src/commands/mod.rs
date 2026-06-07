@@ -35,6 +35,8 @@ pub fn run_synthesis(
         .model
         .clone()
         .or_else(|| settings.default_model.clone());
+    // Per-run logging is on by default; a user/project setting (`defaults.logging = false`) disables it.
+    let log = settings.default_logging != Some(false);
     let ctx = synth::gather_context(
         &args.path,
         &args.include,
@@ -67,6 +69,7 @@ pub fn run_synthesis(
             schema,
             dry_run: args.dry_run,
             json: global.json,
+            log,
         },
     )
 }

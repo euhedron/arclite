@@ -43,6 +43,8 @@ pub struct SynthOptions<'a> {
     pub dry_run: bool,
     /// Emit machine-readable JSON instead of human text.
     pub json: bool,
+    /// Append a record of this run to `~/.arc/logs/runs.jsonl` (real runs only; disable via settings).
+    pub log: bool,
 }
 
 /// A file's text, optionally capped: the body, its original char count, and the cap it
@@ -359,6 +361,21 @@ struct SynthOutput<'a> {
     structured: Option<serde_json::Value>,
 }
 
+/// One line of `~/.arc/logs/runs.jsonl`: the durable, machine-readable trace of a real run — its
+/// params, context sources, and ground-truth token usage + cost. Dry runs are never logged (no
+/// spend, no call). The full [`ai::Usage`] is nested verbatim, so token/cost fields single-source.
+#[derive(Serialize)]
+struct RunRecord<'a> {
+    ts: u64,
+    command: &'a str,
+    repo: String,
+    model: &'a str,
+    memory: &'a str,
+    structured: bool,
+    sources: &'a [String],
+    usage: &'a ai::Usage,
+}
+
 #[derive(Serialize)]
 struct DryRunOutput<'a> {
     dry_run: bool,
@@ -461,6 +478,21 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<()> {
     );
     if let Some(path) = &written {
         human.push_str(&format!("\nwrote: {}", path.display()));
+    }
+    // Append a durable run record (real runs only) before emitting — observability that outlives
+    // the terminal scrollback. A logging failure warns but never fails the command.
+    if opts.log {
+        let record = RunRecord {
+            ts: crate::log::now_secs(),
+            command: opts.command,
+            repo: opts.dir.display().to_string(),
+            model,
+            memory: report.memory,
+            structured: opts.schema.is_some(),
+            sources: opts.sources,
+            usage: &usage,
+        };
+        crate::log::append(&record);
     }
     let out = SynthOutput {
         run: report,

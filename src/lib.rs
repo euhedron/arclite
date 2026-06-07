@@ -7,6 +7,7 @@ use clap::Parser;
 mod ai;
 mod cli;
 mod commands;
+mod log;
 mod output;
 mod rules;
 mod settings;

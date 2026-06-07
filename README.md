@@ -43,7 +43,9 @@ arc extract <repo> --include src     # propose reusable rules to curate into a r
 
 Shared options on every AI command: `--ruleset <id>` (apply a named ruleset from settings) or `--rules <dir>` (an ad-hoc rule directory); `--structured` (emit a typed, schema-validated object instead of prose where the command defines one — e.g. `audit` violations, `suggest` a ranked list); `--model` (default `opus`; configure *down* for cost); `--include <path>` (add files/dirs to context); `--changed` (scope context to git-changed files — staged/unstaged/untracked); `--max-file-chars` (cap large files); `--output <dir>` (also save the result as a self-describing Markdown doc); `--ambient-memory` (load your `CLAUDE.md` instead of isolating); `--dry-run` (zero-cost preview); `--json`. Every run echoes the exact parameters it used and its token usage + cost — see [Principles](#principles).
 
-**Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset) and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
+**Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging) and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
+
+**Logging** — every *real* AI run appends a one-line JSON record (timestamp, command, repo, model, context sources, ground-truth tokens + cost) to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it off; dry runs are never logged (no spend, nothing to record).
 
 ## Background & motivation
 
@@ -84,7 +86,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
 
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
-- [ ] Per-run logs + metrics (command/gate frequency, audit pass-rate over time, cost) — to see whether the rules are earning their keep.
+- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] Gate a repo against rules *passively* (commit hooks) and rank/prioritize findings — `audit` flags violations on demand today; the passive + ranking parts are open.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).

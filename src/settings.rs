@@ -15,6 +15,7 @@ use serde::Deserialize;
 pub struct Settings {
     pub default_model: Option<String>,
     pub default_ruleset: Option<String>,
+    pub default_logging: Option<bool>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
 
@@ -30,6 +31,7 @@ struct Raw {
 struct RawDefaults {
     model: Option<String>,
     ruleset: Option<String>,
+    logging: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -62,6 +64,9 @@ impl Settings {
         }
         if raw.defaults.ruleset.is_some() {
             self.default_ruleset = raw.defaults.ruleset;
+        }
+        if raw.defaults.logging.is_some() {
+            self.default_logging = raw.defaults.logging;
         }
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
