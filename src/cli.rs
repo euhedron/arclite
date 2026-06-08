@@ -33,6 +33,8 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Walk a repository and report structured facts about it.
     Inspect(InspectArgs),
+    /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate). No LLM.
+    Init(InitArgs),
     /// Synthesize a brief assessment of a repository via the Claude CLI.
     Summarize(SynthArgs),
     /// Synthesize a prioritized list of suggestions for a repository via the Claude CLI.
@@ -55,6 +57,17 @@ pub struct InspectArgs {
     /// Path to the repository or directory to inspect (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
+}
+
+/// Arguments for `arc init`.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Path to the repository to scaffold (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Also scaffold a pre-push gate hook and activate it via `core.hooksPath` (opt-in: spends AI on push).
+    #[arg(long)]
+    pub hook: bool,
 }
 
 /// Shared arguments for the synthesis commands.

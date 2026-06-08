@@ -2,6 +2,7 @@ pub mod audit;
 pub mod critique;
 pub mod doctor;
 pub mod extract;
+pub mod init;
 pub mod inspect;
 pub mod suggest;
 pub mod summarize;

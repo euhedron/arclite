@@ -12,6 +12,7 @@ arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence
 |---|---|:--:|
 | `doctor` | Report runtime, environment, and available tooling. | — |
 | `inspect` | Walk any repo and emit structured facts (languages, layout, manifests, git state). | — |
+| `init` | Scaffold a repo's `.arc/` config (and, with `--hook`, an opt-in pre-push gate). | — |
 | `summarize` | A brief assessment of a repo from its facts. | ✓ |
 | `suggest` | A prioritized list of what's worth attention. | ✓ |
 | `critique` | Quality defects — redundancy, staleness, gaps — each with a concrete fix. | ✓ |
@@ -34,6 +35,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 ```sh
 arc                                  # self-documenting help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # deterministic facts, no AI (free)
+arc init    <repo>                   # scaffold .arc config (--hook adds an opt-in pre-push gate)
 arc summarize <repo>                 # brief AI assessment
 arc suggest <repo> --include src     # prioritized review — preview with --dry-run ($0) first
 arc critique <repo> --include src    # find imperfections + concrete fixes
@@ -76,6 +78,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 
 - **Agent-first, human-accessible** — usable by both agents and people.
 - **Leverage, don't replace** existing, ever-evolving agent tools (e.g. the Claude Code CLI).
+- **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; don't re-encode invocations as a parallel config language that only mirrors argv and rots against it.
 - **Maximally transparent, observable, and honest.**
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
 - **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); preview at $0 (`--dry-run`); report every run parameter alongside real token usage + cost; balance context utilization against value.
