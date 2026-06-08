@@ -5,7 +5,10 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-/// Token usage and cost for one synthesis call.
+/// Token usage and cost for one synthesis call — ground truth from the CLI's response. Both are part
+/// of a successful response's contract (observed present on every real call); if the CLI ever omits
+/// them, [`parse_result`] errors loudly rather than inventing zeros or a speculative "unknown" — we'd
+/// want to discover that and handle it deliberately, not paper over it.
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub model: String,
@@ -13,8 +16,7 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
-    /// `None` when the CLI omitted cost — surfaced as "unknown", never a misleading $0.00.
-    pub cost_usd: Option<f64>,
+    pub cost_usd: f64,
 }
 
 /// A synthesis result: the model's text plus what it cost.
@@ -101,15 +103,13 @@ struct ClaudeJson {
     structured_output: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Default)]
+// Every field required: a successful response's usage object carries all four. A missing one is an
+// unexpected contract change we want to fail on (and learn from), not silently read as a real 0.
+#[derive(Deserialize)]
 struct ClaudeUsage {
-    #[serde(default)]
     input_tokens: u64,
-    #[serde(default)]
     output_tokens: u64,
-    #[serde(default)]
     cache_creation_input_tokens: u64,
-    #[serde(default)]
     cache_read_input_tokens: u64,
 }
 
@@ -125,7 +125,13 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
         );
     }
     let text = parsed.result.context("claude JSON had no `result` field")?;
-    let usage = parsed.usage.unwrap_or_default();
+    // `usage` and cost are part of a successful response's contract — present on every real call. If
+    // the CLI ever omits them, error loudly (we'd want to discover that and handle it) rather than
+    // fabricate zeros that read as genuine zero spend. No speculative "unknown" for an unseen case.
+    let usage = parsed.usage.context("claude JSON had no `usage` field")?;
+    let cost_usd = parsed
+        .total_cost_usd
+        .context("claude JSON had no `total_cost_usd` field")?;
     Ok(Synthesis {
         text,
         usage: Usage {
@@ -134,7 +140,7 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
             output_tokens: usage.output_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
             cache_read_input_tokens: usage.cache_read_input_tokens,
-            cost_usd: parsed.total_cost_usd,
+            cost_usd,
         },
         structured: parsed.structured_output,
     })

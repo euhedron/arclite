@@ -9,11 +9,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-/// Current UNIX time in seconds (0 if the clock predates the epoch — not expected).
+/// Current UNIX time in seconds.
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+        .expect("system clock is before the UNIX epoch")
+        .as_secs()
 }
 
 /// Path of the run log, `~/.arc/logs/runs.jsonl` — the single source for where runs are recorded

@@ -62,7 +62,9 @@ impl Settings {
         let raw: Raw = serde_json::from_str(&text)
             .with_context(|| format!("invalid settings file {}", path.display()))?;
         self.active.push(path.to_path_buf());
-        let dir = path.parent().unwrap_or(Path::new("."));
+        let dir = path
+            .parent()
+            .expect("a .arc/settings.json path always has a parent");
         if raw.defaults.model.is_some() {
             self.default_model = raw.defaults.model;
         }

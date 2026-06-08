@@ -259,7 +259,7 @@ pub fn gather_context(
     changed: bool,
 ) -> anyhow::Result<Context> {
     let report = crate::commands::inspect::gather(path)?;
-    let root = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let root = std::path::absolute(path).expect("inspect::gather resolved this path");
 
     let mut text = format!(
         "Repository scan (JSON):\n{}\n",
@@ -493,24 +493,25 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let structured = synthesis.structured;
     let text = synthesis.text;
     // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
-    let cost = usage
-        .cost_usd
-        .map_or_else(|| "unknown".to_owned(), |c| format!("${c:.4}"));
+    let cost = format!("${:.4}", usage.cost_usd);
     // Display body: the validated structured object (pretty-printed) when present, else the prose.
     let body = match &structured {
-        Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| text.clone()),
+        Some(value) => serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes"),
         None => text.clone(),
     };
-    // Opt-in gate: count the declared findings collection *before* `structured` is moved into the
-    // output payload. A non-empty count blocks via a distinct exit code — the synthesis itself is
-    // unchanged; gating is a downstream policy on the result, not a mode baked into the command.
-    let gate_findings = opts.gate.map(|field| {
-        structured
-            .as_ref()
-            .and_then(|v| v.get(field))
-            .and_then(serde_json::Value::as_array)
-            .map_or(0, Vec::len)
-    });
+    // Count the gated findings before `structured` is moved out. The schema guarantees the field is
+    // a present array; a missing one is the CLI ignoring the requested schema — an error, not a 0-pass.
+    let gate_findings = match opts.gate {
+        Some(field) => Some(
+            structured
+                .as_ref()
+                .and_then(|v| v.get(field))
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("gated on `{field}` but the result has no `{field}` array"))?
+                .len(),
+        ),
+        None => None,
+    };
     let gate_blocked = gate_findings.is_some_and(|n| n > 0);
     // --output: persist the result as a self-describing doc (provenance header keeps it honest).
     let written = match opts.output {
@@ -553,7 +554,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // Append a durable run record (real runs only) before emitting — observability that outlives
     // the terminal scrollback. A logging failure warns but never fails the command.
     let logged = if opts.log {
-        let record = RunRecord {
+        crate::log::append(&RunRecord {
             ts: crate::log::now_secs(),
             command: opts.command,
             repo: opts.dir.display().to_string(),
@@ -564,8 +565,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,
-        };
-        crate::log::append(&record)
+        })
     } else {
         None
     };
