@@ -265,8 +265,7 @@ pub fn gather_context(
     max: Option<usize>,
     changed: bool,
 ) -> anyhow::Result<Context> {
-    let report = crate::commands::inspect::gather(path)?;
-    let root = std::path::absolute(path).expect("inspect::gather resolved this path");
+    let (report, root) = crate::commands::inspect::gather(path)?;
 
     let mut text = format!(
         "Repository scan (JSON):\n{}\n",
@@ -499,7 +498,6 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let usage = synthesis.usage;
     let structured = synthesis.structured;
     let text = synthesis.text;
-    // Cost comes straight from the CLI (ground truth); show "unknown" if it ever omits it.
     let cost = format!("${:.4}", usage.cost_usd);
     // Display body: the validated structured object (pretty-printed) when present, else the prose.
     let body = match &structured {

@@ -57,7 +57,7 @@ pub struct InspectArgs {
     pub path: PathBuf,
 }
 
-/// Shared arguments for the synthesis commands (`summarize`, `suggest`, `extract`).
+/// Shared arguments for the synthesis commands.
 #[derive(Debug, Args)]
 pub struct SynthArgs {
     /// Path to the repository or directory (defaults to the current directory).

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::Serialize;
@@ -46,8 +46,9 @@ pub struct InspectReport {
     pub walk_errors: usize,
 }
 
-/// Walk a repository/directory and collect structured facts. Deterministic — no LLM.
-pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
+/// Walk a repository/directory and collect structured facts, returning them with the resolved
+/// absolute root (so callers reuse it rather than re-resolving). Deterministic — no LLM.
+pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     anyhow::ensure!(path.exists(), "cannot access {}", path.display());
     let root =
         std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))?;
@@ -108,7 +109,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
     let manifests: Vec<String> = manifest_types.into_iter().collect();
     manifest_paths.sort();
 
-    Ok(InspectReport {
+    let report = InspectReport {
         path: root.display().to_string(),
         is_git_repo: root.join(".git").exists(),
         files,
@@ -118,12 +119,13 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
         manifest_paths,
         by_extension,
         walk_errors,
-    })
+    };
+    Ok((report, root))
 }
 
 /// Report structured repo facts (the `inspect` command).
 pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let report = gather(&args.path)?;
+    let (report, _root) = gather(&args.path)?;
 
     let mut ranked: Vec<(&String, &usize)> = report.by_extension.iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
