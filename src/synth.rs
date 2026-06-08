@@ -13,11 +13,11 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// Default model when `--model` is omitted (which overrides it — configure down for cost). Update
-/// when a newer model supersedes it; the run reports the resolved id the response returns.
+/// Default model when `--model` is omitted. Update when a newer model supersedes it; the run
+/// reports the resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
-const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
+const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context (not counted here) — actual usage is reported after the call runs";
 
 /// Exit code when an opt-in gate (`--fail-on-findings`) blocks — distinct from `1` (arclite error)
 /// so a hook/CI can tell "found violations" apart from "the tool failed". Any non-zero blocks.
@@ -29,7 +29,7 @@ const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
     pub model: Option<&'a str>,
-    /// Claude tools to allow (empty = none = cheapest; a cost lever). When non-empty the
+    /// Claude tools to allow (empty = none; a cost lever). When non-empty the
     /// run is granted read access to `dir`, so the tools can actually reach the repo.
     pub allowed_tools: &'a [String],
     /// Repository root, granted to allowed tools via `--add-dir`.

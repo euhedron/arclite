@@ -44,7 +44,7 @@ struct RawRuleset {
 
 impl Settings {
     /// Load + merge `~/.arc/settings.json` then `<repo>/.arc/settings.json`. A missing layer is
-    /// fine; a present-but-malformed file is a hard error — better than silently mis-configuring.
+    /// fine; a present-but-unreadable or malformed file is a hard error — better than silently mis-configuring.
     pub fn load(repo: &Path) -> anyhow::Result<Self> {
         let mut settings = Settings::default();
         let relative = Path::new(crate::ARC_DIR).join("settings.json");
@@ -56,8 +56,11 @@ impl Settings {
     }
 
     fn merge(&mut self, path: &Path) -> anyhow::Result<()> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(()); // missing layer is fine
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            // A missing layer is fine; a present-but-unreadable one is surfaced, not silently dropped.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("cannot read settings file {}", path.display())),
         };
         let raw: Raw = serde_json::from_str(&text)
             .with_context(|| format!("invalid settings file {}", path.display()))?;
