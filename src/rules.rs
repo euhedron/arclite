@@ -50,9 +50,13 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
 
 /// Load rules from multiple sources (each a directory of `.md` files or a single `.md` file),
 /// deduped by id with later sources winning — so a project ruleset can override a shared pool's
-/// rule of the same id. Missing or non-Markdown sources are skipped.
-pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<Vec<Rule>> {
+/// rule of the same id. Returns the loaded rules plus any sources that resolved to neither a
+/// directory nor a `.md` file — a typo'd or absent path the caller surfaces rather than dropping
+/// silently, so a misconfigured source can't shrink the active ruleset unnoticed (no-silent-defaults).
+/// (An absent `*.md` path is louder still: `rule_from_file` fails to read it and the error propagates.)
+pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathBuf>)> {
     let mut by_id: BTreeMap<String, Rule> = BTreeMap::new();
+    let mut skipped = Vec::new();
     for src in sources {
         if src.is_dir() {
             for rule in load(src)? {
@@ -60,9 +64,11 @@ pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<Vec<Rule>> {
             }
         } else if let Some(rule) = rule_from_file(src)? {
             by_id.insert(rule.id.clone(), rule);
+        } else {
+            skipped.push(src.clone());
         }
     }
-    Ok(by_id.into_values().collect())
+    Ok((by_id.into_values().collect(), skipped))
 }
 
 /// Render rules as a prompt block — one section per rule (not a one-line bullet) so

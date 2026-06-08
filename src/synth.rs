@@ -170,7 +170,15 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
     if rule_sources.is_empty() {
         return Ok(String::new());
     }
-    let rules = crate::rules::load_sources(rule_sources)?;
+    let (rules, skipped) = crate::rules::load_sources(rule_sources)?;
+    for src in &skipped {
+        // A configured source that resolved to nothing (typo'd path, absent dir, or a non-`.md`
+        // file): surface it in the manifest so a shrunken ruleset never goes unnoticed.
+        sources.push(format!(
+            "rules: source skipped — not a directory or .md file: {}",
+            src.display()
+        ));
+    }
     if rules.is_empty() {
         sources.push(format!(
             "rules: none found in {} source(s)",
@@ -253,9 +261,8 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            // porcelain: two status chars, a space, then the path ("old -> new" for renames).
+            // porcelain: two status chars, a space, then the path — "old -> new" for renames.
             let path = line.get(3..)?.trim().trim_matches('"');
-            // porcelain renames read "old -> new"; take the new path, else the whole line.
             let path = path.rsplit_once(" -> ").map_or(path, |(_, new)| new);
             (!path.is_empty()).then(|| root.join(path))
         })

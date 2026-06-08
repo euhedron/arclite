@@ -70,8 +70,6 @@ Worth carrying over (on merit): self-derived/generated docs — users/agents sho
 - **Rules as composable levers**: rules (coding standards, anti-patterns, principles) are reusable *levers* — not just prompts or memory. They're extracted from repos, curated, and composed into named **rulesets** that any command applies; a ruleset's sources span scopes — your own (`~/.arc/`), a project's (`<repo>/.arc/`), and shared pools — so broadly-useful rules get shared while the rest stay local.
 - **Auditing & linting**: check a repo against selected rules and surface drift/violations — on demand (a gate) or passively (e.g. commit hooks).
 - **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, …) — content storage and structure compatibility.
-- **AI use**: deterministic until synthesis; AI is reserved for the judgment step (see [Principles](#principles)).
-
 ## Principles
 
 The philosophy that defines arclite. (The *code's* own engineering standards — DRY, no hardcoding, single-source — live in `.arc/rules/` and are enforced via `audit`, not restated here.)
@@ -92,9 +90,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
 
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
-- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
-- [ ] Gate a repo against rules and rank/prioritize findings. The **gate** ships as `--fail-on-findings`, now wired into an opt-in git **pre-push** hook (see [Getting started](#getting-started)); **Claude Code hook events** invoking `arc` remain to explore, as does the *ranking* of findings.
-- [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
+- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.- [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
 - [ ] **Configurable result ordering** — whether results are ranked should be a per-run choice, not hardcoded per command (rank `audit` violations by severity, or leave `suggest` unranked) — flexibility for experimentation.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
