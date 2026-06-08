@@ -2,8 +2,7 @@ use std::process::ExitCode;
 
 use crate::cli::{GlobalArgs, SynthArgs};
 
-/// Critically review a repository and its docs for quality defects (the `critique` command).
-/// Reach for it to harden a codebase or its docs against their own sloppiness.
+/// Critically review a repository for quality defects (the `critique` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "critique", None, |ctx| {
         format!(

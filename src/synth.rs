@@ -29,10 +29,9 @@ const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
     pub model: Option<&'a str>,
-    /// Claude tools to allow (empty = none; a cost lever). When non-empty the
-    /// run is granted read access to `dir`, so the tools can actually reach the repo.
+    /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
-    /// Repository root, granted to allowed tools via `--add-dir`.
+    /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
     pub dir: &'a Path,
     /// Human-readable descriptions of the context pieces included (for the run report).
     pub sources: &'a [String],

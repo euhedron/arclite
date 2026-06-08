@@ -26,8 +26,7 @@ struct Tools {
 }
 
 /// Where per-run records are logged and how many exist — so logging is discoverable (on by
-/// default) without each run announcing it. `path` is `None` only if the home dir is unknown;
-/// `runs` is `None` if the log exists but couldn't be read (distinct from `Some(0)` = no runs yet).
+/// default) without each run announcing it. `path` is `None` only if the home dir is unknown.
 #[derive(Serialize)]
 struct Logs {
     path: Option<String>,
@@ -49,7 +48,6 @@ fn probe(program: &str) -> Option<String> {
 
 /// Report runtime, environment, and available tooling. Deterministic — no LLM.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    // An unreadable log is reported as such, not collapsed into "0 runs".
     let runs = crate::log::count();
     let report = Report {
         arclite: env!("CARGO_PKG_VERSION"),

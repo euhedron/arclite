@@ -145,10 +145,6 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
 /// is set — no ambient memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls).
 /// So by default the sources arclite reports are authoritative, modulo Claude Code's own fixed base
 /// (date, env, tools). Costs real tokens.
-///
-/// `allowed_tools` shapes cost — tool schemas add to the context. An empty slice loads no tool
-/// schemas (suited to pure text synthesis); a non-empty slice allows exactly those tools, and grants
-/// them read access to `dir` (the repo) via `--add-dir`, since the working directory is neutral.
 pub fn synthesize(
     prompt: &str,
     model: &str,

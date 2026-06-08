@@ -43,7 +43,7 @@ pub enum Command {
     Extract(SynthArgs),
     /// Audit a repository against selected rules, reporting only violations.
     Audit(SynthArgs),
-    /// Critically review a repo + its docs for quality defects.
+    /// Critically review a repo for quality defects.
     Critique(SynthArgs),
 }
 
@@ -82,8 +82,7 @@ pub struct SynthArgs {
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
     pub dry_run: bool,
-    /// Allow a Claude tool during synthesis (repeatable). Default: none — these commands are pure
-    /// text synthesis, so they run with no tools. Add only if needed.
+    /// Allow a Claude tool during synthesis (repeatable). Default: none.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,
     /// Directory of Markdown rule files to weigh the synthesis against (anti-patterns, standards,
