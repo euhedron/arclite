@@ -21,8 +21,7 @@ use cli::{Cli, Command};
 pub(crate) const ARC_DIR: &str = ".arc";
 
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
-/// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr. Predictable exit
-/// codes keep arclite scriptable by both agents and humans.
+/// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr.
 #[must_use]
 pub fn run() -> ExitCode {
     let cli = Cli::parse();

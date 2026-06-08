@@ -1,9 +1,7 @@
 //! Shared synthesis runner for AI-backed commands (`summarize`, `suggest`, …).
 //!
-//! Keeps every such command cost-transparent and self-describing: `--dry-run`
-//! previews the exact prompt + estimate at zero spend, real calls report actual
-//! cost + cache usage, and **every run echoes the full parameter set it used**
-//! (model, tools, context sources) so output is never judged blind to its setup.
+//! `--dry-run` previews the prompt + estimate at zero spend; real calls report actual cost + cache
+//! usage; and every run echoes the full parameter set it used (model, tools, context sources).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -461,7 +459,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // then it holds the requested model — all a dry run can name, since nothing runs.
     let mut report = RunReport {
         model: requested.to_owned(),
-        runs: opts.runs.max(1),
+        runs: opts.runs,
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
         memory: if opts.ambient_memory {
             "ambient"
@@ -561,7 +559,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         None => None,
     };
     let gate_blocked = gate_findings.is_some_and(|n| n > 0);
-    // --output: persist the result as a self-describing doc (provenance header keeps it honest).
+    // --output: also write the result as a doc with a provenance header.
     let written = match opts.output {
         Some(dir) => Some(write_output(
             dir,
@@ -742,8 +740,8 @@ fn sum_usage(runs: &[ai::Synthesis]) -> ai::Usage {
     total
 }
 
-/// Write the synthesis to `<dir>/<command>.md` with a short provenance header, so the generated
-/// doc is self-describing (model, sources, cost) and clearly not hand-maintained. Returns the path.
+/// Write the synthesis to `<dir>/<command>.md` with a provenance header (model, sources, cost).
+/// Returns the path.
 fn write_output(
     dir: &Path,
     command: &str,
