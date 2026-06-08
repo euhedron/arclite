@@ -83,7 +83,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
 - **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); preview at $0 (`--dry-run`); report every run parameter alongside real token usage + cost; balance context utilization against value.
 - **Trace, resolve, evolve** — unexpected/sub-par results are signal: make them traceable, diagnose, then improve the system — including the rules and prompts themselves, which are validated and sharpened through exercise, not assumed correct.
-- **Adversarial, self-accountable** — build in self-checking (arclite is exercised on itself); a gate turns that into accountability — change proceeds only once the system is back in a balanced state, with no outstanding violations of its own rules.
+- **Adversarial, self-accountable** — build in self-checking (arclite is exercised on itself); a gate turns that into accountability — change proceeds only once the system is balanced, with no outstanding violations. The gate tests the **rules** as much as the code: resolve a finding by fixing the code, or — when the finding itself is off — by sharpening the rule.
 - **Never done — balance is a floor, not a finish.** A clean audit isn't a win to rest on; it's the balanced state that lets the next change proceed. Commands and rules are levers to fire and tune to keep the loop running; when a repo stops yielding signal, point arclite at another to surface its own weaknesses.
 - **Leverage derivation/transclusion.**
 
