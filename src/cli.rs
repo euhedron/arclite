@@ -37,7 +37,7 @@ pub enum Command {
     Init(InitArgs),
     /// Synthesize a brief assessment of a repository via the Claude CLI.
     Summarize(SynthArgs),
-    /// Synthesize a prioritized list of suggestions for a repository via the Claude CLI.
+    /// Synthesize a list of suggestions for a repository via the Claude CLI.
     Suggest(SynthArgs),
     /// Extract reusable rules (standards, anti-patterns, principles) from a repository via the Claude CLI.
     Extract(SynthArgs),
@@ -76,7 +76,7 @@ pub struct SynthArgs {
     /// Path to the repository or directory (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Model to use (a Claude model id). Defaults to the best available; set this to configure
+    /// Model to use (a Claude model id). Omit to use the built-in default; set this to configure
     /// *down* for cost — a small model gives unrealistic signal when judging output.
     #[arg(long)]
     pub model: Option<String>,
@@ -118,7 +118,7 @@ pub struct SynthArgs {
     #[arg(long)]
     pub ambient_memory: bool,
     /// Emit the command's structured output (a schema-validated typed object) instead of prose,
-    /// where the command defines one (e.g. `audit` violations, `suggest` a ranked list). Optional;
+    /// where the command defines one (e.g. `audit` violations, `suggest` suggestions). Optional;
     /// commands without a structured mode reject it. Compose with `--json` for machine consumption.
     #[arg(long)]
     pub structured: bool,

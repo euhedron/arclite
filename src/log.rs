@@ -23,11 +23,17 @@ pub fn path() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join(crate::ARC_DIR).join("logs").join("runs.jsonl"))
 }
 
-/// Number of run records currently logged (0 if the log is absent or unreadable) — for `doctor`.
-pub fn count() -> usize {
-    path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map_or(0, |text| text.lines().filter(|l| !l.trim().is_empty()).count())
+/// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs
+/// yet), `Ok(n)` for a readable log, and `Err` when it exists but can't be read: an unreadable log
+/// is surfaced distinctly rather than silently shown as 0, which would hide a dropped/corrupt log
+/// (no-silent-defaults).
+pub fn count() -> std::io::Result<usize> {
+    let Some(p) = path() else { return Ok(0) };
+    match std::fs::read_to_string(&p) {
+        Ok(text) => Ok(text.lines().filter(|l| !l.trim().is_empty()).count()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(e) => Err(e),
+    }
 }
 
 /// Append `record` as one JSON line to the [`path`] run log, returning the path written.

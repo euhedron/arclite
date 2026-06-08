@@ -69,9 +69,6 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
             continue; // the root itself
         }
         let path = entry.path();
-        if crate::walk::in_git_dir(path) {
-            continue;
-        }
         match entry.file_type() {
             Some(ft) if ft.is_dir() => dirs += 1,
             Some(ft) if ft.is_file() => {

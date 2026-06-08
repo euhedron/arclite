@@ -14,7 +14,7 @@ const SUGGEST_STRUCTURE: Structure = Structure {
     gate: Some("suggestions"),
 };
 
-/// Synthesize a prioritized list of suggestions for a repository (the `suggest` command).
+/// Synthesize a list of suggestions for a repository (the `suggest` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "suggest", Some(SUGGEST_STRUCTURE), |ctx| {
         format!(

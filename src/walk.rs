@@ -11,6 +11,8 @@ pub fn configured(dir: &Path) -> ignore::Walk {
         .hidden(false)
         .parents(false)
         .git_global(false)
+        // Prune `.git` at the source so the single walk path enforces it — callers don't re-filter.
+        .filter_entry(|e| e.file_name() != ".git")
         .build()
 }
 
@@ -27,9 +29,4 @@ pub fn entries(dir: &Path) -> (Vec<ignore::DirEntry>, usize) {
         }
     }
     (entries, errors)
-}
-
-/// Whether `path` lies inside a `.git` directory (which arclite never descends into).
-pub fn in_git_dir(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == ".git")
 }

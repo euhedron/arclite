@@ -2,7 +2,7 @@ use assert_cmd::Command;
 
 // Deterministic, non-AI logic worth guarding against silent regression: the repo
 // walk's counts + manifest detection. AI-centric behavior (summarize, etc.) is
-// exercised by using the system, not asserted here — see the project's testing note.
+// exercised by using the system, not asserted here.
 #[test]
 fn inspect_json_reports_counts_and_manifest() {
     let dir = env!("CARGO_MANIFEST_DIR");

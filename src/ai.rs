@@ -219,4 +219,4 @@ pub fn synthesize(
 
 // AI-output handling (parse_result) and the prompt estimate are exercised by
 // using `summarize` — its cost/usage output makes any breakage immediately
-// apparent — rather than via unit tests. See the project's testing note.
+// apparent — rather than via unit tests.

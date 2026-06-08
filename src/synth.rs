@@ -13,7 +13,8 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// Default model — the best available; configure *down* via `--model` for cost.
+/// Default model requested when `--model` isn't given. The run reports the resolved id the
+/// response actually returns, not this alias; configure *down* via `--model` for cost.
 const DEFAULT_MODEL: &str = "opus";
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
@@ -105,7 +106,6 @@ fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
         .into_iter()
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
-        .filter(|p| !crate::walk::in_git_dir(p))
         .collect();
     files.sort();
     (files, errors)
@@ -353,7 +353,7 @@ pub fn gather_context(
 /// The exact parameters a run used — reported alongside every result so nothing is opaque.
 #[derive(Serialize)]
 struct RunReport<'a> {
-    model: &'a str,
+    model: String,
     tools: Vec<&'a str>,
     /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
     /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
@@ -441,9 +441,11 @@ struct DryRunOutput<'a> {
 
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
 pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
-    let model = opts.model.unwrap_or(DEFAULT_MODEL);
-    let report = RunReport {
-        model,
+    let requested = opts.model.unwrap_or(DEFAULT_MODEL);
+    // The report names the model that actually ran (set from the response after the call); until
+    // then it holds the requested model — all a dry run can name, since nothing runs.
+    let mut report = RunReport {
+        model: requested.to_owned(),
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
         memory: if opts.ambient_memory {
             "ambient"
@@ -504,13 +506,15 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
 
     let synthesis = ai::synthesize(
         prompt,
-        model,
+        requested,
         opts.allowed_tools,
         opts.dir,
         opts.ambient_memory,
         opts.schema,
     )?;
     let usage = synthesis.usage;
+    // From here the report reflects the model the response says actually ran, not the requested alias.
+    report.model = usage.model.clone();
     let structured = synthesis.structured;
     let text = synthesis.text;
     let cost = format!("${:.4}", usage.cost_usd);
@@ -539,7 +543,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             dir,
             opts.command,
             &body,
-            model,
+            &report.model,
             opts.sources.len(),
             &cost,
         )?),
@@ -578,7 +582,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             ts: crate::log::now_secs(),
             command: opts.command,
             repo: opts.dir.display().to_string(),
-            model,
+            model: &report.model,
             memory: report.memory,
             structured: opts.schema.is_some(),
             sources: opts.sources,

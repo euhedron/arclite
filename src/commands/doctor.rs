@@ -20,16 +20,18 @@ struct Runtime {
 
 #[derive(Serialize)]
 struct Tools {
+    cargo: Option<String>,
     git: Option<String>,
     claude: Option<String>,
 }
 
 /// Where per-run records are logged and how many exist — so logging is discoverable (on by
-/// default) without each run announcing it. `path` is `None` only if the home dir is unknown.
+/// default) without each run announcing it. `path` is `None` only if the home dir is unknown;
+/// `runs` is `None` if the log exists but couldn't be read (distinct from `Some(0)` = no runs yet).
 #[derive(Serialize)]
 struct Logs {
     path: Option<String>,
-    runs: usize,
+    runs: Option<usize>,
 }
 
 /// Return the trimmed first line of `<cmd> --version`, or `None` if the command
@@ -47,6 +49,8 @@ fn probe(program: &str) -> Option<String> {
 
 /// Report runtime, environment, and available tooling. Deterministic — no LLM.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    // An unreadable log is reported as such, not collapsed into "0 runs" (no-silent-defaults).
+    let runs = crate::log::count();
     let report = Report {
         arclite: env!("CARGO_PKG_VERSION"),
         runtime: Runtime {
@@ -55,25 +59,31 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         },
         cwd: std::env::current_dir()?.display().to_string(),
         tools: Tools {
+            cargo: probe("cargo"),
             git: probe("git"),
             claude: probe("claude"),
         },
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
-            runs: crate::log::count(),
+            runs: runs.as_ref().ok().copied(),
         },
     };
 
+    let runs_display = match &runs {
+        Ok(n) => format!("{n} runs"),
+        Err(e) => format!("unreadable: {e}"),
+    };
     let human = format!(
-        "arclite {}\nos      {} / {}\ncwd     {}\ngit     {}\nclaude  {}\nlogs    {} ({} runs)",
+        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}\nclaude  {}\nlogs    {} ({})",
         report.arclite,
         report.runtime.os,
         report.runtime.arch,
         report.cwd,
+        report.tools.cargo.as_deref().unwrap_or("not found"),
         report.tools.git.as_deref().unwrap_or("not found"),
         report.tools.claude.as_deref().unwrap_or("not found"),
         report.logs.path.as_deref().unwrap_or("unavailable (no home dir)"),
-        report.logs.runs,
+        runs_display,
     );
 
     emit(&report, &human, global.json)
