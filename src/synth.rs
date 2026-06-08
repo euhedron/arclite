@@ -29,6 +29,8 @@ const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
     pub model: Option<&'a str>,
+    /// Number of synthesis runs to fan out concurrently; their results are unioned. 1 = single run.
+    pub runs: usize,
     /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
     /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
@@ -358,6 +360,8 @@ pub fn gather_context(
 #[derive(Serialize)]
 struct RunReport<'a> {
     model: String,
+    /// How many synthesis runs were combined (1 = single; >1 = concurrent multi-run, unioned).
+    runs: usize,
     tools: Vec<&'a str>,
     /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
     /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
@@ -378,9 +382,15 @@ impl RunReport<'_> {
         } else {
             self.tools.join(",")
         };
+        let runs = if self.runs > 1 {
+            format!("  runs={}", self.runs)
+        } else {
+            String::new()
+        };
         let mut line = format!(
-            "model={}  tools={}  memory={}  context=[{}]",
+            "model={}{}  tools={}  memory={}  context=[{}]",
             self.model,
+            runs,
             tools,
             self.memory,
             self.context.join(", ")
@@ -422,6 +432,7 @@ struct RunRecord<'a> {
     command: &'a str,
     repo: String,
     model: &'a str,
+    runs: usize,
     memory: &'a str,
     structured: bool,
     sources: &'a [String],
@@ -450,6 +461,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // then it holds the requested model — all a dry run can name, since nothing runs.
     let mut report = RunReport {
         model: requested.to_owned(),
+        runs: opts.runs.max(1),
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
         memory: if opts.ambient_memory {
             "ambient"
@@ -508,17 +520,23 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let synthesis = ai::synthesize(
-        prompt,
-        requested,
-        opts.allowed_tools,
-        opts.dir,
-        opts.ambient_memory,
-        opts.schema,
-    )?;
+    let (synthesis, runs) = if opts.runs > 1 {
+        multi_synthesize(prompt, requested, opts)?
+    } else {
+        let single = ai::synthesize(
+            prompt,
+            requested,
+            opts.allowed_tools,
+            opts.dir,
+            opts.ambient_memory,
+            opts.schema,
+        )?;
+        (single, 1)
+    };
     let usage = synthesis.usage;
-    // From here the report reflects the model the response says actually ran, not the requested alias.
+    // From here the report reflects the model the response says ran, and how many runs were combined.
     report.model = usage.model.clone();
+    report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
     let cost = format!("${:.4}", usage.cost_usd);
@@ -587,6 +605,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             command: opts.command,
             repo: opts.dir.display().to_string(),
             model: &report.model,
+            runs,
             memory: report.memory,
             structured: opts.schema.is_some(),
             sources: opts.sources,
@@ -619,6 +638,106 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+/// Run the synthesis `opts.runs` times concurrently and combine the outcomes, returning the combined
+/// result and how many runs succeeded. A failed run is surfaced and skipped; only an all-fail errors.
+fn multi_synthesize(
+    prompt: &str,
+    model: &str,
+    opts: &SynthOptions,
+) -> anyhow::Result<(ai::Synthesis, usize)> {
+    let n = opts.runs;
+    let outcomes: Vec<anyhow::Result<ai::Synthesis>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..n)
+            .map(|_| {
+                scope.spawn(|| {
+                    ai::synthesize(
+                        prompt,
+                        model,
+                        opts.allowed_tools,
+                        opts.dir,
+                        opts.ambient_memory,
+                        opts.schema,
+                    )
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("a synthesis thread panicked"))
+            .collect()
+    });
+
+    let mut ok = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            Ok(s) => ok.push(s),
+            Err(e) => eprintln!("arclite: a run failed and was skipped: {e:#}"),
+        }
+    }
+    anyhow::ensure!(!ok.is_empty(), "all {n} runs failed");
+    let succeeded = ok.len();
+    Ok((combine_runs(ok), succeeded))
+}
+
+/// Combine successful runs: sum their usage, then union the structured `results` (deduped) — or, for
+/// prose commands, present each run's text in turn.
+fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
+    let usage = sum_usage(&runs);
+    if runs.iter().all(|r| r.structured.is_some()) {
+        let combined = union_results(runs.iter().filter_map(|r| r.structured.as_ref()));
+        let text =
+            serde_json::to_string_pretty(&combined).expect("a serde_json::Value re-serializes");
+        ai::Synthesis {
+            text,
+            usage,
+            structured: Some(combined),
+        }
+    } else {
+        let text = runs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| format!("— run {} —\n{}", i + 1, r.text))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        ai::Synthesis {
+            text,
+            usage,
+            structured: None,
+        }
+    }
+}
+
+/// Union the `results` arrays of several structured outputs into one, deduping identical items.
+/// Generic over the item shape, so it serves repeats of one command and (later) different commands.
+fn union_results<'a>(
+    structured: impl Iterator<Item = &'a serde_json::Value>,
+) -> serde_json::Value {
+    let mut pooled: Vec<serde_json::Value> = Vec::new();
+    for value in structured {
+        if let Some(items) = value.get("results").and_then(serde_json::Value::as_array) {
+            for item in items {
+                if !pooled.contains(item) {
+                    pooled.push(item.clone());
+                }
+            }
+        }
+    }
+    serde_json::json!({ "results": pooled })
+}
+
+/// Sum token usage and cost across runs; the model is the same across them, so take the first's.
+fn sum_usage(runs: &[ai::Synthesis]) -> ai::Usage {
+    let mut total = runs[0].usage.clone();
+    for run in &runs[1..] {
+        total.input_tokens += run.usage.input_tokens;
+        total.output_tokens += run.usage.output_tokens;
+        total.cache_creation_input_tokens += run.usage.cache_creation_input_tokens;
+        total.cache_read_input_tokens += run.usage.cache_read_input_tokens;
+        total.cost_usd += run.usage.cost_usd;
+    }
+    total
 }
 
 /// Write the synthesis to `<dir>/<command>.md` with a short provenance header, so the generated

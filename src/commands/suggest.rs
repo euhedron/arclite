@@ -3,14 +3,11 @@ use std::process::ExitCode;
 use super::Structure;
 use crate::cli::{GlobalArgs, SynthArgs};
 
-/// The `suggest` structured-output mode: a `suggestions` array (ordering is the shared `--ranked`
+/// The `suggest` structured-output mode: a `results` array (ordering is the shared `--ranked`
 /// option, not baked in here).
 const SUGGEST_STRUCTURE: Structure = Structure {
-    schema: r#"{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}}},"required":["suggestions"]}"#,
-    note: "\n\nReturn the result as structured data: a `suggestions` array, each with `suggestion` (one line) and `rationale` (one clause).",
-    // `suggest` *can* gate: a non-empty suggestion list signals "room for improvement", which a user
-    // may deliberately choose to block on (e.g. to surface refinement opportunities in CI).
-    gate: Some("suggestions"),
+    schema: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}}},"required":["results"]}"#,
+    note: "\n\nReturn the result as structured data: a `results` array, each with `suggestion` (one line) and `rationale` (one clause).",
 };
 
 /// Suggest where attention is best spent in a repository (the `suggest` command).

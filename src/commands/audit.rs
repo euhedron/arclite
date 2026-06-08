@@ -3,13 +3,10 @@ use std::process::ExitCode;
 use super::Structure;
 use crate::cli::{GlobalArgs, SynthArgs};
 
-/// The `audit` structured-output mode: a `violations` array (empty = clean) — findings as data, not
-/// prose. `gate: "violations"` makes it the collection `--fail-on-findings` blocks on (non-empty ⇒
-/// non-zero exit); no verdict/pass-fail convention, just the findings themselves.
+/// The `audit` structured-output mode: a `results` array (empty = clean) — findings as data, not prose.
 const AUDIT_STRUCTURE: Structure = Structure {
-    schema: r#"{"type":"object","properties":{"violations":{"type":"array","items":{"type":"object","properties":{"rule":{"type":"string"},"location":{"type":"string"},"reason":{"type":"string"}},"required":["rule","location","reason"]}}},"required":["violations"]}"#,
-    note: "\n\nReturn the result as structured data: a `violations` array — one object per concrete violation, each with `rule` (the rule id), `location` (file/area), and `reason` (one clause). Empty array if there are none.",
-    gate: Some("violations"),
+    schema: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"rule":{"type":"string"},"location":{"type":"string"},"reason":{"type":"string"}},"required":["rule","location","reason"]}}},"required":["results"]}"#,
+    note: "\n\nReturn the result as structured data: a `results` array — one object per concrete violation, each with `rule` (the rule id), `location` (file/area), and `reason` (one clause). Empty array if there are none.",
 };
 
 /// Audit a repository against the provided rules, flagging only violations (the `audit` command):

@@ -14,18 +14,17 @@ use crate::synth::{self, SynthOptions};
 
 /// An optional structured-output mode a command can offer: a JSON Schema the model's result is
 /// validated against (returned as `structured_output`), plus a prompt note describing the shape.
-/// Used only when `--structured` is passed; commands without one reject the flag. The structure is
-/// command-appropriate (each defines its own), never one schema for all.
-///
-/// `gate` names the array field whose non-emptiness means "block" (audit → `violations`, suggest →
-/// `suggestions`, extract → `candidates`), making gate-ability a property the command *declares*:
-/// `--fail-on-findings` turns that field into a non-zero exit. `None` = no findings collection to
-/// gate on, so the flag is rejected for it.
+/// Used only when `--structured` is passed; commands without one reject the flag. Every structured
+/// result is a generic `results` array (with a command-specific item shape), so the gate, `--ranked`,
+/// and multi-run aggregation treat them uniformly; `--fail-on-findings` blocks when `results` is non-empty.
 pub struct Structure {
     pub schema: &'static str,
     pub note: &'static str,
-    pub gate: Option<&'static str>,
 }
+
+/// The single key every structured result uses — a generic list, so the gate, `--ranked`, and
+/// multi-run treat all commands' output uniformly (no per-command label).
+const RESULTS_KEY: &str = "results";
 
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
 const GROUNDING: &str =
@@ -81,15 +80,7 @@ pub fn run_synthesis(
             )
         })?;
         prompt.push_str(s.note);
-        let gate = if args.fail_on_findings {
-            Some(s.gate.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`{command}` has no findings to gate on — its structured output isn't a violations/findings collection (try `audit`)"
-                )
-            })?)
-        } else {
-            None
-        };
+        let gate = args.fail_on_findings.then_some(RESULTS_KEY);
         (Some(s.schema), gate)
     } else {
         (None, None)
@@ -101,6 +92,7 @@ pub fn run_synthesis(
         &prompt,
         &SynthOptions {
             model: model.as_deref(),
+            runs: args.runs.max(1),
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,
