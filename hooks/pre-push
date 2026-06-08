@@ -1,0 +1,15 @@
+#!/bin/sh
+# arclite gate (pre-push): block a push when `arc audit` finds violations of the repo's ruleset.
+# Opt-in — enable for a clone with `git config core.hooksPath hooks`. Disable by unsetting it.
+# Skip a single push with `ARC_GATE=0 git push`. This spends real AI tokens on every push.
+if [ "$ARC_GATE" = "0" ]; then
+    echo "arclite gate: skipped (ARC_GATE=0)" >&2
+    exit 0
+fi
+echo "arclite gate: auditing src against the ruleset before push — this spends AI tokens…" >&2
+arc audit . --include src --fail-on-findings
+status=$?
+if [ "$status" -ne 0 ]; then
+    echo "arclite gate: push BLOCKED (arc audit exit $status). Fix the findings above, or override with 'ARC_GATE=0 git push'." >&2
+fi
+exit "$status"
