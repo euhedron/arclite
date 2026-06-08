@@ -37,8 +37,7 @@ pub struct SynthOptions<'a> {
     pub sources: &'a [String],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
-    /// The active `.arc/settings.json` layers (user then project), surfaced so the configuration in
-    /// effect is disclosed with every run. Empty = no settings file active (built-in defaults only).
+    /// The active `.arc/settings.json` layers (user then project); empty = built-in defaults only.
     pub config: &'a [String],
     /// Command name (e.g. "suggest") — names the `--output` file and labels the doc's provenance.
     pub command: &'a str,

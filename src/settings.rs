@@ -16,8 +16,7 @@ pub struct Settings {
     pub default_model: Option<String>,
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
-    /// The settings files actually loaded (user then project), in layer order — surfaced in every
-    /// run's output so which configuration is active is disclosed, never inferred.
+    /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
