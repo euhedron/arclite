@@ -15,7 +15,7 @@ use crate::synth::{self, SynthOptions};
 /// An optional structured-output mode a command can offer: a JSON Schema the model's result is
 /// validated against (returned as `structured_output`), plus a prompt note describing the shape.
 /// Used only when `--structured` is passed; commands without one reject the flag. The structure is
-/// command-appropriate — audit's violations ≠ suggest's ranked list — never one schema for all.
+/// command-appropriate (each defines its own), never one schema for all.
 ///
 /// `gate` names the array field whose non-emptiness means "block" (audit → `violations`, suggest →
 /// `suggestions`, extract → `candidates`), making gate-ability a property the command *declares*:

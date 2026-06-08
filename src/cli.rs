@@ -37,7 +37,7 @@ pub enum Command {
     Init(InitArgs),
     /// Synthesize a brief assessment of a repository via the Claude CLI.
     Summarize(SynthArgs),
-    /// Synthesize a list of suggestions for a repository via the Claude CLI.
+    /// Suggest where attention is best spent in a repository, via the Claude CLI.
     Suggest(SynthArgs),
     /// Extract reusable rules (standards, anti-patterns, principles) from a repository via the Claude CLI.
     Extract(SynthArgs),

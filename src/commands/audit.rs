@@ -12,10 +12,8 @@ const AUDIT_STRUCTURE: Structure = Structure {
     gate: Some("violations"),
 };
 
-/// Audit a repository against the provided rules, flagging only violations (the `audit` command).
-///
-/// Where `suggest` gives an open-ended review, `audit` is narrow: enforce exactly the rules in
-/// context (`--rules <dir>`) and report only where the code breaks them.
+/// Audit a repository against the provided rules, flagging only violations (the `audit` command):
+/// enforce exactly the rules in context and report only where the code breaks them.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "audit", Some(AUDIT_STRUCTURE), |ctx| {
         format!(

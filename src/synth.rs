@@ -13,9 +13,9 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// Default model requested when `--model` isn't given. The run reports the resolved id the
-/// response actually returns, not this alias; configure *down* via `--model` for cost.
-const DEFAULT_MODEL: &str = "opus";
+/// Default model when `--model` is omitted (which overrides it — configure down for cost). Update
+/// when a newer model supersedes it; the run reports the resolved id the response returns.
+const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
 

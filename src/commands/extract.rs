@@ -11,11 +11,10 @@ const EXTRACT_STRUCTURE: Structure = Structure {
     gate: Some("candidates"),
 };
 
-/// Extract reusable rules (standards, anti-patterns, principles) from a repository (the `extract` command).
-///
-/// `suggest` finds repo-specific issues; `extract` abstracts the recurring ones — and the
-/// standards a repo enforces — into discrete, repo-agnostic rules. Output is *candidate* rules
-/// for a human to curate into a rules dir; they shape every future run, so quality matters.
+/// Extract reusable rules (standards, anti-patterns, principles) from a repository (the `extract`
+/// command): abstract recurring issues and the standards a repo enforces into discrete,
+/// repo-agnostic rules. Output is *candidate* rules for a human to curate into a rules dir; they
+/// shape every future run, so quality matters.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     super::run_synthesis(args, global, "extract", Some(EXTRACT_STRUCTURE), |ctx| {
         format!(
