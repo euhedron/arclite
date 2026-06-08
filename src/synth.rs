@@ -257,7 +257,8 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .filter_map(|line| {
             // porcelain: two status chars, a space, then the path ("old -> new" for renames).
             let path = line.get(3..)?.trim().trim_matches('"');
-            let path = path.rsplit(" -> ").next().unwrap_or(path);
+            // porcelain renames read "old -> new"; take the new path, else the whole line.
+            let path = path.rsplit_once(" -> ").map_or(path, |(_, new)| new);
             (!path.is_empty()).then(|| root.join(path))
         })
         .collect())
