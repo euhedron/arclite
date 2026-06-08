@@ -18,8 +18,11 @@ pub struct Rule {
     pub body: String,
 }
 
-/// Load a single `.md` file as a rule.
+/// Load `path` as a rule, or `None` if it isn't a `.md` file.
 fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
+    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+        return Ok(None);
+    }
     let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
         return Ok(None);
     };
@@ -37,11 +40,7 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
     let entries = std::fs::read_dir(dir)
         .with_context(|| format!("cannot read rules dir {}", dir.display()))?;
     for entry in entries {
-        let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        if let Some(rule) = rule_from_file(&path)? {
+        if let Some(rule) = rule_from_file(&entry?.path())? {
             rules.push(rule);
         }
     }
@@ -59,9 +58,7 @@ pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<Vec<Rule>> {
             for rule in load(src)? {
                 by_id.insert(rule.id.clone(), rule);
             }
-        } else if src.extension().and_then(|e| e.to_str()) == Some("md")
-            && let Some(rule) = rule_from_file(src)?
-        {
+        } else if let Some(rule) = rule_from_file(src)? {
             by_id.insert(rule.id.clone(), rule);
         }
     }

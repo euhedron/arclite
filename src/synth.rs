@@ -13,8 +13,7 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// Default model — the best available. Configure *down* via `--model` only when
-/// deliberately trading quality for cost; a small model gives unrealistic signal.
+/// Default model — the best available; configure *down* via `--model` for cost.
 const DEFAULT_MODEL: &str = "opus";
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context, which typically dominates the cost — actual usage is reported after the call runs";
@@ -284,7 +283,7 @@ pub fn gather_context(
     );
     // Include the manifests inspect actually detected (root *or* nested) — keeping the scan's
     // findings and the synthesis context consistent, and making default runs substantive on real
-    // repos whose manifests live in subprojects (e.g. IDA's nested .csproj/.sln), not at the root.
+    // repos whose manifests live in subprojects, not at the root.
     for rel in &report.manifest_paths {
         add_file(
             &root.join(rel),
