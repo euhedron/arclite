@@ -34,8 +34,14 @@ pub fn count() -> usize {
 /// Any failure is surfaced as a warning and returns `None` — logging never breaks the command.
 pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
     let target = path()?;
-    let dir = target.parent()?.to_path_buf();
-    let line = serde_json::to_string(record).ok()?;
+    let dir = target.parent().expect("the log path always has a parent").to_path_buf();
+    let line = match serde_json::to_string(record) {
+        Ok(line) => line,
+        Err(e) => {
+            eprintln!("arclite: run not logged (could not serialize record): {e}");
+            return None;
+        }
+    };
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(&dir)?;
         let mut file = std::fs::OpenOptions::new()

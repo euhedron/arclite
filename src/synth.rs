@@ -202,12 +202,17 @@ fn add_file(
     sources: &mut Vec<String>,
     seen: &mut Vec<PathBuf>,
 ) {
-    if let Some(cap) = read_file(path, max) {
-        sources.push(source_label(label, &cap));
-        text.push_str(&format!("\n{label}:\n{}\n", cap.body));
-        if let Ok(c) = std::fs::canonicalize(path) {
-            seen.push(c);
+    match read_file(path, max) {
+        Some(cap) => {
+            sources.push(source_label(label, &cap));
+            text.push_str(&format!("\n{label}:\n{}\n", cap.body));
+            if let Ok(c) = std::fs::canonicalize(path) {
+                seen.push(c);
+            }
         }
+        // present but unreadable → surface it; an absent file is expected and stays silent
+        None if path.exists() => sources.push(format!("{label} (unreadable — skipped)")),
+        None => {}
     }
 }
 
