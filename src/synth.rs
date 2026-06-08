@@ -139,15 +139,13 @@ fn gather_includes(
             if already_seen(file) {
                 continue; // already auto-included (README/manifest) — don't double-count
             }
-            match read_file(file, max) {
-                Some(cap) => {
-                    sources.push(source_label(file.display(), &cap));
-                    ctx.push_str(&format!("\n{}:\n{}\n", file.display(), cap.body));
+            let label = file.display().to_string();
+            if !append_file(&label, file, max, &mut ctx, sources) {
+                if is_dir {
+                    unreadable += 1;
+                } else {
+                    sources.push(format!("{label} (unreadable — skipped)"));
                 }
-                None if !is_dir => {
-                    sources.push(format!("{} (unreadable — skipped)", file.display()));
-                }
-                None => unreadable += 1,
             }
         }
         // Surface unreadable files walked under a directory, rather than silently dropping them.
@@ -191,8 +189,25 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
     Ok(format!("\nRules:\n{}\n", crate::rules::render(&rules)))
 }
 
-/// Read `path` (capped) and, if present, append it to the context as `label` — recording the
-/// source and its canonical path so `--include` won't double-count it.
+/// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
+/// the source label. Returns whether it was read; the caller surfaces a miss however it needs.
+fn append_file(
+    label: &str,
+    path: &Path,
+    max: Option<usize>,
+    text: &mut String,
+    sources: &mut Vec<String>,
+) -> bool {
+    let Some(cap) = read_file(path, max) else {
+        return false;
+    };
+    sources.push(source_label(label, &cap));
+    text.push_str(&format!("\n{label}:\n{}\n", cap.body));
+    true
+}
+
+/// Append `path` to the context as `label` (recording its canonical path so `--include` won't
+/// double-count it); a present-but-unreadable file is surfaced, an absent one stays silent.
 fn add_file(
     path: &Path,
     label: &str,
@@ -201,17 +216,12 @@ fn add_file(
     sources: &mut Vec<String>,
     seen: &mut Vec<PathBuf>,
 ) {
-    match read_file(path, max) {
-        Some(cap) => {
-            sources.push(source_label(label, &cap));
-            text.push_str(&format!("\n{label}:\n{}\n", cap.body));
-            if let Ok(c) = std::fs::canonicalize(path) {
-                seen.push(c);
-            }
+    if append_file(label, path, max, text, sources) {
+        if let Ok(c) = std::fs::canonicalize(path) {
+            seen.push(c);
         }
-        // present but unreadable → surface it; an absent file is expected and stays silent
-        None if path.exists() => sources.push(format!("{label} (unreadable — skipped)")),
-        None => {}
+    } else if path.exists() {
+        sources.push(format!("{label} (unreadable — skipped)"));
     }
 }
 
