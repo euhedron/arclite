@@ -23,6 +23,8 @@ const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also lo
 /// so a hook/CI can tell "found violations" apart from "the tool failed". Any non-zero blocks.
 const GATE_BLOCKED_EXIT: u8 = 2;
 
+const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
+
 /// Configuration shared by every synthesis-backed command.
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
@@ -465,7 +467,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             (true, Some(path)) => {
                 human.push_str(&format!("\nlogging: on — real runs append to {}", path.display()));
             }
-            (false, _) => human.push_str("\nlogging: off (defaults.logging = false)"),
+            (false, _) => human.push_str(LOGGING_OFF_NOTE),
             (true, None) => {}
         }
         human.push_str(&format!("\n\n{prompt}"));
@@ -572,7 +574,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // Disclose where the run was logged (or that logging is off) — the log location is never hidden.
     match &logged {
         Some(path) => human.push_str(&format!("\nlogged: {}", path.display())),
-        None if !opts.log => human.push_str("\nlogging: off (defaults.logging = false)"),
+        None if !opts.log => human.push_str(LOGGING_OFF_NOTE),
         None => {} // logging on but the append failed — append() already warned to stderr
     }
     let out = SynthOutput {

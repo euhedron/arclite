@@ -25,8 +25,8 @@ pub fn run() -> ExitCode {
     let cli = Cli::parse();
 
     // Deterministic commands always succeed-or-error (mapped to SUCCESS); the synthesis commands
-    // return their own ExitCode so an opt-in gate (`--fail-on-findings`) can surface as a distinct
-    // non-zero code without being an error — predictable exit codes keep arclite scriptable.
+    // return their own ExitCode so an opt-in gate (`--fail-on-findings`) surfaces as a distinct
+    // non-zero code without being an error.
     let result = match &cli.command {
         Command::Doctor(args) => commands::doctor::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Inspect(args) => {

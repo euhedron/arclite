@@ -63,8 +63,8 @@ pub struct SynthArgs {
     /// Path to the repository or directory (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Model to use (a Claude model id). Defaults to the best available (`opus`); set this to
-    /// configure *down* for cost. A small model gives unrealistic signal when judging output.
+    /// Model to use (a Claude model id). Defaults to the best available; set this to configure
+    /// *down* for cost — a small model gives unrealistic signal when judging output.
     #[arg(long)]
     pub model: Option<String>,
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).

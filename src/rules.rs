@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-/// A single rule: `id` (the filename stem) identifies it; `body` is the text.
+/// A single rule: an `id` and its `body`.
 pub struct Rule {
     pub id: String,
     pub body: String,
 }
 
-/// Load a single `.md` file as a rule (filename stem = id, trimmed contents = body).
+/// Load a single `.md` file as a rule.
 fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
     let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
         return Ok(None);
@@ -31,7 +31,7 @@ fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
     }))
 }
 
-/// Load all `*.md` rules from `dir` (filename stem = id, file contents = body).
+/// Load all `*.md` rules from `dir`.
 pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
     let mut rules = Vec::new();
     let entries = std::fs::read_dir(dir)

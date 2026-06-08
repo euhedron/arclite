@@ -61,7 +61,7 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
     // Walk errors (permission denied, I/O, …) are counted and reported, not swallowed.
-    let (entries, walk_errors) = crate::walk::entries(&root);
+    let (entries, mut walk_errors) = crate::walk::entries(&root);
 
     for entry in entries {
         if entry.depth() == 0 {
@@ -75,8 +75,10 @@ pub fn gather(path: &Path) -> anyhow::Result<InspectReport> {
             Some(ft) if ft.is_dir() => dirs += 1,
             Some(ft) if ft.is_file() => {
                 files += 1;
-                if let Ok(md) = entry.metadata() {
-                    bytes += md.len();
+                match entry.metadata() {
+                    Ok(md) => bytes += md.len(),
+                    // couldn't stat a walked file — surface it via walk_errors, don't drop its size
+                    Err(_) => walk_errors += 1,
                 }
                 let mut is_manifest = false;
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())

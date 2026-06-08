@@ -5,10 +5,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-/// Token usage and cost for one synthesis call — ground truth from the CLI's response. Both are part
-/// of a successful response's contract (observed present on every real call); if the CLI ever omits
-/// them, [`parse_result`] errors loudly rather than inventing zeros or a speculative "unknown" — we'd
-/// want to discover that and handle it deliberately, not paper over it.
+/// Token usage and cost for one synthesis call — ground truth from the CLI's response.
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub model: String,
@@ -103,8 +100,6 @@ struct ClaudeJson {
     structured_output: Option<serde_json::Value>,
 }
 
-// Every field required: a successful response's usage object carries all four. A missing one is an
-// unexpected contract change we want to fail on (and learn from), not silently read as a real 0.
 #[derive(Deserialize)]
 struct ClaudeUsage {
     input_tokens: u64,
@@ -125,9 +120,8 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
         );
     }
     let text = parsed.result.context("claude JSON had no `result` field")?;
-    // `usage` and cost are part of a successful response's contract — present on every real call. If
-    // the CLI ever omits them, error loudly (we'd want to discover that and handle it) rather than
-    // fabricate zeros that read as genuine zero spend. No speculative "unknown" for an unseen case.
+    // usage and cost are part of a successful response's contract; if the CLI omits them, error
+    // loudly rather than fabricate zeros that would read as genuine zero spend.
     let usage = parsed.usage.context("claude JSON had no `usage` field")?;
     let cost_usd = parsed
         .total_cost_usd
@@ -146,14 +140,11 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
     })
 }
 
-/// Run a synthesis through the Claude Code CLI with a deliberately minimal,
-/// controlled context: an explicit model, no inherited MCP servers
-/// (`--strict-mcp-config`), and — unless `ambient_memory` is set — no ambient
-/// memory (env vars disable user *and* project CLAUDE.md + auto-memory; a neutral
-/// cwd alone does *not*, since the user-level `~/.claude/CLAUDE.md` loads regardless
-/// of cwd), with the prompt passed over stdin (avoiding shell-quoting pitfalls). So
-/// by default the sources arclite reports are authoritative, modulo Claude Code's own
-/// fixed base (date, env, tools). Costs real tokens.
+/// Run a synthesis through the Claude Code CLI with a deliberately minimal, controlled context: an
+/// explicit model, no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory`
+/// is set — no ambient memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls).
+/// So by default the sources arclite reports are authoritative, modulo Claude Code's own fixed base
+/// (date, env, tools). Costs real tokens.
 ///
 /// `allowed_tools` is a major cost lever — Claude Code's tool schemas dominate
 /// the context. An empty slice restricts to no tools (cheapest, ~10x less than
@@ -191,11 +182,9 @@ pub fn synthesize(
     if let Some(schema) = json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
-    // By default, isolate from ambient context so the sources arclite reports are authoritative:
-    // disable auto-loading of user/project CLAUDE.md and auto-memory. Confirmed necessary — a
-    // neutral cwd alone does NOT stop it (user-level ~/.claude/CLAUDE.md loads regardless of cwd).
-    // These affect only context loading, not the separate credential store, so auth is unaffected.
-    // `--ambient-memory` opts back in (the run then reports memory=ambient).
+    // Disable auto-loading of user/project CLAUDE.md + auto-memory. A neutral cwd alone does NOT stop
+    // it — the user-level ~/.claude/CLAUDE.md loads regardless of cwd. This affects only context
+    // loading, not the separate credential store, so auth is unaffected; `--ambient-memory` opts in.
     if !ambient_memory {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
