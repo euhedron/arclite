@@ -8,20 +8,22 @@
 
 arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)**. Every AI use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending AI *sensibly*.
 
-| Command | What it does | AI |
-|---|---|:--:|
-| `doctor` | Report runtime, environment, and available tooling. | — |
-| `inspect` | Walk any repo and emit structured facts (file types, layout, manifests, whether it's a git repo). | — |
-| `init` | Scaffold a repo's `.arc/` config (and, with `--hook`, an opt-in pre-push gate). | — |
-| `summarize` | A brief assessment of a repo from its facts. | ✓ |
-| `suggest` | What's worth attention. | ✓ |
-| `extract` | Reusable rules (standards, anti-patterns, principles) to curate. | ✓ |
-| `audit` | Check a repo against selected rules, reporting only concrete violations. | ✓ |
-| `critique` | Quality defects — redundancy, staleness, gaps. | ✓ |
+| Command | AI |
+|---|:--:|
+| `doctor` | — |
+| `inspect` | — |
+| `init` | — |
+| `summarize` | ✓ |
+| `suggest` | ✓ |
+| `extract` | ✓ |
+| `audit` | ✓ |
+| `critique` | ✓ |
+
+Run `arc <cmd> --help` for what each does.
 
 ## Getting started
 
-**Prerequisites:** a Rust toolchain (`cargo`; Rust ≥ 1.88, for edition 2024 and let-chains); and, for the AI commands, the Claude Code CLI installed and authenticated (`claude` on `PATH`). `arc doctor` verifies both.
+**Prerequisites:** a Rust toolchain (`cargo`; Rust ≥ 1.88, for let-chains — edition 2024 alone needs 1.85); the Claude Code CLI (`claude` on `PATH`) for the AI commands; and `git` (used by `--changed` and `arc init --hook`). `arc doctor` checks all three.
 
 **Build / install:**
 
@@ -33,17 +35,17 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 **Use** — the deterministic commands (`doctor`, `inspect`) cost nothing; the AI commands take a repo path (default `.`):
 
 ```sh
-arc                                  # self-documenting help (the binary is `arc`; the project is arclite)
-arc inspect <repo>                   # deterministic facts, no AI (free)
-arc init    <repo>                   # scaffold .arc config (--hook adds an opt-in pre-push gate)
-arc summarize <repo>                 # brief AI assessment
-arc suggest <repo> --include src     # what's worth attention — preview with --dry-run ($0) first
-arc critique <repo> --include src    # find quality defects
-arc audit   <repo> --ruleset <id>    # flag violations of a ruleset (or the repo's configured default)
-arc extract <repo> --include src     # propose reusable rules to curate into a ruleset
+arc                                  # no args → help (the binary is `arc`; the project is arclite)
+arc inspect <repo>                   # no AI — free
+arc init    <repo>                   # add --hook for an opt-in pre-push gate
+arc summarize <repo>                 # runs on the default context (scan + README + manifests)
+arc suggest <repo> --include src     # --include adds files/dirs to the context
+arc audit   <repo> --ruleset <id>    # --ruleset selects the rules (else the configured default)
+arc critique <repo> --include src    # --dry-run previews any AI run's prompt + cost at $0
+arc extract <repo> --include src
 ```
 
-Shared options on every AI command: `--ruleset <id>` (apply a named ruleset from settings) or `--rules <dir>` (an ad-hoc rule directory); `--structured` (emit a typed, schema-validated object instead of prose where the command defines one — e.g. `audit` violations, `suggest` suggestions, `extract` candidate rules); `--fail-on-findings` (**gate**: exit non-zero if that findings collection is non-empty — for enforcement in hooks/CI; implies `--structured`); `--ranked` (order the results by significance — the order is the ranking); `--model` (defaults to a built-in model; configure *down* for cost); `--allow-tool <tool>` (allow a Claude tool during synthesis; default none — cheapest); `--include <path>` (add files/dirs to context); `--changed` (scope context to git-changed files — staged/unstaged/untracked); `--max-file-chars` (cap large files); `--output <dir>` (also save the result as a self-describing Markdown doc); `--ambient-memory` (load your `CLAUDE.md` instead of isolating); `--dry-run` (zero-cost preview); `--json`. Every run echoes the exact parameters it used — model, tools, memory isolation, the full **context manifest**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost (see [Principles](#principles)).
+Shared options on every AI command: `--ruleset <id>` (apply a named ruleset from settings) or `--rules <dir>` (an ad-hoc rule directory); `--structured` (emit a typed, schema-validated object instead of prose where the command defines one — e.g. `audit` violations, `suggest` suggestions, `extract` candidate rules); `--fail-on-findings` (**gate**: exit non-zero if that findings collection is non-empty — for enforcement in hooks/CI; implies `--structured`); `--ranked` (order the results by significance — the order is the ranking); `--model` (defaults to a built-in model; configure *down* for cost); `--allow-tool <tool>` (allow a Claude tool during synthesis; default none — cheapest); `--include <path>` (add files/dirs to context); `--changed` (also add git-changed files — staged/unstaged/untracked); `--max-file-chars` (cap large files); `--output <dir>` (also save the result as a self-describing Markdown doc); `--ambient-memory` (load your `CLAUDE.md` instead of isolating); `--dry-run` (zero-cost preview); `--json`. Every run echoes the exact parameters it used — model, tools, memory isolation, the full **context manifest**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost (see [Principles](#principles)).
 
 **Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging) and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
 
@@ -90,7 +92,8 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
 
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
-- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.- [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
+- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
+- [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
 - [ ] Single-source the command one-liners — the README table, `--help` (`cli.rs` doc-comments), and getting-started examples each restate them and drift; generate the table from the doc-comments so there's one source.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).

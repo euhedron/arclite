@@ -104,8 +104,8 @@ pub struct SynthArgs {
     /// surfaced in the run's sources.
     #[arg(long, value_name = "N")]
     pub max_file_chars: Option<usize>,
-    /// Scope the included context to files changed in git (staged, unstaged, or untracked).
-    /// Works with any synthesis command — e.g. a cheap, focused `arc audit --changed`. Default: off.
+    /// Add files changed in git (staged, unstaged, or untracked) to the context, alongside any
+    /// `--include`. Works with any command. Default: off.
     #[arg(long)]
     pub changed: bool,
     /// Also write the synthesis to `<DIR>/<command>.md` — a self-describing generated doc (the
