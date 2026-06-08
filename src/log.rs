@@ -33,7 +33,10 @@ pub fn count() -> usize {
 /// Append `record` as one JSON line to the [`path`] run log, returning the path written.
 /// Any failure is surfaced as a warning and returns `None` — logging never breaks the command.
 pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
-    let target = path()?;
+    let Some(target) = path() else {
+        eprintln!("arclite: run not logged (cannot determine the home directory)");
+        return None;
+    };
     let dir = target.parent().expect("the log path always has a parent").to_path_buf();
     let line = match serde_json::to_string(record) {
         Ok(line) => line,
