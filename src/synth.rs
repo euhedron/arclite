@@ -248,7 +248,7 @@ pub struct Context {
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
 /// backing `--changed`. `Ok(vec)` lists them (empty = genuinely clean tree); `Err(reason)`
 /// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
-/// as a clean "no changes" result (the no-silent-defaults rule).
+/// as a clean "no changes" result.
 fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let output = ai::command("git")
         .arg("-C")
@@ -327,7 +327,7 @@ pub fn gather_context(
         })
         .collect();
     // --changed: scope to git-changed files — same group as --include, not special to any command.
-    // A git failure aborts loudly rather than silently passing as a clean tree (no-silent-defaults).
+    // A git failure aborts loudly rather than silently passing as a clean tree.
     if changed {
         let files = changed_files(&root)
             .map_err(|reason| anyhow::anyhow!("--changed could not consult git: {reason}"))?;

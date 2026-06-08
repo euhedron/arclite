@@ -49,7 +49,7 @@ fn probe(program: &str) -> Option<String> {
 
 /// Report runtime, environment, and available tooling. Deterministic — no LLM.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    // An unreadable log is reported as such, not collapsed into "0 runs" (no-silent-defaults).
+    // An unreadable log is reported as such, not collapsed into "0 runs".
     let runs = crate::log::count();
     let report = Report {
         arclite: env!("CARGO_PKG_VERSION"),

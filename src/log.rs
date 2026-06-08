@@ -25,8 +25,7 @@ pub fn path() -> Option<PathBuf> {
 
 /// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs
 /// yet), `Ok(n)` for a readable log, and `Err` when it exists but can't be read: an unreadable log
-/// is surfaced distinctly rather than silently shown as 0, which would hide a dropped/corrupt log
-/// (no-silent-defaults).
+/// is surfaced distinctly rather than silently shown as 0, which would hide a dropped/corrupt log.
 pub fn count() -> std::io::Result<usize> {
     let Some(p) = path() else { return Ok(0) };
     match std::fs::read_to_string(&p) {

@@ -52,7 +52,7 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
 /// deduped by id with later sources winning — so a project ruleset can override a shared pool's
 /// rule of the same id. Returns the loaded rules plus any sources that resolved to neither a
 /// directory nor a `.md` file — a typo'd or absent path the caller surfaces rather than dropping
-/// silently, so a misconfigured source can't shrink the active ruleset unnoticed (no-silent-defaults).
+/// silently, so a misconfigured source can't shrink the active ruleset unnoticed.
 /// (An absent `*.md` path is louder still: `rule_from_file` fails to read it and the error propagates.)
 pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathBuf>)> {
     let mut by_id: BTreeMap<String, Rule> = BTreeMap::new();

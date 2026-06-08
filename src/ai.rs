@@ -52,7 +52,7 @@ pub fn estimate(prompt: &str) -> Estimate {
 /// `--json-schema` payload (Rust's `.cmd` quoting does not save them — confirmed empirically). So
 /// when `which` returns such a shim, [`shim_target`] resolves the real `.exe` it runs and we spawn
 /// that directly: no shell/batch re-parse, so std's standard argv quoting holds. Falls back to the
-/// bare name (surfacing a normal "not found" error). Shared by `doctor`'s probe and [`synthesize`].
+/// bare name (surfacing a normal "not found" error). Shared by every external-process call arclite makes.
 pub fn command(program: &str) -> Command {
     let exe = which::which(program)
         .ok()
