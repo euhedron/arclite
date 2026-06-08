@@ -165,8 +165,7 @@ fn gather_includes(
     ctx
 }
 
-/// Render the Markdown rules in `dir` (if any) as a context block, recording exactly which
-/// rule ids were included — surfaced like every other run parameter, never hidden.
+/// Render the rules from `rule_sources` as a context block, recording which rule ids were included.
 fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::Result<String> {
     if rule_sources.is_empty() {
         return Ok(String::new());

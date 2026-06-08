@@ -17,10 +17,10 @@ use crate::synth::{self, SynthOptions};
 /// Used only when `--structured` is passed; commands without one reject the flag. The structure is
 /// command-appropriate — audit's violations ≠ suggest's ranked list — never one schema for all.
 ///
-/// `gate` names the array field whose non-emptiness means "block" (audit → `violations`), making
-/// gate-ability a property the command *declares* rather than a special case bolted onto one verb:
-/// `--fail-on-findings` turns that field into a non-zero exit. `None` = the structure carries no
-/// problem semantics (e.g. `suggest`'s ranked list), so the flag is rejected for it, not ignored.
+/// `gate` names the array field whose non-emptiness means "block" (audit → `violations`, suggest →
+/// `suggestions`, extract → `candidates`), making gate-ability a property the command *declares*:
+/// `--fail-on-findings` turns that field into a non-zero exit. `None` = no findings collection to
+/// gate on, so the flag is rejected for it.
 pub struct Structure {
     pub schema: &'static str,
     pub note: &'static str,

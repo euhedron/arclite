@@ -19,10 +19,9 @@ use cli::{Cli, Command};
 /// arclite's per-scope config/data directory (`~/.arc`, `<repo>/.arc`): settings, rules, and logs.
 pub(crate) const ARC_DIR: &str = ".arc";
 
-/// Parse arguments, dispatch to the selected command, and map the result to a
-/// process exit code (`SUCCESS`, or `FAILURE` with the error on stderr).
-///
-/// Predictable exit codes keep arclite scriptable by both agents and humans.
+/// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
+/// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr. Predictable exit
+/// codes keep arclite scriptable by both agents and humans.
 #[must_use]
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
