@@ -35,15 +35,15 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate). No LLM.
     Init(InitArgs),
-    /// Synthesize a brief assessment of a repository via the Claude CLI.
+    /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
-    /// Suggest where attention is best spent in a repository, via the Claude CLI.
+    /// Suggest where attention is best spent in a repository.
     Suggest(SynthArgs),
-    /// Extract reusable rules (standards, anti-patterns, principles) from a repository via the Claude CLI.
+    /// Extract reusable rules (standards, anti-patterns, principles) from a repository.
     Extract(SynthArgs),
-    /// Audit a repository against selected rules, reporting only violations, via the Claude CLI.
+    /// Audit a repository against selected rules, reporting only violations.
     Audit(SynthArgs),
-    /// Critically review a repo + its docs for quality defects (redundancy, staleness, gaps) via the Claude CLI.
+    /// Critically review a repo + its docs for quality defects (redundancy, staleness, gaps).
     Critique(SynthArgs),
 }
 

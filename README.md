@@ -2,11 +2,11 @@
 
 > *Nothing is canon. Everything can evolve.*
 >
-> **NOTE**: This is an experimental project; development is rapid and every aspect/feature should be considered in-progress. Don't treat any part of any file — or any architectural, formatting, or structural decision — as settled (anticipate unfinished, abandoned, or sub-optimal thoughts, systems, and descriptions). Existing state is in-progress thinking, not settled decisions.
+> **NOTE**: An experimental project under rapid development — treat any part of any file, and any architectural/formatting/structural decision, as in-progress, not settled (expect unfinished, abandoned, or sub-optimal thoughts).
 
 ## Overview
 
-arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)**. Every AI use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending AI *sensibly*.
+arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)**. Every use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending *sensibly*.
 
 | Command | AI |
 |---|:--:|
@@ -94,7 +94,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
 - [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
-- [ ] Single-source the command one-liners — the README table, `--help` (`cli.rs` doc-comments), and getting-started examples each restate them and drift; generate the table from the doc-comments so there's one source.
+- [ ] An `arc status` for **active runs** — each run registers (command, repo, model, start) on start and clears on exit; `status` lists what's in flight (pruning dead pids). The in-flight complement to the completed-run log; most useful with concurrency (watching the pre-push hook, parallel agents, or multi-run strategies).
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.

@@ -98,6 +98,11 @@ fn source_label(name: impl std::fmt::Display, cap: &Capped) -> String {
     }
 }
 
+/// A `sources` label for a present-but-unreadable file — single-sourced so the wording can't drift.
+fn unreadable_label(label: &str) -> String {
+    format!("{label} (unreadable — skipped)")
+}
+
 /// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped) and the
 /// count of walk errors (unreadable entries) so callers can surface them, not drop them.
 fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
@@ -143,7 +148,7 @@ fn gather_includes(
                 if is_dir {
                     unreadable += 1;
                 } else {
-                    sources.push(format!("{label} (unreadable — skipped)"));
+                    sources.push(unreadable_label(&label));
                 }
             }
         }
@@ -227,7 +232,7 @@ fn add_file(
             seen.push(c);
         }
     } else if path.exists() {
-        sources.push(format!("{label} (unreadable — skipped)"));
+        sources.push(unreadable_label(label));
     }
 }
 
