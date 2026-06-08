@@ -33,8 +33,8 @@ pub struct Estimate {
     pub approx_tokens: usize,
 }
 
-/// Rough chars-per-token ratio for the zero-cost prompt estimate — approximate, and only a
-/// pre-spend gauge; the real, billed token counts come back from the CLI after the call.
+/// Rough chars-per-token ratio for the zero-cost prompt estimate. Deliberately approximate and never
+/// refreshed: it is only a pre-spend gauge — the real, billed token counts come back from the CLI.
 const CHARS_PER_TOKEN: usize = 4;
 
 #[must_use]
