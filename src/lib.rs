@@ -10,6 +10,7 @@ mod commands;
 mod log;
 mod output;
 mod rules;
+mod runs;
 mod settings;
 mod synth;
 mod walk;
@@ -35,6 +36,9 @@ pub fn run() -> ExitCode {
             commands::inspect::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Init(args) => commands::init::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Status(args) => {
+            commands::status::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),

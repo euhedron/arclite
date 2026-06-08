@@ -35,6 +35,8 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate). No LLM.
     Init(InitArgs),
+    /// Report the runs currently in flight (the active-run registry). No LLM.
+    Status(StatusArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
     /// Suggest where attention is best spent in a repository.
@@ -50,6 +52,10 @@ pub enum Command {
 /// Arguments for `arclite doctor`.
 #[derive(Debug, Args)]
 pub struct DoctorArgs {}
+
+/// Arguments for `arc status`.
+#[derive(Debug, Args)]
+pub struct StatusArgs {}
 
 /// Arguments for `arclite inspect`.
 #[derive(Debug, Args)]

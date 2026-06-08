@@ -8,19 +8,6 @@
 
 arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence and auditing**. It gathers facts about a repository **deterministically**, and — only where genuine judgment is needed — applies **AI (via the Claude Code CLI)**. Every use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending *sensibly*.
 
-| Command | AI |
-|---|:--:|
-| `doctor` | — |
-| `inspect` | — |
-| `init` | — |
-| `summarize` | ✓ |
-| `suggest` | ✓ |
-| `extract` | ✓ |
-| `audit` | ✓ |
-| `critique` | ✓ |
-
-Run `arc <cmd> --help` for what each does.
-
 ## Getting started
 
 **Prerequisites:** a Rust toolchain (`cargo`; Rust ≥ 1.88, for let-chains — edition 2024 alone needs 1.85); the Claude Code CLI (`claude` on `PATH`) for the AI commands; and `git` (used by `--changed` and `arc init --hook`). `arc doctor` checks all three.
@@ -37,6 +24,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 ```sh
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # no AI — free
+arc status                           # runs currently in flight (no AI)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
 arc summarize <repo>                 # runs on the default context (scan + README + manifests)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
@@ -94,7 +82,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
 - [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] **Multi-run strategies** — `--runs N` ships: run a command N times concurrently and union the deduped `results`. Open: a secondary-agent combine that dedupes/synthesizes semantically (and buckets by consensus, for ranking); sequential pass-forward (each run sees prior findings); and fanning the same union across *different* commands (e.g. a concurrent pre-push gate).
-- [ ] An `arc status` for **active runs** — each run registers (command, repo, model, start) on start and clears on exit; `status` lists what's in flight (pruning dead pids). The in-flight complement to the completed-run log; most useful with concurrency (watching the pre-push hook, parallel agents, or multi-run strategies).
+- [ ] `arc status` lists in-flight runs (ships) — a per-pid registry written on start and cleared on exit, the in-flight complement to the completed-run log. Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.

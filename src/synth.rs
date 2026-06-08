@@ -520,6 +520,8 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    // Record this run in the active-run registry; the guard clears it on exit (success or error).
+    let _active = crate::runs::register(opts.command, opts.dir, requested);
     let (synthesis, runs) = if opts.runs > 1 {
         multi_synthesize(prompt, requested, opts)?
     } else {

@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod extract;
 pub mod init;
 pub mod inspect;
+pub mod status;
 pub mod suggest;
 pub mod summarize;
 
