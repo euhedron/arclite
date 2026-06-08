@@ -64,9 +64,9 @@ Worth carrying over (on merit): self-derived/generated docs — users/agents sho
 - **CLI**: should be able to do and see anything, via flags.
 - **Scope**: multi / any / cross repo — point it at any repository.
 - **Rules as composable levers**: rules (coding standards, anti-patterns, principles) are reusable *levers* — not just prompts or memory. They're extracted from repos, curated, and composed into named **rulesets** that any command applies; a ruleset's sources span scopes — your own (`~/.arc/`), a project's (`<repo>/.arc/`), and shared pools — so broadly-useful rules get shared while the rest stay local.
-- **Auditing & linting**: check a repo against selected rules and surface drift/violations — on demand (a gate) or passively (e.g. commit hooks). Configurable and cost-visible.
+- **Auditing & linting**: check a repo against selected rules and surface drift/violations — on demand (a gate) or passively (e.g. commit hooks).
 - **Discovery**: integrate with existing agent memory/config (Claude Code, Codex, …) — content storage and structure compatibility.
-- **AI use**: deterministic until synthesis; AI is reserved for the judgment step, under the cost-transparency guarantees in [Principles](#principles).
+- **AI use**: deterministic until synthesis; AI is reserved for the judgment step (see [Principles](#principles)).
 
 ## Principles
 

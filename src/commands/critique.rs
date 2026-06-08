@@ -18,9 +18,9 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              opportunities to consolidate, restructure, clarify, or tighten.\n\n\
              {ctx}\n\
              Report concrete findings grouped by kind. For each: the specific location, the problem in a \
-             clause, and the concrete fix you would make. Ground every finding in the context above — flag \
-             nothing you can't point to. Prefer fewer real findings over padding, and call out cross-cutting \
-             redundancy (the same thing stated or implemented in several places) explicitly."
+             clause, and the concrete fix you would make. Prefer fewer real findings over padding, and \
+             call out cross-cutting redundancy (the same thing stated or implemented in several places) \
+             explicitly."
         )
     })
 }

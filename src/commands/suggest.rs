@@ -22,8 +22,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              {ctx}\n\
              Produce a prioritized list (most important first) of concrete suggestions — what to \
              look at, verify, improve, finish, or be aware of — each a short line with a one-clause \
-             rationale. Treat any rules above as the policy to check against. Ground every item in \
-             the context above; skip anything you can't support."
+             rationale. Treat any rules above as the policy to check against."
         )
     })
 }

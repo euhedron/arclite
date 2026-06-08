@@ -10,7 +10,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              {ctx}\n\
              In 3-5 sentences, give a concise, useful assessment: what kind of project it appears \
              to be, its apparent stack, and anything notable or worth a closer look. Respect any \
-             rules above; ground it in the context."
+             rules above."
         )
     })
 }

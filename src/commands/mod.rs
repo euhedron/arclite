@@ -26,6 +26,10 @@ pub struct Structure {
     pub gate: Option<&'static str>,
 }
 
+/// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
+const GROUNDING: &str =
+    "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
+
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
 /// the granted dir, cost reporting, or structured output. `structure` is the command's optional
@@ -60,6 +64,7 @@ pub fn run_synthesis(
         args.changed,
     )?;
     let mut prompt = build_prompt(&ctx.text);
+    prompt.push_str(GROUNDING);
     // --structured emits the command's typed output; --fail-on-findings additionally gates on it
     // (and implies it). Both require the command to define a structure; gating also requires that
     // structure to declare a `gate` field — so the flag is rejected, not silently ignored, otherwise.
