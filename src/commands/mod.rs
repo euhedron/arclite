@@ -31,6 +31,10 @@ pub struct Structure {
 const GROUNDING: &str =
     "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
 
+/// Appended by `--ranked`: order the results by significance (the array order is the ranking).
+const RANKED_NOTE: &str =
+    "\n\nOrder the results from most to least significant; the order is the ranking.";
+
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
 /// the granted dir, cost reporting, or structured output. `structure` is the command's optional
@@ -90,6 +94,9 @@ pub fn run_synthesis(
     } else {
         (None, None)
     };
+    if args.ranked {
+        prompt.push_str(RANKED_NOTE);
+    }
     synth::run(
         &prompt,
         &SynthOptions {

@@ -128,4 +128,8 @@ pub struct SynthArgs {
     /// commands that emit no findings (e.g. `summarize`). Off by default — no command gates unless asked.
     #[arg(long)]
     pub fail_on_findings: bool,
+    /// Order the results from most to least significant (priority/severity/relevance) — the order is
+    /// the ranking. Applies to any command; off by default (results come back unordered).
+    #[arg(long)]
+    pub ranked: bool,
 }
