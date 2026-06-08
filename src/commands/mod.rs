@@ -23,10 +23,6 @@ pub struct Structure {
     pub note: &'static str,
 }
 
-/// The single key every structured result uses — a generic list, so the gate, `--ranked`, and
-/// multi-run treat all commands' output uniformly (no per-command label).
-const RESULTS_KEY: &str = "results";
-
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
 const GROUNDING: &str =
     "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
@@ -71,8 +67,8 @@ pub fn run_synthesis(
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);
     // --structured emits the command's typed output; --fail-on-findings additionally gates on it
-    // (and implies it). Both require the command to define a structure; gating also requires that
-    // structure to declare a `gate` field — so the flag is rejected, not silently ignored, otherwise.
+    // (and implies it). Both require the command to define a structure — so the flag is rejected,
+    // not silently ignored, when a command has none.
     let want_structured = args.structured || args.fail_on_findings;
     let (schema, gate) = if want_structured {
         let s = structure.as_ref().ok_or_else(|| {
@@ -81,7 +77,8 @@ pub fn run_synthesis(
             )
         })?;
         prompt.push_str(s.note);
-        let gate = args.fail_on_findings.then_some(RESULTS_KEY);
+        // Gate on the `results` array every structured schema produces.
+        let gate = args.fail_on_findings.then_some("results");
         (Some(s.schema), gate)
     } else {
         (None, None)
