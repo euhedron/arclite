@@ -16,6 +16,9 @@ mod walk;
 
 use cli::{Cli, Command};
 
+/// arclite's per-scope config/data directory (`~/.arc`, `<repo>/.arc`): settings, rules, and logs.
+pub(crate) const ARC_DIR: &str = ".arc";
+
 /// Parse arguments, dispatch to the selected command, and map the result to a
 /// process exit code (`SUCCESS`, or `FAILURE` with the error on stderr).
 ///

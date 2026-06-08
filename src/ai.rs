@@ -201,7 +201,7 @@ pub fn synthesize(
         let mut stdin = child
             .stdin
             .take()
-            .context("could not open claude's stdin")?;
+            .expect("stdin was configured as piped");
         stdin.write_all(prompt.as_bytes())?;
     } // dropping stdin closes it, signalling end-of-input
 

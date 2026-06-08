@@ -48,10 +48,11 @@ impl Settings {
     /// fine; a present-but-malformed file is a hard error — better than silently mis-configuring.
     pub fn load(repo: &Path) -> anyhow::Result<Self> {
         let mut settings = Settings::default();
+        let relative = Path::new(crate::ARC_DIR).join("settings.json");
         if let Some(home) = dirs::home_dir() {
-            settings.merge(&home.join(".arc/settings.json"))?;
+            settings.merge(&home.join(&relative))?;
         }
-        settings.merge(&repo.join(".arc/settings.json"))?;
+        settings.merge(&repo.join(&relative))?;
         Ok(settings)
     }
 
