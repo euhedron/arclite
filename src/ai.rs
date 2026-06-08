@@ -140,7 +140,7 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
     })
 }
 
-/// Run a synthesis through the Claude Code CLI with a deliberately minimal, controlled context: an
+/// Run a synthesis through the Claude Code CLI with a controlled, isolated context: an
 /// explicit model, no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory`
 /// is set — no ambient memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls).
 /// So by default the sources arclite reports are authoritative, modulo Claude Code's own fixed base

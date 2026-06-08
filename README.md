@@ -79,6 +79,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 - **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model defaults to the *best*, configurable down for cost); preview at $0 (`--dry-run`); report every run parameter alongside real token usage + cost; balance context utilization against value.
 - **Trace, resolve, evolve** — unexpected/sub-par results are signal: make them traceable, diagnose, then improve the system — including the rules and prompts themselves, which are validated and sharpened through exercise, not assumed correct.
 - **Adversarial, self-accountable** — build in self-checking (arclite is exercised on itself); a gate turns that into accountability — change proceeds only once the system is back in a balanced state, with no outstanding violations of its own rules.
+- **Never done — balance is a floor, not a finish.** A clean audit isn't a win to rest on; it's the balanced state that lets the next change proceed. Commands and rules are levers to fire and tune to keep the loop running; when a repo stops yielding signal, point arclite at another to surface its own weaknesses.
 - **Leverage derivation/transclusion.**
 
 ## Roadmap
@@ -88,6 +89,8 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Aggregate extracted **rules** across repos and dedup them into shared pools (`extract` produces per-repo candidates today; the cross-repo merge is the open part).
 - [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] Gate a repo against rules and rank/prioritize findings. The **gate** ships as `--fail-on-findings` (any command with a findings collection — `audit`, `suggest` — exits non-zero when it's non-empty, so a hook/CI blocks on exit status alone); the *passive* wiring (git hooks, and — to explore — **Claude Code hook events** invoking `arc`) and the *ranking* of findings are the open parts.
+- [ ] **Multi-run strategies** — AI runs are sampled, so let a command run N times (a flag) and aggregate the variance: concurrent-then-combine; sequential, passing prior findings forward so each run knows what's already found; or a batch fed to a secondary agent that dedupes/synthesizes (or buckets by consensus, for ranking). The synthesis step is a configurable equation, not a single shot — the same strategies serve `audit`, `suggest`, and beyond.
+- [ ] **Configurable result ordering** — whether results are ranked should be a per-run choice, not hardcoded per command (rank `audit` violations by severity, or leave `suggest` unranked) — flexibility for experimentation.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.
