@@ -543,11 +543,13 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Record this run in the active-run registry; the guard clears it on exit (success or error).
-    let _active = crate::runs::register(opts.command, opts.dir, requested);
+    // Each run records its live progress to its own marker in the active-run registry (cleared when
+    // the run's `Active` guard drops), so `arc status` can show it; a `--runs N` fan-out registers one
+    // marker per thread in `multi_synthesize`.
     let (synthesis, runs) = if opts.runs > 1 {
         multi_synthesize(prompt, requested, opts)?
     } else {
+        let active = crate::runs::register(opts.command, opts.dir, requested, 0);
         let single = ai::synthesize(
             prompt,
             requested,
@@ -555,6 +557,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             opts.dir,
             opts.ambient_memory,
             opts.schema,
+            active,
         )?;
         (single, 1)
     };
@@ -689,8 +692,10 @@ fn multi_synthesize(
     let n = opts.runs;
     let outcomes: Vec<anyhow::Result<ai::Synthesis>> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..n)
-            .map(|_| {
-                scope.spawn(|| {
+            .map(|index| {
+                scope.spawn(move || {
+                    // Each concurrent run gets its own marker (by index), written only by this thread.
+                    let active = crate::runs::register(opts.command, opts.dir, model, index);
                     ai::synthesize(
                         prompt,
                         model,
@@ -698,6 +703,7 @@ fn multi_synthesize(
                         opts.dir,
                         opts.ambient_memory,
                         opts.schema,
+                        active,
                     )
                 })
             })

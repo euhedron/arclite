@@ -1,21 +1,36 @@
-//! Active-run registry: each real synthesis run writes a marker to `~/.arc/runs/<pid>.json` on
-//! start and removes it on exit (via the returned guard), so `arc status` can list what's in flight.
-//! Separate from the append-only completed-run log in `log.rs`; one file per process, so concurrent
-//! runs don't contend.
+//! Active-run registry: each in-flight synthesis writes its own marker to
+//! `~/.arc/runs/<pid>-<index>.json`, updates it as the run streams, and removes it on completion (via
+//! the returned guard). One file per run — so a `--runs N` fan-out is N independent files, each
+//! written only by the thread that owns it: no shared state, no concurrent writes, no locking. This
+//! is the live, ephemeral view; the durable record of every completed run is the log in `log.rs`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-/// One in-flight run, as recorded in the registry.
+/// One in-flight run, as recorded in the registry: static identity plus live, streamed progress.
 #[derive(Serialize, Deserialize)]
 pub struct ActiveRun {
     pub pid: u32,
+    /// Distinguishes the concurrent runs of a `--runs N` fan-out within one process.
+    #[serde(default)]
+    pub index: usize,
     pub command: String,
     pub repo: String,
     pub model: String,
     pub started_at: u64,
+    /// Live progress, updated as the run streams. `#[serde(default)]` so a marker written before any
+    /// output — or by an older binary — still reads.
+    #[serde(default)]
+    pub turns: u64,
+    #[serde(default)]
+    pub tool_calls: u64,
+    /// Characters — not tokens — because the exact token count arrives only at message end (see
+    /// [`crate::ai::synthesize`]); characters are the continuous live signal, and the billed token
+    /// count lands in the final run report.
+    #[serde(default)]
+    pub output_chars: u64,
 }
 
 /// The registry directory, `~/.arc/runs/` (`None` if the home directory is unknown).
@@ -23,32 +38,71 @@ fn dir() -> Option<PathBuf> {
     Some(crate::arc_home()?.join("runs"))
 }
 
-/// Marker that removes its registry entry on drop, so a run clears itself on exit — success, error,
-/// or unwind. Returned by [`register`]; hold it for the run's lifetime.
-pub struct Registered(PathBuf);
+/// A registered in-flight run: owns its marker and live stats, written only by the single thread that
+/// runs it. Removes the marker on drop — success, error, or unwind.
+pub struct Active {
+    marker: PathBuf,
+    run: ActiveRun,
+}
 
-impl Drop for Registered {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+impl Active {
+    /// Add streamed output characters to the live tally and rewrite the marker — the continuous
+    /// progress signal (the exact token count comes back only at message end, in the final report).
+    pub fn record_text(&mut self, chars: u64) {
+        self.run.output_chars += chars;
+        self.write();
+    }
+
+    /// Mark one completed turn (and any tool calls it made) and rewrite the marker.
+    pub fn record_turn(&mut self, tool_calls: u64) {
+        self.run.turns += 1;
+        self.run.tool_calls += tool_calls;
+        self.write();
+    }
+
+    /// Rewrite the marker. `register` already proved the directory writable with the same write, so a
+    /// later failure is genuinely exceptional — and it can't be allowed to abort the run it's only
+    /// observing, so it's dropped. The durable record is the completed-run log, not this marker.
+    fn write(&self) {
+        let _ = self.try_write();
+    }
+
+    fn try_write(&self) -> std::io::Result<()> {
+        let json = serde_json::to_string(&self.run).map_err(std::io::Error::other)?;
+        std::fs::write(&self.marker, json)
     }
 }
 
-/// Record this process as an in-flight run; the returned guard clears it on drop. Best-effort:
-/// returns `None` (the run proceeds untracked) if the registry can't be written, never failing it.
+impl Drop for Active {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.marker);
+    }
+}
+
+/// Record an in-flight run; the returned guard clears its marker on drop. `index` distinguishes the
+/// runs of a `--runs N` fan-out within one process. Best-effort: returns `None` (the run proceeds
+/// untracked) if the registry can't be written, never failing the run.
 #[must_use]
-pub fn register(command: &str, repo: &Path, model: &str) -> Option<Registered> {
+pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option<Active> {
     let dir = dir()?;
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("{}.json", std::process::id()));
-    let run = ActiveRun {
-        pid: std::process::id(),
-        command: command.to_owned(),
-        repo: repo.display().to_string(),
-        model: model.to_owned(),
-        started_at: crate::log::now_secs(),
+    let marker = dir.join(format!("{}-{index}.json", std::process::id()));
+    let active = Active {
+        marker,
+        run: ActiveRun {
+            pid: std::process::id(),
+            index,
+            command: command.to_owned(),
+            repo: repo.display().to_string(),
+            model: model.to_owned(),
+            started_at: crate::log::now_secs(),
+            turns: 0,
+            tool_calls: 0,
+            output_chars: 0,
+        },
     };
-    std::fs::write(&path, serde_json::to_string(&run).ok()?).ok()?;
-    Some(Registered(path))
+    active.try_write().ok()?;
+    Some(active)
 }
 
 /// The runs currently recorded in the registry, for `arc status`, plus any `.json` entries that

@@ -22,3 +22,6 @@ Thumbs.db
 
 # Rust
 /target
+
+# Claude Code
+.claude

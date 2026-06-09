@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -152,12 +152,18 @@ pub fn synthesize(
     dir: &Path,
     ambient_memory: bool,
     json_schema: Option<&str>,
+    mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
     let mut cmd = command("claude");
+    // stream-json + --verbose + partial messages: stream events as the run proceeds — `assistant`
+    // events at turn boundaries plus fine-grained `content_block_delta`s — so live stats update
+    // continuously; the final `result` event carries the same payload `--output-format json` would.
     cmd.args([
         "-p",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
         "--model",
         model,
         "--strict-mcp-config",
@@ -199,16 +205,62 @@ pub fn synthesize(
         stdin.write_all(prompt.as_bytes())?;
     } // dropping stdin closes it, signalling end-of-input
 
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        bail!(
-            "claude exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    // Read the event stream line-by-line as it arrives: fold each `assistant` turn into live stats
+    // (via `on_turn`) and keep the final `result` event — the payload `parse_result` understands.
+    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    let mut result_line: Option<String> = None;
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line?;
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue; // non-JSON noise (e.g. a stdin warning) — skip
+        };
+        match event.get("type").and_then(serde_json::Value::as_str) {
+            Some("stream_event") => {
+                // A content_block_delta's text is the streamed output; its length is the continuous
+                // live signal. Only text_delta carries a string `text` (tool-input/thinking deltas
+                // don't), so probing that field both filters to it and extracts it in one step.
+                if let Some(p) = progress.as_mut()
+                    && event.pointer("/event/type").and_then(serde_json::Value::as_str)
+                        == Some("content_block_delta")
+                    && let Some(text) = event
+                        .pointer("/event/delta/text")
+                        .and_then(serde_json::Value::as_str)
+                {
+                    p.record_text(text.chars().count() as u64);
+                }
+            }
+            Some("assistant") => {
+                if let Some(p) = progress.as_mut() {
+                    let tool_calls = event
+                        .pointer("/message/content")
+                        .and_then(serde_json::Value::as_array)
+                        .map_or(0, |blocks| {
+                            blocks
+                                .iter()
+                                .filter(|b| {
+                                    b.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("tool_use")
+                                })
+                                .count() as u64
+                        });
+                    p.record_turn(tool_calls);
+                }
+            }
+            Some("result") => result_line = Some(line),
+            _ => {}
+        }
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_result(&stdout, model)
+    // stderr is small for `claude -p` (warnings), so reading it after stdout drains won't deadlock.
+    let mut stderr = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut stderr);
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("claude exited with {}: {}", status, stderr.trim());
+    }
+    let result_line = result_line.context("claude produced no `result` event")?;
+    parse_result(&result_line, model)
 }
 
 // AI-output handling (parse_result) and the prompt estimate are exercised by

@@ -12,12 +12,16 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         lines.push(format!("{} active run(s):", active.len()));
         for r in &active {
             lines.push(format!(
-                "  {} · {} · {} · {}s · pid {}",
+                "  {} · {} · {} · {}s · {} turns · {} tools · {} chars · pid {} #{}",
                 r.command,
                 r.repo,
                 r.model,
                 now.saturating_sub(r.started_at),
-                r.pid
+                r.turns,
+                r.tool_calls,
+                r.output_chars,
+                r.pid,
+                r.index
             ));
         }
     }
