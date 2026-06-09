@@ -6,8 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `evolve` structured-output item: one radical proposal.
 const EVOLVE_ITEM: &str = r#"{"type":"object","properties":{"change":{"type":"string"},"rationale":{"type":"string"}},"required":["change","rationale"]}"#;
 
-/// Propose radical, drastic ways a repository could evolve — overhauls, reimaginings, and
-/// otherwise-unspoken directions (the `evolve` command).
+/// The `evolve` command.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EVOLVE_ITEM),

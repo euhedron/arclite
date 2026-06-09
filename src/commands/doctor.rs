@@ -49,7 +49,7 @@ fn probe(program: &str) -> Option<String> {
         .map(|line| line.trim().to_owned())
 }
 
-/// Report runtime, environment, and available tooling.
+/// The `doctor` command.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let runs = crate::log::count();
     let report = Report {

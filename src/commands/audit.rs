@@ -6,8 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `audit` structured-output item: one concrete rule violation.
 const AUDIT_ITEM: &str = r#"{"type":"object","properties":{"rule":{"type":"string"},"location":{"type":"string"},"reason":{"type":"string"}},"required":["rule","location","reason"]}"#;
 
-/// Audit a repository against the provided rules, flagging only violations (the `audit` command):
-/// enforce exactly the rules in context and report only where the code breaks them.
+/// The `audit` command.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(AUDIT_ITEM),

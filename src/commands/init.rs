@@ -1,5 +1,3 @@
-//! `arc init`: scaffold the `.arc` config (and, with `--hook`, an opt-in pre-push gate) for a repo.
-
 use std::path::Path;
 
 use anyhow::Context;
@@ -30,7 +28,7 @@ struct InitReport {
     skipped: Vec<String>,
 }
 
-/// Scaffold arclite's per-repo files, never clobbering what's already there.
+/// The `init` command — never clobbers what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let root = super::resolve_root(&args.path)?;
     let arc = root.join(crate::ARC_DIR);

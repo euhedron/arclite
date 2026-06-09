@@ -4,9 +4,7 @@ use serde_json::Value;
 use crate::cli::{GlobalArgs, LogArgs};
 use crate::output::emit;
 
-/// Show the run history, or one run's full result. Lists from the run log
-/// (`~/.arc/logs/runs.jsonl`) and fetches a single run from the result store
-/// (`~/.arc/logs/results/<id>.json`).
+/// The `log` command.
 pub fn run(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     match &args.id {
         Some(id) => show(id, global),

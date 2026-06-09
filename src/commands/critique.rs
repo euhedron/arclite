@@ -6,7 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `critique` structured-output item: one defect and where it is.
 const CRITIQUE_ITEM: &str = r#"{"type":"object","properties":{"location":{"type":"string"},"defect":{"type":"string"}},"required":["location","defect"]}"#;
 
-/// Critically review a repository for quality defects (the `critique` command).
+/// The `critique` command.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(CRITIQUE_ITEM),

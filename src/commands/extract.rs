@@ -6,9 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `extract` structured-output item: one proposed rule.
 const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"string"},"rule":{"type":"string"},"provenance":{"type":"string"}},"required":["id","rule","provenance"]}"#;
 
-/// Extract reusable rules (standards, anti-patterns, principles) from a repository (the `extract`
-/// command): abstract recurring issues and the standards a repo enforces into discrete,
-/// repo-agnostic rules. Output is *candidate* rules for a human to curate into a rules dir; they
+/// The `extract` command. Output is *candidate* rules for a human to curate into a rules dir; they
 /// shape every future run, so quality matters.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {

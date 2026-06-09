@@ -43,8 +43,7 @@ fn setting(key: &str) -> anyhow::Result<&'static Setting> {
     })
 }
 
-/// Get, set, or list the scalar settings defaults — the current directory's project layer (and the
-/// user layer).
+/// The `config` command.
 pub fn run(args: &ConfigArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     match &args.action {
         ConfigAction::List => list(global),

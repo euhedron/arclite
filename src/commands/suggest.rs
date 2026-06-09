@@ -6,7 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `suggest` structured-output item: one suggestion with its rationale.
 const SUGGEST_ITEM: &str = r#"{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}"#;
 
-/// Suggest where attention is best spent in a repository (the `suggest` command).
+/// The `suggest` command.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(SUGGEST_ITEM),

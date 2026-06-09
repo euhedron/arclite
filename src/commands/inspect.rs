@@ -118,7 +118,7 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     Ok((report, root))
 }
 
-/// Report structured repo facts (the `inspect` command).
+/// The `inspect` command.
 pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let (report, _root) = gather(&args.path)?;
 

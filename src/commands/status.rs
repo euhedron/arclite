@@ -1,7 +1,7 @@
 use crate::cli::{GlobalArgs, StatusArgs};
 use crate::output::emit;
 
-/// Report the runs currently in flight (the active-run registry).
+/// The `status` command.
 pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let (active, unreadable) = crate::runs::active()?;
     let now = crate::log::now_secs();
