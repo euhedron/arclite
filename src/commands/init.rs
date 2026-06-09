@@ -29,7 +29,7 @@ struct InitReport {
     skipped: Vec<String>,
 }
 
-/// Scaffold arclite's per-repo files, never clobbering what's already there. Deterministic — no LLM.
+/// Scaffold arclite's per-repo files, never clobbering what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let root = std::path::absolute(&args.path)
         .with_context(|| format!("cannot resolve {}", args.path.display()))?;

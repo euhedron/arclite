@@ -50,19 +50,30 @@ pub fn register(command: &str, repo: &Path, model: &str) -> Option<Registered> {
     Some(Registered(path))
 }
 
-/// The runs currently recorded in the registry, for `arc status`. Unreadable/garbled entries are
-/// skipped. A marker normally clears on exit; a hard-killed process can leave a stale one behind.
-pub fn active() -> Vec<ActiveRun> {
+/// The runs currently recorded in the registry, for `arc status`, plus any `.json` entries that
+/// couldn't be read or parsed — returned (not silently dropped) so `arc status` can surface them
+/// rather than under-report what's in flight. A marker normally clears on exit; a hard-killed
+/// process can leave a stale one behind.
+pub fn active() -> (Vec<ActiveRun>, Vec<PathBuf>) {
     let Some(dir) = dir() else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    entries
-        .filter_map(|entry| {
-            let text = std::fs::read_to_string(entry.ok()?.path()).ok()?;
-            serde_json::from_str(&text).ok()
-        })
-        .collect()
+    let mut runs = Vec::new();
+    let mut unreadable = Vec::new();
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<ActiveRun>(&text).ok())
+        {
+            Some(run) => runs.push(run),
+            None => unreadable.push(path),
+        }
+    }
+    (runs, unreadable)
 }

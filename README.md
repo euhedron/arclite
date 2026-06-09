@@ -19,17 +19,17 @@ git clone https://github.com/nikganderson/arclite.git && cd arclite
 cargo install --path .        # installs the `arc` command; or `cargo build --release` → target/release/arc
 ```
 
-**Use** — the deterministic commands (`doctor`, `inspect`) cost nothing; the AI commands take a repo path (default `.`):
+**Use** — the AI commands take a repo path (default `.`):
 
 ```sh
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
-arc inspect <repo>                   # no AI — free
-arc status                           # runs currently in flight (no AI)
+arc inspect <repo>                   # report structured facts about a repo
+arc status                           # runs currently in flight
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
 arc summarize <repo>                 # runs on the default context (scan + README + manifests)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
 arc audit   <repo> --ruleset <id>    # --ruleset selects the rules (else the configured default)
-arc critique <repo> --include src    # --dry-run previews any AI run's prompt + cost at $0
+arc critique <repo> --include src    # --dry-run previews any run's prompt + cost
 arc extract <repo> --include src
 ```
 
@@ -69,7 +69,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 - **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; don't re-encode invocations as a parallel config language that only mirrors argv and rots against it.
 - **Maximally transparent, observable, and honest.**
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
-- **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model default is configurable down for cost); preview at $0 (`--dry-run`); report every run parameter alongside real token usage + cost; balance context utilization against value.
+- **Sensible, observable, configurable AI spend** — no *arbitrary* defaults (the model default is configurable down for cost); preview before spending (`--dry-run`); report every run parameter alongside real token usage + cost; balance context utilization against value.
 - **Trace, resolve, evolve** — unexpected/sub-par results are signal: make them traceable, diagnose, then improve the system — including the rules and prompts themselves, which are validated and sharpened through exercise, not assumed correct.
 - **Adversarial, self-accountable** — build in self-checking (arclite is exercised on itself); a gate turns that into accountability — change proceeds only once the system is balanced, with no outstanding violations. The gate tests the **rules** as much as the code: resolve a finding by fixing the code, or — when the finding itself is off — by sharpening the rule.
 - **Never done — balance is a floor, not a finish.** A clean audit isn't a win to rest on; it's the balanced state that lets the next change proceed. Commands and rules are levers to fire and tune to keep the loop running; when a repo stops yielding signal, point arclite at another to surface its own weaknesses.

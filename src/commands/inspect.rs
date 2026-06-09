@@ -47,7 +47,7 @@ pub struct InspectReport {
 }
 
 /// Walk a repository/directory and collect structured facts, returning them with the resolved
-/// absolute root (so callers reuse it rather than re-resolving). Deterministic — no LLM.
+/// absolute root (so callers reuse it rather than re-resolving).
 pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     anyhow::ensure!(path.exists(), "cannot access {}", path.display());
     let root =

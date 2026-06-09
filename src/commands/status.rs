@@ -1,14 +1,15 @@
 use crate::cli::{GlobalArgs, StatusArgs};
 use crate::output::emit;
 
-/// Report the runs currently in flight (the active-run registry). Deterministic — no LLM.
+/// Report the runs currently in flight (the active-run registry).
 pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let active = crate::runs::active();
+    let (active, unreadable) = crate::runs::active();
     let now = crate::log::now_secs();
-    let human = if active.is_empty() {
-        "no active runs".to_owned()
+    let mut lines = Vec::new();
+    if active.is_empty() {
+        lines.push("no active runs".to_owned());
     } else {
-        let mut lines = vec![format!("{} active run(s):", active.len())];
+        lines.push(format!("{} active run(s):", active.len()));
         for r in &active {
             lines.push(format!(
                 "  {} · {} · {} · {}s · pid {}",
@@ -19,7 +20,22 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 r.pid
             ));
         }
-        lines.join("\n")
-    };
-    emit(&active, &human, global.json)
+    }
+    // Surface entries we couldn't read or parse, rather than under-reporting in-flight runs.
+    if !unreadable.is_empty() {
+        lines.push(format!(
+            "{} unreadable registry entr{} skipped:",
+            unreadable.len(),
+            if unreadable.len() == 1 { "y" } else { "ies" }
+        ));
+        for path in &unreadable {
+            lines.push(format!("  {}", path.display()));
+        }
+    }
+    let human = lines.join("\n");
+    let payload = serde_json::json!({
+        "active": &active,
+        "unreadable": unreadable.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+    });
+    emit(&payload, &human, global.json)
 }

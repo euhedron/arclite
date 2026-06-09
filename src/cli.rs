@@ -33,9 +33,9 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Walk a repository and report structured facts about it.
     Inspect(InspectArgs),
-    /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate). No LLM.
+    /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate).
     Init(InitArgs),
-    /// Report the runs currently in flight (the active-run registry). No LLM.
+    /// Report the runs currently in flight (the active-run registry).
     Status(StatusArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),

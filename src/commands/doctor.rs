@@ -46,7 +46,7 @@ fn probe(program: &str) -> Option<String> {
         .map(|line| line.trim().to_owned())
 }
 
-/// Report runtime, environment, and available tooling. Deterministic — no LLM.
+/// Report runtime, environment, and available tooling.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let runs = crate::log::count();
     let report = Report {

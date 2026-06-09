@@ -480,7 +480,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
                 .to_string()
         });
         let mut human = format!(
-            "[dry run — no AI call, $0.00]\nrun: {}\nprompt: {} chars (~{} tokens)\nnote: {}",
+            "[dry run]\nrun: {}\nprompt: {} chars (~{} tokens)\nnote: {}",
             report.human(),
             estimate.chars,
             estimate.approx_tokens,
