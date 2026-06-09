@@ -357,7 +357,7 @@ pub fn gather_context(
     let excluded = if includes.is_empty() {
         vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
     } else {
-        Vec::new()
+        vec!["the repo's other source files (beyond those added via --include/--changed)".to_owned()]
     };
 
     Ok(Context {
