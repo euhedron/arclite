@@ -119,10 +119,10 @@ struct ClaudeUsage {
     cache_read_input_tokens: u64,
 }
 
-/// Parse the Claude CLI JSON payload into a [`Synthesis`]. `requested` is the model id arclite
-/// asked for; the model *reported* is resolved from the payload's per-model usage — what actually
-/// ran — with `requested` only as the fallback when the payload omits that ground truth.
-pub fn parse_result(json: &str, requested: &str) -> anyhow::Result<Synthesis> {
+/// Parse the Claude CLI JSON payload into a [`Synthesis`]. The model reported is resolved from the
+/// payload's per-model usage — the models that actually ran — never echoed from the request, so a
+/// substitution can't mislabel the run.
+pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
     let parsed: ClaudeJson =
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
     if parsed.is_error.unwrap_or(false) {
@@ -139,12 +139,14 @@ pub fn parse_result(json: &str, requested: &str) -> anyhow::Result<Synthesis> {
         .total_cost_usd
         .context("claude JSON had no `total_cost_usd` field")?;
     // The synthesis model is the modelUsage entry that produced the output — the one with the most
-    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls).
+    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls). Like usage
+    // and cost, an absent modelUsage errors loudly rather than substituting a plausible label.
     let model = parsed
         .model_usage
         .iter()
         .max_by_key(|(_, usage)| usage.output_tokens)
-        .map_or_else(|| requested.to_owned(), |(id, _)| id.clone());
+        .map(|(id, _)| id.clone())
+        .context("claude JSON had no `modelUsage` entries")?;
     Ok(Synthesis {
         text,
         usage: Usage {
@@ -279,7 +281,7 @@ pub fn synthesize(
         bail!("claude exited with {}: {}", status, stderr.trim());
     }
     let result_line = result_line.context("claude produced no `result` event")?;
-    parse_result(&result_line, model)
+    parse_result(&result_line)
 }
 
 // AI-output handling (parse_result) and the prompt estimate are exercised by
