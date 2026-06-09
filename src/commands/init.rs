@@ -124,7 +124,7 @@ fn activate_hooks(root: &Path) -> anyhow::Result<()> {
 fn make_executable(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(0o755); // rwxr-xr-x — a git hook must be executable to run
+    perms.set_mode(0o755); // a git hook must be executable to run
     std::fs::set_permissions(path, perms)
         .with_context(|| format!("cannot set the executable bit on {}", path.display()))
 }
