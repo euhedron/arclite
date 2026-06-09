@@ -87,6 +87,12 @@ impl Settings {
     pub fn ruleset(&self, id: &str) -> Option<&[PathBuf]> {
         self.rulesets.get(id).map(Vec::as_slice)
     }
+
+    /// Whether per-run logging is on: the default, unless explicitly disabled. Single source for the
+    /// "on unless `defaults.logging = false`" rule that `run_synthesis` gates on and `config` reports.
+    pub fn logging_enabled(&self) -> bool {
+        self.default_logging != Some(false)
+    }
 }
 
 /// Resolve a ruleset source: `~/…` → home; absolute → as-is; relative → relative to the settings

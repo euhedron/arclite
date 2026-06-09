@@ -52,8 +52,7 @@ pub fn run_synthesis(
         .model
         .clone()
         .or_else(|| settings.default_model.clone());
-    // Per-run logging is on by default; a user/project setting (`defaults.logging = false`) disables it.
-    let log = settings.default_logging != Some(false);
+    let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
     let config: Vec<String> = settings

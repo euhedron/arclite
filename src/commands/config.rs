@@ -7,7 +7,10 @@ use crate::settings::Settings;
 
 /// The settable scalar defaults — validated so a typo'd key is rejected, never silently written.
 /// (Rulesets are structured source-lists, not scalars, so they stay hand-edited or scaffolded.)
-const KEYS: &[&str] = &["defaults.model", "defaults.ruleset", "defaults.logging"];
+const KEY_MODEL: &str = "defaults.model";
+const KEY_RULESET: &str = "defaults.ruleset";
+const KEY_LOGGING: &str = "defaults.logging";
+const KEYS: &[&str] = &[KEY_MODEL, KEY_RULESET, KEY_LOGGING];
 
 /// Get, set, or list the scalar settings defaults — the current directory's project layer (and the
 /// user layer).
@@ -33,7 +36,7 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
     let listed = Listed {
         model: s.default_model.as_deref(),
         ruleset: s.default_ruleset.as_deref(),
-        logging: s.default_logging != Some(false),
+        logging: s.logging_enabled(),
         layers: s.active.iter().map(|p| p.display().to_string()).collect(),
     };
     let human = format!(
@@ -54,9 +57,9 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
 fn get(key: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let s = Settings::load(std::path::Path::new("."))?;
     let value = match key {
-        "defaults.model" => s.default_model.clone(),
-        "defaults.ruleset" => s.default_ruleset.clone(),
-        "defaults.logging" => Some((s.default_logging != Some(false)).to_string()),
+        KEY_MODEL => s.default_model.clone(),
+        KEY_RULESET => s.default_ruleset.clone(),
+        KEY_LOGGING => Some(s.logging_enabled().to_string()),
         _ => bail!("unknown setting `{key}` (known: {})", KEYS.join(", ")),
     };
     let human = value.clone().unwrap_or_else(|| "(unset)".to_owned());
@@ -91,7 +94,7 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
     let sub = key
         .strip_prefix("defaults.")
         .expect("every KEY starts with `defaults.`");
-    let typed = if key == "defaults.logging" {
+    let typed = if key == KEY_LOGGING {
         serde_json::Value::Bool(
             value
                 .parse::<bool>()
