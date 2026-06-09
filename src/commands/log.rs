@@ -96,13 +96,18 @@ fn row(r: &Value, now: u64) -> String {
     )
 }
 
+// Seconds per minute, hour, and day — the bucket thresholds and divisors for the relative age below.
+const SECS_PER_MINUTE: u64 = 60;
+const SECS_PER_HOUR: u64 = 60 * SECS_PER_MINUTE;
+const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
+
 /// A coarse relative age: seconds, minutes, hours, or days.
 fn age(secs: u64) -> String {
     match secs {
-        s if s < 60 => format!("{s}s ago"),
-        s if s < 3600 => format!("{}m ago", s / 60),
-        s if s < 86400 => format!("{}h ago", s / 3600),
-        s => format!("{}d ago", s / 86400),
+        s if s < SECS_PER_MINUTE => format!("{s}s ago"),
+        s if s < SECS_PER_HOUR => format!("{}m ago", s / SECS_PER_MINUTE),
+        s if s < SECS_PER_DAY => format!("{}h ago", s / SECS_PER_HOUR),
+        s => format!("{}d ago", s / SECS_PER_DAY),
     }
 }
 
