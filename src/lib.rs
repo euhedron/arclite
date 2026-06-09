@@ -44,6 +44,7 @@ pub fn run() -> ExitCode {
         Command::Status(args) => {
             commands::status::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        Command::Rules(args) => commands::rules::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),

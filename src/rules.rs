@@ -12,10 +12,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-/// A single rule: an `id` and its `body`.
+/// A single rule: an `id`, its `body`, and the file it was loaded from.
 pub struct Rule {
     pub id: String,
     pub body: String,
+    /// The file this rule came from — its provenance, surfaced by `arc rules`. Carried on the rule
+    /// so the dedup in [`load_sources`] keeps the *winning* source when ids collide across sources.
+    pub source: PathBuf,
 }
 
 /// Load `path` as a rule, or `None` if it isn't a `.md` file.
@@ -31,6 +34,7 @@ fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
     Ok(Some(Rule {
         id,
         body: body.trim().to_owned(),
+        source: path.to_owned(),
     }))
 }
 

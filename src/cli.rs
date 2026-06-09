@@ -37,6 +37,8 @@ pub enum Command {
     Init(InitArgs),
     /// Report the runs currently in flight (the active-run registry).
     Status(StatusArgs),
+    /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
+    Rules(RulesArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
     /// Suggest where attention is best spent in a repository.
@@ -56,6 +58,20 @@ pub struct DoctorArgs {}
 /// Arguments for `arc status`.
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
+
+/// Arguments for `arc rules`.
+#[derive(Debug, Args)]
+pub struct RulesArgs {
+    /// Path to the repository or directory (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Use a named ruleset from settings (else the configured default).
+    #[arg(long, value_name = "ID")]
+    pub ruleset: Option<String>,
+    /// An ad-hoc rule directory or file, overriding the ruleset.
+    #[arg(long, value_name = "PATH")]
+    pub rules: Option<PathBuf>,
+}
 
 /// Arguments for `arclite inspect`.
 #[derive(Debug, Args)]

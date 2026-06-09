@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod extract;
 pub mod init;
 pub mod inspect;
+pub mod rules;
 pub mod status;
 pub mod suggest;
 pub mod summarize;
@@ -44,7 +45,8 @@ pub fn run_synthesis(
     build_prompt: impl FnOnce(&str) -> String,
 ) -> anyhow::Result<ExitCode> {
     let settings = crate::settings::Settings::load(&args.path)?;
-    let rule_sources = resolve_rule_sources(args, &settings)?;
+    let resolution =
+        resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
     let model = args
         .model
         .clone()
@@ -61,7 +63,7 @@ pub fn run_synthesis(
     let ctx = synth::gather_context(
         &args.path,
         &args.include,
-        &rule_sources,
+        &resolution.sources,
         args.max_file_chars,
         args.changed,
     )?;
@@ -109,24 +111,42 @@ pub fn run_synthesis(
     )
 }
 
+/// What `--rules`/`--ruleset`/`defaults.ruleset` resolved to: a human description of the selection
+/// (for reporting) plus the source paths to load. Shared by `run_synthesis` and `arc rules`.
+pub(crate) struct RuleResolution {
+    pub description: String,
+    pub sources: Vec<std::path::PathBuf>,
+}
+
 /// Resolve which rule sources to load, in precedence order: an ad-hoc `--rules <path>`, else a
 /// named `--ruleset <id>` (or the configured `defaults.ruleset`) from settings, else none.
-fn resolve_rule_sources(
-    args: &SynthArgs,
+pub(crate) fn resolve_rule_sources(
+    rules: Option<&std::path::Path>,
+    ruleset: Option<&str>,
     settings: &crate::settings::Settings,
-) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    if let Some(path) = &args.rules {
-        return Ok(vec![path.clone()]);
+) -> anyhow::Result<RuleResolution> {
+    if let Some(path) = rules {
+        return Ok(RuleResolution {
+            description: format!("ad-hoc rules: {}", path.display()),
+            sources: vec![path.to_path_buf()],
+        });
     }
-    let Some(id) = args
-        .ruleset
-        .as_deref()
-        .or(settings.default_ruleset.as_deref())
-    else {
-        return Ok(Vec::new());
+    let from_flag = ruleset.is_some();
+    let Some(id) = ruleset.or(settings.default_ruleset.as_deref()) else {
+        return Ok(RuleResolution {
+            description: "no ruleset selected".to_owned(),
+            sources: Vec::new(),
+        });
     };
-    settings
+    let sources = settings
         .ruleset(id)
         .map(<[std::path::PathBuf]>::to_vec)
-        .ok_or_else(|| anyhow::anyhow!("ruleset `{id}` is not defined in .arc/settings.json"))
+        .ok_or_else(|| anyhow::anyhow!("ruleset `{id}` is not defined in .arc/settings.json"))?;
+    Ok(RuleResolution {
+        description: format!(
+            "ruleset `{id}` (from {})",
+            if from_flag { "--ruleset" } else { "defaults.ruleset" }
+        ),
+        sources,
+    })
 }

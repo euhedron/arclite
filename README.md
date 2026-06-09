@@ -25,6 +25,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # report structured facts about a repo
 arc status                           # runs currently in flight
+arc rules                            # the rules in play (ruleset, sources, provenance)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
 arc summarize <repo>                 # runs on the default context (scan + README + manifests)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
@@ -91,7 +92,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 ## Open questions
 
 - **Rules — format & lifecycle.** The rule format (a **Markdown file**; filename stem = `id`) and ruleset composition ship (see Configuration). Open: frontmatter for *selective inclusion* (`kind`, `scope`, `tags`), added only when something filters on it; rename-stability of filename-ids; whether prompts/todos share the format.
-- **Rules — sharing & evolution.** `extract` mines candidates; curate them into a ruleset; `--ruleset` composes them into any run (ships). Open: cross-repo aggregation + dedup of rules that recur in 2+ places (promote to a shared pool), provenance-driven merge, and visibility into the scope of rules in play. (The edition-2024 false positive from an early `suggest` run is the kind of thing a sharpened rule resolves *traceably*.)
+- **Rules — sharing & evolution.** `extract` mines candidates; curate them into a ruleset; `--ruleset` composes them into any run; `arc rules` shows the rules in play (ruleset, sources, per-rule provenance) (ships). Open: cross-repo aggregation + dedup of rules that recur in 2+ places (promote to a shared pool) and provenance-driven merge. (The edition-2024 false positive from an early `suggest` run is the kind of thing a sharpened rule resolves *traceably*.)
 - **Gating / hooks for any command (cost-visible).** The **gate** ships: `--fail-on-findings` makes any command with a `results` list exit non-zero (code 2) when it's non-empty, now wired into an opt-in, cost-loud git **pre-push** hook. Still open: **Claude Code hook events** invoking `arc` (complementary to git hooks, not a replacement), and whether a pre-commit variant ever earns its keep.- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` surfaces what's worth attention, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules). Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb.
 - **Auto-context depth.** The default context includes the *detected* manifests (root or nested) + the root README. Open: search wider for docs vs. keeping a light default + explicit `--include`.
 - **Prompts as files?** Command prompts are inline in code today. Externalizing them as **Markdown** (the same substrate as rules) would make them tunable without a rebuild — do it when a prompt needs tuning without recompiling.
