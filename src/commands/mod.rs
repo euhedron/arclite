@@ -15,11 +15,12 @@ use crate::synth::{self, SynthOptions};
 
 /// An optional structured-output mode a command can offer: a JSON Schema the model's result is
 /// validated against (returned as `structured_output`), plus a prompt note describing the shape.
-/// Used only when `--structured` is passed; commands without one reject the flag. Every structured
-/// result is a generic `results` array (with a command-specific item shape), so the gate, `--ranked`,
-/// and multi-run aggregation treat them uniformly; `--fail-on-findings` blocks when `results` is non-empty.
+/// The schema is the shared `results`-array envelope ([`crate::synth::results_schema`]) wrapping the
+/// command's own item shape — so commands declare only what differs. Used only when `--structured`
+/// is passed; commands without one reject the flag. The gate, `--ranked`, and multi-run aggregation
+/// all treat the `results` array uniformly; `--fail-on-findings` blocks when it's non-empty.
 pub struct Structure {
-    pub schema: &'static str,
+    pub schema: String,
     pub note: &'static str,
 }
 
@@ -77,9 +78,9 @@ pub fn run_synthesis(
             )
         })?;
         prompt.push_str(s.note);
-        // Gate on the `results` array every structured schema produces.
-        let gate = args.fail_on_findings.then_some("results");
-        (Some(s.schema), gate)
+        // Gate on the `results` array the schemas produce — the key single-sourced in synth.
+        let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);
+        (Some(s.schema.as_str()), gate)
     } else {
         (None, None)
     };

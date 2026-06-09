@@ -23,6 +23,20 @@ const GATE_BLOCKED_EXIT: u8 = 2;
 
 const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 
+/// The single key for every command's structured output: a `results` array. Defined once — the
+/// schema is built from it ([`results_schema`]), the gate reads it, and multi-run unions it — so it
+/// can't drift across schema and code.
+pub(crate) const RESULTS_KEY: &str = "results";
+
+/// Wrap a command's array-item schema in the shared `{ results: [ <item> ] }` envelope, so each
+/// command declares only its item shape. The CLI's structured output requires a root object (a
+/// top-level array is rejected — confirmed by exercise), so the list can't be the root.
+pub(crate) fn results_schema(item: &str) -> String {
+    format!(
+        r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}}}},"required":["{RESULTS_KEY}"]}}"#
+    )
+}
+
 /// Configuration shared by every synthesis-backed command.
 pub struct SynthOptions<'a> {
     /// Model id; `None` uses [`DEFAULT_MODEL`].
@@ -716,7 +730,7 @@ fn union_results<'a>(
 ) -> serde_json::Value {
     let mut pooled: Vec<serde_json::Value> = Vec::new();
     for value in structured {
-        if let Some(items) = value.get("results").and_then(serde_json::Value::as_array) {
+        if let Some(items) = value.get(RESULTS_KEY).and_then(serde_json::Value::as_array) {
             for item in items {
                 if !pooled.contains(item) {
                     pooled.push(item.clone());
@@ -724,7 +738,9 @@ fn union_results<'a>(
             }
         }
     }
-    serde_json::json!({ "results": pooled })
+    let mut obj = serde_json::Map::new();
+    obj.insert(RESULTS_KEY.to_owned(), serde_json::Value::Array(pooled));
+    serde_json::Value::Object(obj)
 }
 
 /// Sum token usage and cost across runs; the model is the same across them, so take the first's.

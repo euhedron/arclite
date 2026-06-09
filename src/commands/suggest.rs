@@ -3,16 +3,16 @@ use std::process::ExitCode;
 use super::Structure;
 use crate::cli::{GlobalArgs, SynthArgs};
 
-/// The `suggest` structured-output mode: a `results` array (ordering is the shared `--ranked`
-/// option, not baked in here).
-const SUGGEST_STRUCTURE: Structure = Structure {
-    schema: r#"{"type":"object","properties":{"results":{"type":"array","items":{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}}},"required":["results"]}"#,
-    note: "\n\nReturn the result as structured data: a `results` array, each with `suggestion` (one line) and `rationale` (one clause).",
-};
+/// The `suggest` structured-output item: one suggestion with its rationale.
+const SUGGEST_ITEM: &str = r#"{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}"#;
 
 /// Suggest where attention is best spent in a repository (the `suggest` command).
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
-    super::run_synthesis(args, global, "suggest", Some(SUGGEST_STRUCTURE), |ctx| {
+    let structure = Structure {
+        schema: crate::synth::results_schema(SUGGEST_ITEM),
+        note: "\n\nReturn the result as structured data — each item with `suggestion` (one line) and `rationale` (one clause).",
+    };
+    super::run_synthesis(args, global, "suggest", Some(structure), |ctx| {
         format!(
             "You are reviewing a code repository to advise where attention is best spent.\n\n\
              {ctx}\n\
