@@ -46,8 +46,8 @@ pub struct Active {
 }
 
 impl Active {
-    /// Add streamed output characters to the live tally and rewrite the marker — the continuous
-    /// progress signal (the exact token count comes back only at message end, in the final report).
+    /// Add streamed output characters to the live tally and rewrite the marker (why characters:
+    /// see [`ActiveRun::output_chars`]).
     pub fn record_text(&mut self, chars: u64) {
         self.run.output_chars += chars;
         self.write();
