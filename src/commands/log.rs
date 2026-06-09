@@ -28,7 +28,7 @@ fn list(all: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     };
     let mut records: Vec<Value> = Vec::new();
     let mut unparsed = 0usize;
-    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+    for line in crate::log::record_lines(&text) {
         match serde_json::from_str::<Value>(line) {
             Ok(v) => records.push(v),
             Err(_) => unparsed += 1,

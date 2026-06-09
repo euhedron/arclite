@@ -32,13 +32,20 @@ pub fn result_path(id: &str) -> Option<PathBuf> {
     Some(logs_dir()?.join("results").join(format!("{id}.json")))
 }
 
+/// The record lines of a run-log `text`: non-blank lines, one JSON record each. The single
+/// definition of "a record line" — both [`count`] and `arc log`'s listing build on it, so the
+/// record-per-line format lives in one place rather than drifting between them.
+pub fn record_lines(text: &str) -> impl Iterator<Item = &str> + '_ {
+    text.lines().filter(|l| !l.trim().is_empty())
+}
+
 /// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs
 /// yet), `Ok(n)` for a readable log, and `Err` when it exists but can't be read: an unreadable log
 /// is surfaced distinctly rather than silently shown as 0, which would hide a dropped/corrupt log.
 pub fn count() -> std::io::Result<usize> {
     let Some(p) = path() else { return Ok(0) };
     match std::fs::read_to_string(&p) {
-        Ok(text) => Ok(text.lines().filter(|l| !l.trim().is_empty()).count()),
+        Ok(text) => Ok(record_lines(&text).count()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
         Err(e) => Err(e),
     }
