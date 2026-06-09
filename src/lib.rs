@@ -26,6 +26,10 @@ pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
     Some(dirs::home_dir()?.join(ARC_DIR))
 }
 
+/// The settings filename inside an `.arc` directory — single-sourced (like [`ARC_DIR`]) so a rename
+/// can't rot across the user/project loaders, `config`, and `init`.
+pub(crate) const SETTINGS_FILE: &str = "settings.json";
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
 /// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr.
 #[must_use]

@@ -43,14 +43,24 @@ struct RawRuleset {
 }
 
 impl Settings {
+    /// The user-layer settings file, `~/.arc/settings.json` (`None` if the home dir is unknown).
+    pub fn user_path() -> Option<PathBuf> {
+        Some(crate::arc_home()?.join(crate::SETTINGS_FILE))
+    }
+
+    /// The project-layer settings file for `repo`: `<repo>/.arc/settings.json`.
+    pub fn project_path(repo: &Path) -> PathBuf {
+        repo.join(crate::ARC_DIR).join(crate::SETTINGS_FILE)
+    }
+
     /// Load + merge `~/.arc/settings.json` then `<repo>/.arc/settings.json`. A missing layer is
     /// fine; a present-but-unreadable or malformed file is a hard error.
     pub fn load(repo: &Path) -> anyhow::Result<Self> {
         let mut settings = Settings::default();
-        if let Some(home) = crate::arc_home() {
-            settings.merge(&home.join("settings.json"))?;
+        if let Some(path) = Self::user_path() {
+            settings.merge(&path)?;
         }
-        settings.merge(&repo.join(crate::ARC_DIR).join("settings.json"))?;
+        settings.merge(&Self::project_path(repo))?;
         Ok(settings)
     }
 

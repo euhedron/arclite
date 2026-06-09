@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::cli::{GlobalArgs, InitArgs};
 use crate::output::emit;
+use crate::settings::Settings;
 
 /// Starter project settings: a `project` ruleset sourcing `.arc/rules`, set as the default, so the
 /// AI commands weigh the repo's own rules without further setup.
@@ -39,7 +40,7 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     ensure_dir(&arc.join("rules"), &mut created, &mut skipped)?;
     write_if_absent(
-        &arc.join("settings.json"),
+        &Settings::project_path(&root),
         STARTER_SETTINGS,
         &mut created,
         &mut skipped,
