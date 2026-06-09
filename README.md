@@ -26,6 +26,7 @@ arc                                  # no args → help (the binary is `arc`; th
 arc inspect <repo>                   # report structured facts about a repo
 arc status                           # runs currently in flight
 arc rules                            # the rules in play (ruleset, sources, provenance)
+arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
 arc summarize <repo>                 # runs on the default context (scan + README + manifests)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
@@ -36,7 +37,7 @@ arc extract <repo> --include src
 
 Shared options on every AI command select rules (`--ruleset`/`--rules`), shape the context (`--include`, `--changed`, `--max-file-chars`), choose the model and tools (`--model`, `--allow-tool`, `--ambient-memory`), and control output (`--structured`, `--fail-on-findings` (**gate**), `--ranked`, `--runs`, `--output`, `--dry-run`, `--json`) — run `arc <command> --help` for the authoritative, always-current descriptions. Every run echoes the exact parameters it used — model, tools, memory isolation, the full **context manifest**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost (see [Principles](#principles)).
 
-**Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging) and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
+**Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging) — by hand or with `arc config set` — and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
 
 **Logging** — every *real* AI run appends a one-line JSON record — the run's parameters (command, repo, model, memory, context sources, and gate outcome) plus its ground-truth tokens + cost — to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it off; dry runs are never logged (no spend, nothing to record).
 

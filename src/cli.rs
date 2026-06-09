@@ -39,6 +39,8 @@ pub enum Command {
     Status(StatusArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),
+    /// Get, set, or list arclite settings (the model, ruleset, and logging defaults).
+    Config(ConfigArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
     /// Suggest where attention is best spent in a repository.
@@ -71,6 +73,35 @@ pub struct RulesArgs {
     /// An ad-hoc rule directory or file, overriding the ruleset.
     #[arg(long, value_name = "PATH")]
     pub rules: Option<PathBuf>,
+}
+
+/// Arguments for `arc config`.
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: ConfigAction,
+}
+
+/// What `arc config` does.
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    /// Show all resolved settings and the active settings layers.
+    List,
+    /// Print one setting's resolved value (e.g. `defaults.model`).
+    Get {
+        /// The setting key: `defaults.model`, `defaults.ruleset`, or `defaults.logging`.
+        key: String,
+    },
+    /// Set a setting in a layer — the project's `.arc` by default, `--user` for `~/.arc`.
+    Set {
+        /// The setting key: `defaults.model`, `defaults.ruleset`, or `defaults.logging`.
+        key: String,
+        /// The value (for `defaults.logging`, `true` or `false`).
+        value: String,
+        /// Write the user layer (`~/.arc/settings.json`) instead of the project's.
+        #[arg(long)]
+        user: bool,
+    },
 }
 
 /// Arguments for `arclite inspect`.
