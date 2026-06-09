@@ -30,8 +30,20 @@ pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
+/// Read a file's text, with a missing file as `None` — the one statement of the "absent is benign,
+/// any other IO failure is a real error" distinction, shared by every optional-file read so a
+/// permission/corruption failure can't masquerade as "nothing there yet". Each caller decides what
+/// absence means (no runs logged, an optional settings layer, a fresh file).
+pub(crate) fn read_optional(path: &std::path::Path) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
-/// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr.
+/// `SUCCESS`, the gate's distinct block code, or `FAILURE` with the error on stderr.
 #[must_use]
 pub fn run() -> ExitCode {
     let cli = Cli::parse();

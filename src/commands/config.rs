@@ -109,13 +109,12 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
         Settings::project_path(std::path::Path::new("."))
     };
     // Load the existing layer (or start fresh) as a Value, so unrelated keys round-trip untouched.
-    let mut root: serde_json::Value = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
+    let mut root: serde_json::Value = match crate::read_optional(&path)
+        .with_context(|| format!("cannot read settings file {}", path.display()))?
+    {
+        Some(text) => serde_json::from_str(&text)
             .with_context(|| format!("invalid settings file {}", path.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
-        Err(e) => {
-            return Err(e).with_context(|| format!("cannot read settings file {}", path.display()));
-        }
+        None => serde_json::json!({}),
     };
     let typed = if setting.is_bool {
         serde_json::Value::Bool(

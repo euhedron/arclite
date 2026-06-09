@@ -65,11 +65,11 @@ impl Settings {
     }
 
     fn merge(&mut self, path: &Path) -> anyhow::Result<()> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            // A missing file is fine — this layer is optional.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e).with_context(|| format!("cannot read settings file {}", path.display())),
+        // A missing file is fine — this layer is optional.
+        let Some(text) = crate::read_optional(path)
+            .with_context(|| format!("cannot read settings file {}", path.display()))?
+        else {
+            return Ok(());
         };
         let raw: Raw = serde_json::from_str(&text)
             .with_context(|| format!("invalid settings file {}", path.display()))?;

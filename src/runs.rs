@@ -108,8 +108,8 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
 /// The runs currently recorded in the registry, for `arc status`, plus any `.json` entries that
 /// couldn't be read or parsed (returned, not dropped, so `arc status` surfaces them). A missing
 /// registry is not an error — nothing is in flight; a genuine read failure (of the directory or an
-/// entry) is, distinguished like [`crate::log::count`] so a permission/IO error can't masquerade as
-/// "no active runs". A marker normally clears on exit; a hard-killed process can leave a stale one.
+/// entry) is — [`crate::read_optional`]'s absent-vs-failed distinction, applied to a directory
+/// listing. A marker normally clears on exit; a hard-killed process can leave a stale one.
 pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
     let Some(dir) = dir() else {
         return Ok((Vec::new(), Vec::new()));

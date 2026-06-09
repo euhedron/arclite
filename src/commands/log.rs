@@ -19,13 +19,9 @@ const DEFAULT_LIMIT: usize = 20;
 
 fn list(all: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     let path = crate::log::path().context("cannot determine the run-log path")?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(e).with_context(|| format!("cannot read the run log {}", path.display()));
-        }
-    };
+    let text = crate::read_optional(&path)
+        .with_context(|| format!("cannot read the run log {}", path.display()))?
+        .unwrap_or_default();
     let mut records: Vec<Value> = Vec::new();
     let mut unparsed = 0usize;
     for line in crate::log::record_lines(&text) {

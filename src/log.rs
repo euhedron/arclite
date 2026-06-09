@@ -44,11 +44,7 @@ pub fn record_lines(text: &str) -> impl Iterator<Item = &str> + '_ {
 /// is surfaced distinctly rather than silently shown as 0, which would hide a dropped/corrupt log.
 pub fn count() -> std::io::Result<usize> {
     let Some(p) = path() else { return Ok(0) };
-    match std::fs::read_to_string(&p) {
-        Ok(text) => Ok(record_lines(&text).count()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(e) => Err(e),
-    }
+    Ok(crate::read_optional(&p)?.map_or(0, |text| record_lines(&text).count()))
 }
 
 /// Create `path`'s parent directory and run `write`, returning `Some(path)` on success. A failure
