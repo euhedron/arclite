@@ -440,6 +440,8 @@ struct SynthOutput<'a> {
 /// spend, no call). The full [`ai::Usage`] is nested verbatim, so token/cost fields single-source.
 #[derive(Serialize)]
 struct RunRecord<'a> {
+    /// Unique run id (`<ts>-<pid>`) — keys the full-result store at `~/.arc/logs/results/<id>.json`.
+    id: String,
     ts: u64,
     command: &'a str,
     repo: String,
@@ -453,6 +455,15 @@ struct RunRecord<'a> {
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
     gate: Option<&'a str>,
     blocked: bool,
+}
+
+/// The full result of one run, written to `~/.arc/logs/results/<id>.json` so `arc log <id>` can
+/// re-show it without re-running: the run record (metadata) plus the synthesis content.
+#[derive(Serialize)]
+struct StoredRun<'a> {
+    run: &'a RunRecord<'a>,
+    text: &'a str,
+    structured: Option<&'a serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -614,8 +625,11 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // Append a durable run record (real runs only) before emitting — observability that outlives
     // the terminal scrollback. A logging failure warns but never fails the command.
     let logged = if opts.log {
-        crate::log::append(&RunRecord {
-            ts: crate::log::now_secs(),
+        let ts = crate::log::now_secs();
+        let id = format!("{ts}-{}", std::process::id());
+        let record = RunRecord {
+            id: id.clone(),
+            ts,
             command: opts.command,
             repo: opts.dir.display().to_string(),
             model: &report.model,
@@ -626,7 +640,18 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,
-        })
+        };
+        let logged = crate::log::append(&record);
+        // Store the full result (best-effort) so `arc log <id>` can re-show it without re-running.
+        crate::log::store_result(
+            &id,
+            &StoredRun {
+                run: &record,
+                text: &text,
+                structured: structured.as_ref(),
+            },
+        );
+        logged
     } else {
         None
     };

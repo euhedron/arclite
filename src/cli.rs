@@ -41,6 +41,8 @@ pub enum Command {
     Rules(RulesArgs),
     /// Get, set, or list arclite settings (the model, ruleset, and logging defaults).
     Config(ConfigArgs),
+    /// Show the run history, or one run's full result with `<id>` (the completed-run log).
+    Log(LogArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
     /// Suggest where attention is best spent in a repository.
@@ -102,6 +104,16 @@ pub enum ConfigAction {
         #[arg(long)]
         user: bool,
     },
+}
+
+/// Arguments for `arc log`.
+#[derive(Debug, Args)]
+pub struct LogArgs {
+    /// A run id (from `arc log`) to show in full; omit to list recent runs.
+    pub id: Option<String>,
+    /// List all runs, not just the most recent.
+    #[arg(long)]
+    pub all: bool,
 }
 
 /// Arguments for `arclite inspect`.

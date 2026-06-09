@@ -17,10 +17,20 @@ pub fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// Path of the run log, `~/.arc/logs/runs.jsonl` — the single source for where runs are recorded
-/// (`None` only if the home directory can't be determined). Both [`append`] and `doctor` use it.
+/// The arclite logs directory, `~/.arc/logs` — the single source the run log and the result store
+/// both build on (`None` only if the home directory can't be determined).
+fn logs_dir() -> Option<PathBuf> {
+    Some(crate::arc_home()?.join("logs"))
+}
+
+/// Path of the run log, `~/.arc/logs/runs.jsonl`. Both [`append`] and `doctor` use it.
 pub fn path() -> Option<PathBuf> {
-    Some(crate::arc_home()?.join("logs").join("runs.jsonl"))
+    Some(logs_dir()?.join("runs.jsonl"))
+}
+
+/// The file storing one run's full result, `~/.arc/logs/results/<id>.json` — read by `arc log <id>`.
+pub fn result_path(id: &str) -> Option<PathBuf> {
+    Some(logs_dir()?.join("results").join(format!("{id}.json")))
 }
 
 /// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs
@@ -62,6 +72,26 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
         Ok(()) => Some(target),
         Err(e) => {
             eprintln!("arclite: run not logged ({}): {e}", target.display());
+            None
+        }
+    }
+}
+
+/// Store one run's full result at [`result_path`] (best-effort: a failure warns but never fails the
+/// run, like [`append`]). Returns the path written, or `None` if it couldn't be stored.
+pub fn store_result<T: Serialize>(id: &str, content: &T) -> Option<PathBuf> {
+    let path = result_path(id)?;
+    let write = || -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(content)?)?;
+        Ok(())
+    };
+    match write() {
+        Ok(()) => Some(path),
+        Err(e) => {
+            eprintln!("arclite: run result not stored ({}): {e}", path.display());
             None
         }
     }

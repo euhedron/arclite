@@ -5,6 +5,7 @@ pub mod doctor;
 pub mod extract;
 pub mod init;
 pub mod inspect;
+pub mod log;
 pub mod rules;
 pub mod status;
 pub mod suggest;

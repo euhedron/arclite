@@ -25,6 +25,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # report structured facts about a repo
 arc status                           # runs currently in flight
+arc log                              # past runs (arc log <id> for a full result)
 arc rules                            # the rules in play (ruleset, sources, provenance)
 arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
@@ -39,7 +40,7 @@ Shared options on every AI command select rules (`--ruleset`/`--rules`), shape t
 
 **Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging) — by hand or with `arc config set` — and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
 
-**Logging** — every *real* AI run appends a one-line JSON record — the run's parameters (command, repo, model, memory, context sources, and gate outcome) plus its ground-truth tokens + cost — to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it off; dry runs are never logged (no spend, nothing to record).
+**Logging** — every *real* AI run appends a one-line JSON record — the run's parameters (command, repo, model, memory, context sources, and gate outcome) plus its ground-truth tokens + cost — to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics. The full result is also stored at `~/.arc/logs/results/<id>.json`, so `arc log` lists the history and `arc log <id>` re-shows a run without re-running it. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it (and the result store) off; dry runs are never logged (no spend, nothing to record).
 
 **Gating on push** (opt-in) — arclite's own tracked `hooks/pre-push` runs `critique` and `suggest` (non-blocking advisories) concurrently with the `arc audit --include src --fail-on-findings` gate, blocking the push on any violation. (`--include src` scopes it to arclite's own source; `arc init --hook` scaffolds the generic gate for any repo to adapt.) Enable for a clone with `git config core.hooksPath hooks`; skip one push with `ARC_GATE=0 git push`; disable by unsetting `core.hooksPath`. It spends real AI tokens per push (it announces this and prints the cost) — deliberately pre-*push*, not pre-commit, and opt-in, because passive per-commit AI spend is arc's failure mode.
 
@@ -85,6 +86,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] **Multi-run strategies** — `--runs N` ships: run a command N times concurrently and union the deduped `results`. Open: a secondary-agent combine that dedupes/synthesizes semantically (and buckets by consensus, for ranking); sequential pass-forward (each run sees prior findings); and fanning the same union across *different* commands (e.g. a concurrent pre-push gate).
 - [ ] `arc status` lists in-flight runs (ships) — a per-pid registry written on start and cleared on exit, the in-flight complement to the completed-run log. Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
+- [ ] **Live run stats** — stream the model's output (`--output-format stream-json`) and update the active-run registry as events arrive, so `arc status` shows tokens/turns/tool-calls mid-run (today it shows command/repo/model/age; full usage lands only at completion, in the log).
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.
