@@ -70,12 +70,13 @@ fn field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("?").to_owned()
 }
 
-/// The recorded cost (`usage.cost_usd`) of a record/run JSON object, or 0.0.
-fn cost(v: &Value) -> f64 {
+/// The recorded cost (`usage.cost_usd`) of a record/run JSON object, formatted for display —
+/// `$?` when absent, so a missing cost can't read as genuine zero spend.
+fn cost(v: &Value) -> String {
     v.get("usage")
         .and_then(|u| u.get("cost_usd"))
         .and_then(Value::as_f64)
-        .unwrap_or(0.0)
+        .map_or_else(|| "$?".to_owned(), |c| format!("${c:.4}"))
 }
 
 /// One log record as a compact row — tolerant of older records that predate some fields.
@@ -86,7 +87,7 @@ fn row(r: &Value, now: u64) -> String {
     let repo = repo_full.rsplit(['/', '\\']).next().unwrap_or(&repo_full);
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
     format!(
-        "{id} · {} · {} · {} · {} · ${:.4}{}",
+        "{id} · {} · {} · {} · {} · {}{}",
         age(now.saturating_sub(ts)),
         field(r, "command"),
         repo,
@@ -131,7 +132,7 @@ fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
 fn stored_human(v: &Value) -> String {
     let run = v.get("run").cloned().unwrap_or(Value::Null);
     let meta = format!(
-        "{} · {} · {} · ${:.4}",
+        "{} · {} · {} · {}",
         field(&run, "command"),
         field(&run, "repo"),
         field(&run, "model"),
