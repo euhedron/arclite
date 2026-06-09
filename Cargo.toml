@@ -1,6 +1,6 @@
 [package]
 name = "arclite"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 description = "Agent-first, cross-platform CLI for cross-repo code intelligence and auditing — a successor to arc."
 publish = false

@@ -443,6 +443,9 @@ struct RunRecord<'a> {
     /// Unique run id (`<ts>-<pid>`) — keys the full-result store at `~/.arc/logs/results/<id>.json`.
     id: String,
     ts: u64,
+    /// The arc binary's version (single-sourced from Cargo.toml at compile time), so runs stay
+    /// attributable to the binary that made them when logs aggregate into cross-version metrics.
+    version: &'static str,
     command: &'a str,
     repo: String,
     model: &'a str,
@@ -633,6 +636,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         let record = RunRecord {
             id: id.clone(),
             ts,
+            version: env!("CARGO_PKG_VERSION"),
             command: opts.command,
             repo: opts.dir.display().to_string(),
             model: &report.model,
