@@ -185,7 +185,7 @@ pub struct SynthArgs {
     /// Compose with `--json` for machine consumption.
     #[arg(long)]
     pub structured: bool,
-    /// Gate on the command's results: exit non-zero (code 2) if its structured `results` array is
+    /// Gate on the command's results: exit non-zero if its structured `results` array is
     /// non-empty — for enforcement in git hooks/CI, where a hook blocks on exit status alone. Opt-in;
     /// implies `--structured`; rejected by commands with no structured mode (e.g. `summarize`). Off by
     /// default — no command gates unless asked.
