@@ -96,9 +96,19 @@ struct ClaudeJson {
     is_error: Option<bool>,
     total_cost_usd: Option<f64>,
     usage: Option<ClaudeUsage>,
-    model: Option<String>,
+    /// Per-model usage, one entry per model that ran — the payload's only model identification
+    /// (there is no top-level model id — confirmed by exercise), and so the ground truth the
+    /// reported model resolves from.
+    #[serde(rename = "modelUsage", default)]
+    model_usage: std::collections::BTreeMap<String, PerModelUsage>,
     /// Present when `--json-schema` was passed: the validated, typed result.
     structured_output: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct PerModelUsage {
+    #[serde(rename = "outputTokens", default)]
+    output_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -109,9 +119,10 @@ struct ClaudeUsage {
     cache_read_input_tokens: u64,
 }
 
-/// Parse the Claude CLI JSON payload into a [`Synthesis`]. `model` is the
-/// requested model, used as a fallback label if the payload omits it.
-pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
+/// Parse the Claude CLI JSON payload into a [`Synthesis`]. `requested` is the model id arclite
+/// asked for; the model *reported* is resolved from the payload's per-model usage — what actually
+/// ran — with `requested` only as the fallback when the payload omits that ground truth.
+pub fn parse_result(json: &str, requested: &str) -> anyhow::Result<Synthesis> {
     let parsed: ClaudeJson =
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
     if parsed.is_error.unwrap_or(false) {
@@ -127,10 +138,17 @@ pub fn parse_result(json: &str, model: &str) -> anyhow::Result<Synthesis> {
     let cost_usd = parsed
         .total_cost_usd
         .context("claude JSON had no `total_cost_usd` field")?;
+    // The synthesis model is the modelUsage entry that produced the output — the one with the most
+    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls).
+    let model = parsed
+        .model_usage
+        .iter()
+        .max_by_key(|(_, usage)| usage.output_tokens)
+        .map_or_else(|| requested.to_owned(), |(id, _)| id.clone());
     Ok(Synthesis {
         text,
         usage: Usage {
-            model: parsed.model.unwrap_or_else(|| model.to_owned()),
+            model,
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,

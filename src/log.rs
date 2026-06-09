@@ -8,6 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+/// A cost formatted for display — the single statement of the dollar four-decimal format.
+pub fn cost_display(cost_usd: f64) -> String {
+    format!("${cost_usd:.4}")
+}
+
 /// Current UNIX time in seconds.
 pub fn now_secs() -> u64 {
     SystemTime::now()

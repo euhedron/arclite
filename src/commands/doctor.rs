@@ -31,6 +31,9 @@ struct Tools {
 struct Logs {
     path: Option<String>,
     runs: Option<usize>,
+    /// Why `runs` is absent when the log exists but can't be read — carried in the JSON too, not
+    /// only the human view, so the machine-readable output doesn't drop the failure.
+    error: Option<String>,
 }
 
 /// Return the trimmed first line of `<cmd> --version`, or `None` if the command
@@ -64,6 +67,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
             runs: runs.as_ref().ok().copied(),
+            error: runs.as_ref().err().map(std::string::ToString::to_string),
         },
     };
 

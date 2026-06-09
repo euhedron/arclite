@@ -570,7 +570,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
-    let cost = format!("${:.4}", usage.cost_usd);
+    let cost = crate::log::cost_display(usage.cost_usd);
     // Display body: the validated structured object (pretty-printed) when present, else the prose.
     let body = match &structured {
         Some(value) => serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes"),

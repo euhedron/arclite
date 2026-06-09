@@ -72,7 +72,7 @@ fn cost(v: &Value) -> String {
     v.get("usage")
         .and_then(|u| u.get("cost_usd"))
         .and_then(Value::as_f64)
-        .map_or_else(|| "$?".to_owned(), |c| format!("${c:.4}"))
+        .map_or_else(|| "$?".to_owned(), crate::log::cost_display)
 }
 
 /// One log record as a compact row — tolerant of older records that predate some fields.
