@@ -65,25 +65,33 @@ fn list(all: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     emit(&payload, &lines.join("\n"), global.json)
 }
 
-/// One log record as a compact row — tolerant of older records that predate some fields.
-fn row(r: &Value, now: u64) -> String {
-    let field = |key: &str| r.get(key).and_then(Value::as_str).unwrap_or("?").to_owned();
-    let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
-    let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
-    let repo_full = field("repo");
-    let repo = repo_full.rsplit(['/', '\\']).next().unwrap_or(&repo_full);
-    let cost = r
-        .get("usage")
+/// A string field of a record/run JSON object, or `?` if absent.
+fn field(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("?").to_owned()
+}
+
+/// The recorded cost (`usage.cost_usd`) of a record/run JSON object, or 0.0.
+fn cost(v: &Value) -> f64 {
+    v.get("usage")
         .and_then(|u| u.get("cost_usd"))
         .and_then(Value::as_f64)
-        .unwrap_or(0.0);
+        .unwrap_or(0.0)
+}
+
+/// One log record as a compact row — tolerant of older records that predate some fields.
+fn row(r: &Value, now: u64) -> String {
+    let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
+    let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
+    let repo_full = field(r, "repo");
+    let repo = repo_full.rsplit(['/', '\\']).next().unwrap_or(&repo_full);
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
     format!(
-        "{id} · {} · {} · {} · {} · ${cost:.4}{}",
+        "{id} · {} · {} · {} · {} · ${:.4}{}",
         age(now.saturating_sub(ts)),
-        field("command"),
+        field(r, "command"),
         repo,
-        field("model"),
+        field(r, "model"),
+        cost(r),
         if blocked { " · BLOCKED" } else { "" },
     )
 }
@@ -117,17 +125,12 @@ fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
 /// A stored run for humans: a metadata line, then the result body (structured if present, else text).
 fn stored_human(v: &Value) -> String {
     let run = v.get("run").cloned().unwrap_or(Value::Null);
-    let field = |key: &str| run.get(key).and_then(Value::as_str).unwrap_or("?").to_owned();
-    let cost = run
-        .get("usage")
-        .and_then(|u| u.get("cost_usd"))
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
     let meta = format!(
-        "{} · {} · {} · ${cost:.4}",
-        field("command"),
-        field("repo"),
-        field("model"),
+        "{} · {} · {} · ${:.4}",
+        field(&run, "command"),
+        field(&run, "repo"),
+        field(&run, "model"),
+        cost(&run),
     );
     let body = match v.get("structured") {
         Some(s) if !s.is_null() => serde_json::to_string_pretty(s).unwrap_or_default(),
