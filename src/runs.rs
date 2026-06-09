@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 /// One in-flight run, as recorded in the registry.
@@ -51,19 +52,27 @@ pub fn register(command: &str, repo: &Path, model: &str) -> Option<Registered> {
 }
 
 /// The runs currently recorded in the registry, for `arc status`, plus any `.json` entries that
-/// couldn't be read or parsed — returned (not silently dropped) so `arc status` can surface them
-/// rather than under-report what's in flight. A marker normally clears on exit; a hard-killed
-/// process can leave a stale one behind.
-pub fn active() -> (Vec<ActiveRun>, Vec<PathBuf>) {
+/// couldn't be read or parsed (returned, not dropped, so `arc status` surfaces them). A missing
+/// registry is not an error — nothing is in flight; a genuine read failure (of the directory or an
+/// entry) is, distinguished like [`crate::log::count`] so a permission/IO error can't masquerade as
+/// "no active runs". A marker normally clears on exit; a hard-killed process can leave a stale one.
+pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
     let Some(dir) = dir() else {
-        return (Vec::new(), Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return (Vec::new(), Vec::new());
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
+        Err(e) => {
+            return Err(e).with_context(|| format!("cannot read the run registry {}", dir.display()));
+        }
     };
     let mut runs = Vec::new();
     let mut unreadable = Vec::new();
-    for path in entries.flatten().map(|e| e.path()) {
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("cannot read an entry in the run registry {}", dir.display()))?
+            .path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
@@ -75,5 +84,5 @@ pub fn active() -> (Vec<ActiveRun>, Vec<PathBuf>) {
             None => unreadable.push(path),
         }
     }
-    (runs, unreadable)
+    Ok((runs, unreadable))
 }

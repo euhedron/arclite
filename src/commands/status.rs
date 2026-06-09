@@ -3,7 +3,7 @@ use crate::output::emit;
 
 /// Report the runs currently in flight (the active-run registry).
 pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let (active, unreadable) = crate::runs::active();
+    let (active, unreadable) = crate::runs::active()?;
     let now = crate::log::now_secs();
     let mut lines = Vec::new();
     if active.is_empty() {
