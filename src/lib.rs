@@ -20,6 +20,12 @@ use cli::{Cli, Command};
 /// arclite's per-scope config/data directory (`~/.arc`, `<repo>/.arc`): settings, rules, and logs.
 pub(crate) const ARC_DIR: &str = ".arc";
 
+/// The user-level arclite directory, `~/.arc` (`None` if the home directory is unknown) — the single
+/// source for the home-relative base that the run log, the run registry, and user settings build on.
+pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
+    Some(dirs::home_dir()?.join(ARC_DIR))
+}
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
 /// `SUCCESS`, the gate's block code (2), or `FAILURE` with the error on stderr.
 #[must_use]

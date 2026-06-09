@@ -19,7 +19,7 @@ pub struct ActiveRun {
 
 /// The registry directory, `~/.arc/runs/` (`None` if the home directory is unknown).
 fn dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(crate::ARC_DIR).join("runs"))
+    Some(crate::arc_home()?.join("runs"))
 }
 
 /// Marker that removes its registry entry on drop, so a run clears itself on exit — success, error,

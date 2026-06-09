@@ -20,7 +20,7 @@ pub fn now_secs() -> u64 {
 /// Path of the run log, `~/.arc/logs/runs.jsonl` — the single source for where runs are recorded
 /// (`None` only if the home directory can't be determined). Both [`append`] and `doctor` use it.
 pub fn path() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(crate::ARC_DIR).join("logs").join("runs.jsonl"))
+    Some(crate::arc_home()?.join("logs").join("runs.jsonl"))
 }
 
 /// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs

@@ -47,11 +47,10 @@ impl Settings {
     /// fine; a present-but-unreadable or malformed file is a hard error.
     pub fn load(repo: &Path) -> anyhow::Result<Self> {
         let mut settings = Settings::default();
-        let relative = Path::new(crate::ARC_DIR).join("settings.json");
-        if let Some(home) = dirs::home_dir() {
-            settings.merge(&home.join(&relative))?;
+        if let Some(home) = crate::arc_home() {
+            settings.merge(&home.join("settings.json"))?;
         }
-        settings.merge(&repo.join(&relative))?;
+        settings.merge(&repo.join(crate::ARC_DIR).join("settings.json"))?;
         Ok(settings)
     }
 
