@@ -26,7 +26,7 @@ pub struct Synthesis {
     pub structured: Option<serde_json::Value>,
 }
 
-/// A zero-cost prompt-size estimate (rough heuristic: ~4 chars per token).
+/// A zero-cost prompt-size estimate: the prompt's char count and an approximate token count.
 #[derive(Debug, Clone, Serialize)]
 pub struct Estimate {
     pub chars: usize,
