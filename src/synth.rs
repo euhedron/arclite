@@ -13,7 +13,7 @@ use crate::output::emit;
 
 /// Default model when `--model` is omitted. Update when a newer model supersedes it; the run
 /// reports the resolved id the response returns.
-const DEFAULT_MODEL: &str = "claude-opus-4-7";
+const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context (not counted here) — actual usage is reported after the call runs";
 
