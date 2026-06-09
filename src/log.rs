@@ -1,10 +1,9 @@
-//! Append-only per-run logging to `~/.arc/logs/runs.jsonl` — an observable trace of every AI run
-//! (params, context, tokens, cost): the substrate for "is the spend earning its keep" metrics, and
-//! for tracing what actually happened. On by default; disable via `defaults.logging = false` in
-//! settings. A write failure is surfaced as a warning but never fails the command.
+//! Append-only per-run logging to `~/.arc/logs/runs.jsonl` — a record of every AI run (params,
+//! context, tokens, cost), plus each run's full result at `~/.arc/logs/results/<id>.json`. On by
+//! default; disable via `defaults.logging = false`. A write failure warns but never fails the command.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -45,6 +44,28 @@ pub fn count() -> std::io::Result<usize> {
     }
 }
 
+/// Create `path`'s parent directory and run `write`, returning `Some(path)` on success. A failure
+/// warns (prefixed with `what`) and returns `None` — observability writes never fail the command.
+fn write_best_effort(
+    path: PathBuf,
+    what: &str,
+    write: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Option<PathBuf> {
+    let result = (|| -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        write(&path)
+    })();
+    match result {
+        Ok(()) => Some(path),
+        Err(e) => {
+            eprintln!("arclite: {what} ({}): {e}", path.display());
+            None
+        }
+    }
+}
+
 /// Append `record` as one JSON line to the [`path`] run log, returning the path written.
 /// Any failure is surfaced as a warning and returns `None` — logging never breaks the command.
 pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
@@ -52,7 +73,6 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
         eprintln!("arclite: run not logged (cannot determine the home directory)");
         return None;
     };
-    let dir = target.parent().expect("the log path always has a parent").to_path_buf();
     let line = match serde_json::to_string(record) {
         Ok(line) => line,
         Err(e) => {
@@ -60,39 +80,22 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
             return None;
         }
     };
-    let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&target)?;
+    write_best_effort(target, "run not logged", |p| {
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(p)?;
         writeln!(file, "{line}")
-    };
-    match write() {
-        Ok(()) => Some(target),
-        Err(e) => {
-            eprintln!("arclite: run not logged ({}): {e}", target.display());
-            None
-        }
-    }
+    })
 }
 
-/// Store one run's full result at [`result_path`] (best-effort: a failure warns but never fails the
-/// run, like [`append`]). Returns the path written, or `None` if it couldn't be stored.
+/// Store one run's full result at [`result_path`] (best-effort, like [`append`]). Returns the path
+/// written, or `None` if it couldn't be stored.
 pub fn store_result<T: Serialize>(id: &str, content: &T) -> Option<PathBuf> {
     let path = result_path(id)?;
-    let write = || -> anyhow::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(&path, serde_json::to_string_pretty(content)?)?;
-        Ok(())
-    };
-    match write() {
-        Ok(()) => Some(path),
+    let body = match serde_json::to_string_pretty(content) {
+        Ok(body) => body,
         Err(e) => {
-            eprintln!("arclite: run result not stored ({}): {e}", path.display());
-            None
+            eprintln!("arclite: run result not stored (could not serialize): {e}");
+            return None;
         }
-    }
+    };
+    write_best_effort(path, "run result not stored", |p| std::fs::write(p, &body))
 }

@@ -46,6 +46,7 @@ pub fn run_synthesis(
     structure: Option<Structure>,
     build_prompt: impl FnOnce(&str) -> String,
 ) -> anyhow::Result<ExitCode> {
+    anyhow::ensure!(args.runs >= 1, "--runs must be at least 1, got {}", args.runs);
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
@@ -94,7 +95,7 @@ pub fn run_synthesis(
         &prompt,
         &SynthOptions {
             model: model.as_deref(),
-            runs: args.runs.max(1),
+            runs: args.runs,
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,
