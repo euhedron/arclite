@@ -88,7 +88,8 @@ fn shim_target(path: &Path) -> Option<PathBuf> {
         })
 }
 
-// The subset of `claude -p --output-format json` we read.
+// The subset of the CLI's final `result` payload we read (the last event of
+// `--output-format stream-json`, carrying what `--output-format json` would return whole).
 #[derive(Deserialize)]
 struct ClaudeJson {
     result: Option<String>,

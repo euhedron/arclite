@@ -76,8 +76,7 @@ pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathB
 }
 
 /// Render rules as a prompt block — one section per rule (not a one-line bullet) so
-/// multi-paragraph bodies (e.g. the body + `_provenance:_` line that `extract` emits)
-/// round-trip when fed back via `--rules`.
+/// multi-paragraph rule bodies round-trip when fed back via `--rules`.
 pub fn render(rules: &[Rule]) -> String {
     rules
         .iter()

@@ -29,7 +29,7 @@ arc log                              # past runs (arc log <id> for a full result
 arc rules                            # the rules in play (ruleset, sources, provenance)
 arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
-arc summarize <repo>                 # runs on the default context (scan + README + manifests)
+arc summarize <repo>                 # runs on the default context (scan + README + manifests + any configured rules)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
 arc audit   <repo> --ruleset <id>    # --ruleset selects the rules (else the configured default)
 arc critique <repo> --include src    # --dry-run previews any run's prompt + cost
@@ -88,7 +88,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
 - [ ] **Multi-run strategies** — `--runs N` ships: run a command N times concurrently and union the deduped `results`. Open: a secondary-agent combine that dedupes/synthesizes semantically (and buckets by consensus, for ranking); sequential pass-forward (each run sees prior findings); and fanning the same union across *different* commands (e.g. a concurrent pre-push gate).
 - [ ] `arc status` lists in-flight runs (ships) — one marker file per run, written on start and cleared on exit (a `--runs N` fan-out is N independent markers), the in-flight complement to the completed-run log. Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
-- [ ] **Live run stats** (ships) — `synthesize` streams events (`--output-format stream-json --include-partial-messages`) and updates each run's marker as they arrive, so `arc status` shows live progress: output **characters** (the continuous signal — exact tokens arrive only at message end, so they stay in the final report), plus turns and tool-calls at each boundary. Open: streaming for non-synthesis paths; richer per-run detail.
+- [ ] **Live run stats** (ships) — `synthesize` streams events (`--output-format stream-json --include-partial-messages`) and updates each run's marker as they arrive, so `arc status` shows live progress: output **characters** (the continuous signal — exact tokens arrive only at message end, so they stay in the final report), plus turns and tool-calls at each boundary. Open: richer per-run detail.
 - [ ] **`arc tui`** — an interactive TUI over the same commands: arrow-key navigation, and a self-refreshing view that updates in place rather than re-running a command — e.g. a live `status` that streams each run's progress as it happens, a clear QOL win over re-running `arc status`. Precedent: the Claude Code and Codex CLIs/TUIs (their interactive-mode + terminal-config docs are under References). Deferred — floated, not yet designed.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
@@ -117,7 +117,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 Claude Code docs arclite leverages or draws on (cite specific behavior; *derive* where valuable — see the Roadmap item):
 
 - <https://code.claude.com/docs/en/headless> — print/headless mode (`claude -p`): how arclite invokes the CLI.
-- <https://code.claude.com/docs/en/cli-reference> — flags arclite passes (`--output-format json`, `--json-schema`, `--strict-mcp-config`, `--model`, `--allowedTools`, `--add-dir`, and `--max-budget-usd` as a prospective hard cost cap).
+- <https://code.claude.com/docs/en/cli-reference> — flags arclite passes (`--output-format stream-json --include-partial-messages`, `--json-schema`, `--strict-mcp-config`, `--model`, `--allowedTools`, `--add-dir`, and `--max-budget-usd` as a prospective hard cost cap).
 - <https://code.claude.com/docs/en/agent-sdk/structured-outputs> — `--json-schema` → a validated `structured_output` field: how arclite gets *typed* verdicts/findings (gating, ranking) instead of parsing prose.
 - <https://code.claude.com/docs/en/memory> — CLAUDE.md + auto-memory, and the `CLAUDE_CODE_DISABLE_*` env vars arclite sets to isolate the synthesis.
 - <https://code.claude.com/docs/en/hooks> — Claude Code's hook events: an agent-loop surface a hook can use to invoke `arc` (complementary to git hooks; arclite stays a citizen of existing hook systems rather than replacing them).

@@ -57,7 +57,7 @@ pub enum Command {
     Evolve(SynthArgs),
 }
 
-/// Arguments for `arclite doctor`.
+/// Arguments for `arc doctor`.
 #[derive(Debug, Args)]
 pub struct DoctorArgs {}
 
@@ -118,7 +118,7 @@ pub struct LogArgs {
     pub all: bool,
 }
 
-/// Arguments for `arclite inspect`.
+/// Arguments for `arc inspect`.
 #[derive(Debug, Args)]
 pub struct InspectArgs {
     /// Path to the repository or directory to inspect (defaults to the current directory).
@@ -197,7 +197,8 @@ pub struct SynthArgs {
     /// any command; off by default (results come back unordered).
     #[arg(long)]
     pub ranked: bool,
-    /// Run the synthesis N times concurrently and union the (deduped) results. Default: 1.
+    /// Run the synthesis N times concurrently. Structured `results` are unioned (deduped);
+    /// prose outputs are concatenated as per-run sections. Default: 1.
     #[arg(long, default_value_t = 1)]
     pub runs: usize,
 }
