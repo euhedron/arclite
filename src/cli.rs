@@ -53,6 +53,8 @@ pub enum Command {
     Audit(SynthArgs),
     /// Critically review a repo for quality defects.
     Critique(SynthArgs),
+    /// Propose radical, drastic ways a repository could evolve — overhauls and reimaginings.
+    Evolve(SynthArgs),
 }
 
 /// Arguments for `arclite doctor`.

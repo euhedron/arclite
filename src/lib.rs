@@ -58,6 +58,7 @@ pub fn run() -> ExitCode {
         Command::Extract(args) => commands::extract::run(args, &cli.global),
         Command::Audit(args) => commands::audit::run(args, &cli.global),
         Command::Critique(args) => commands::critique::run(args, &cli.global),
+        Command::Evolve(args) => commands::evolve::run(args, &cli.global),
     };
 
     match result {
