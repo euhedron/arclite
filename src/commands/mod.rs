@@ -13,6 +13,8 @@ pub mod summarize;
 
 use std::process::ExitCode;
 
+use anyhow::Context;
+
 use crate::cli::{GlobalArgs, SynthArgs};
 use crate::synth::{self, SynthOptions};
 
@@ -151,4 +153,10 @@ pub(crate) fn resolve_rule_sources(
         ),
         sources,
     })
+}
+
+/// Resolve `path` to an absolute path with a uniform error — shared by the command entry points, so
+/// the resolution and its wording are single-sourced rather than copy-pasted.
+pub(crate) fn resolve_root(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))
 }

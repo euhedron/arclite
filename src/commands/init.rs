@@ -32,8 +32,7 @@ struct InitReport {
 
 /// Scaffold arclite's per-repo files, never clobbering what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let root = std::path::absolute(&args.path)
-        .with_context(|| format!("cannot resolve {}", args.path.display()))?;
+    let root = super::resolve_root(&args.path)?;
     let arc = root.join(crate::ARC_DIR);
     let mut created = Vec::new();
     let mut skipped = Vec::new();

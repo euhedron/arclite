@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, InspectArgs};
@@ -50,8 +49,7 @@ pub struct InspectReport {
 /// absolute root (so callers reuse it rather than re-resolving).
 pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     anyhow::ensure!(path.exists(), "cannot access {}", path.display());
-    let root =
-        std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))?;
+    let root = super::resolve_root(path)?;
 
     let mut files = 0usize;
     let mut dirs = 0usize;

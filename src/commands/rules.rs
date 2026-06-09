@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use anyhow::Context;
-
 use crate::cli::{GlobalArgs, RulesArgs};
 use crate::output::emit;
 
@@ -9,8 +7,7 @@ use crate::output::emit;
 /// each loaded rule's id and provenance (which source won, after dedup), any skipped sources, and
 /// the settings layers in effect.
 pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let root = std::path::absolute(&args.path)
-        .with_context(|| format!("cannot resolve {}", args.path.display()))?;
+    let root = super::resolve_root(&args.path)?;
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         super::resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
