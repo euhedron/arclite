@@ -211,9 +211,8 @@ pub fn synthesize(
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
         cmd.arg("--add-dir").arg(req.dir);
     }
-    // Hard cost cap, enforced by the CLI between turns: the run errors (subtype
-    // `error_max_budget_usd`) once spend crosses the cap — the call in flight completes first, so
-    // the total can overshoot (confirmed by exercising a tripped cap).
+    // Hard cost cap — the CLI enforces it and a tripped run errors with subtype
+    // `error_max_budget_usd`; the enforcement semantics live on the `--max-budget-usd` flag doc.
     if let Some(cap) = req.max_budget_usd {
         cmd.arg("--max-budget-usd").arg(cap.to_string());
     }
