@@ -42,6 +42,25 @@ pub(crate) fn read_optional(path: &std::path::Path) -> std::io::Result<Option<St
     }
 }
 
+/// Resolve a user-supplied path against `base`: a leading `~/` (or `~\`) expands to the home
+/// directory, an absolute path stands as-is, and a relative one joins `base`. The one statement of
+/// this resolution — ruleset sources (relative to their settings file) and `--include` paths
+/// (relative to the repo root) share it, so the two can't drift.
+pub(crate) fn resolve_path(base: &std::path::Path, raw: &std::path::Path) -> std::path::PathBuf {
+    if let Some(rest) = raw
+        .to_str()
+        .and_then(|s| s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")))
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base.join(raw)
+    }
+}
+
 /// List a directory, with a missing directory as `None` — [`read_optional`]'s absent-vs-failed
 /// distinction for directories, shared by the run-registry and result-store listings.
 pub(crate) fn read_dir_optional(dir: &std::path::Path) -> std::io::Result<Option<std::fs::ReadDir>> {

@@ -64,14 +64,15 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 if r.get("blocked").and_then(Value::as_bool) == Some(true) {
                     w.blocked += 1;
                 }
-                let Some(usage) = r.get("usage") else {
+                let Some(cost) = crate::log::record_cost(r) else {
                     if span.is_none() {
                         no_usage += 1; // count once, on the all-time pass
                     }
                     continue;
                 };
+                w.cost_usd += cost;
+                let usage = r.get("usage").expect("cost_usd was read from within usage");
                 let n = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-                w.cost_usd += usage.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
                 w.input_tokens += n("input_tokens");
                 w.cache_creation_input_tokens += n("cache_creation_input_tokens");
                 w.cache_read_input_tokens += n("cache_read_input_tokens");
@@ -97,10 +98,9 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 cost_usd: 0.0,
             });
         entry.runs += 1;
-        entry.cost_usd += r
-            .pointer("/usage/cost_usd")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        if let Some(cost) = crate::log::record_cost(r) {
+            entry.cost_usd += cost; // a costless record still counts as a run; no_usage discloses it
+        }
     }
     let by_command: Vec<CommandTotal> = by_command.into_values().collect();
 

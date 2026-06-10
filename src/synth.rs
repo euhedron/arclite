@@ -340,16 +340,11 @@ pub fn gather_context(
             &mut seen,
         );
     }
-    // Resolve --include paths against the target repo (not arclite's cwd); absolute paths as-is.
+    // Resolve --include paths against the target repo (not arclite's cwd); `~/` and absolute paths
+    // stand on their own — the shared crate::resolve_path rule, same as ruleset sources.
     let mut includes: Vec<PathBuf> = includes
         .iter()
-        .map(|p| {
-            if p.is_absolute() {
-                p.clone()
-            } else {
-                root.join(p)
-            }
-        })
+        .map(|p| crate::resolve_path(&root, p))
         .collect();
     // --changed: scope to git-changed files — same group as --include, not special to any command.
     // A git failure aborts loudly rather than silently passing as a clean tree.

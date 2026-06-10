@@ -20,6 +20,15 @@ pub fn cost_display(cost_usd: f64) -> String {
     format!("${cost_usd:.4}")
 }
 
+/// The recorded cost of a run record (`usage.cost_usd`), `None` when absent — the single accessor,
+/// so every reader handles absence deliberately (display `$?`, exclude-and-count in sums) rather
+/// than silently zeroing what would read as genuine zero spend.
+pub fn record_cost(record: &serde_json::Value) -> Option<f64> {
+    record
+        .pointer("/usage/cost_usd")
+        .and_then(serde_json::Value::as_f64)
+}
+
 /// Current UNIX time in seconds.
 pub fn now_secs() -> u64 {
     SystemTime::now()

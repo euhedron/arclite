@@ -112,18 +112,9 @@ fn overlay<T>(slot: &mut Option<T>, value: Option<T>) {
     }
 }
 
-/// Resolve a ruleset source: `~/…` → home; absolute → as-is; relative → relative to the settings
-/// file's own directory `dir` (so a repo's ruleset referencing `rules` means *its* `.arc/rules`).
+/// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
+/// relative to the settings file's own directory `dir` (so a repo's ruleset referencing `rules`
+/// means *its* `.arc/rules`).
 fn resolve(dir: &Path, src: &str) -> PathBuf {
-    if let Some(rest) = src.strip_prefix("~/").or_else(|| src.strip_prefix("~\\"))
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest);
-    }
-    let p = Path::new(src);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        dir.join(p)
-    }
+    crate::resolve_path(dir, Path::new(src))
 }

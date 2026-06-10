@@ -89,13 +89,10 @@ fn field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("?").to_owned()
 }
 
-/// The recorded cost (`usage.cost_usd`) of a record/run JSON object, formatted for display —
-/// `$?` when absent, so a missing cost can't read as genuine zero spend.
+/// The recorded cost of a record/run JSON object, formatted for display — `$?` when absent, so a
+/// missing cost can't read as genuine zero spend.
 fn cost(v: &Value) -> String {
-    v.get("usage")
-        .and_then(|u| u.get("cost_usd"))
-        .and_then(Value::as_f64)
-        .map_or_else(|| "$?".to_owned(), crate::log::cost_display)
+    crate::log::record_cost(v).map_or_else(|| "$?".to_owned(), crate::log::cost_display)
 }
 
 /// One log record as a compact row — tolerant of older records that predate some fields.
