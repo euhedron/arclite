@@ -241,8 +241,8 @@ pub struct SynthArgs {
     /// any command; off by default (results come back unordered).
     #[arg(long)]
     pub ranked: bool,
-    /// Run the synthesis N times concurrently. Structured `results` are unioned (deduped);
-    /// prose outputs are concatenated as per-run sections. Default: 1.
+    /// Run the synthesis N times concurrently. Structured `results` are unioned (only byte-identical
+    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1.
     #[arg(long, default_value_t = 1)]
     pub runs: usize,
 }

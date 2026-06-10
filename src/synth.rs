@@ -796,9 +796,11 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
     }
 }
 
-/// Union the `results` arrays of several structured outputs into one, deduping identical items, and
-/// carry every run's `note` (labeled per run when there is more than one). Generic over the item
-/// shape, so it serves repeats of one command and (later) different commands.
+/// Union the `results` arrays of several structured outputs into one, and carry every run's `note`
+/// (labeled per run when there is more than one). Only byte-identical items collapse — a near-no-op
+/// in practice, since independent runs rarely emit the same prose verbatim; judging when two
+/// findings are the same *in substance* is the open semantic combine. Generic over the item shape,
+/// so it serves repeats of one command and (later) different commands.
 fn union_results<'a>(
     structured: impl Iterator<Item = &'a serde_json::Value>,
 ) -> serde_json::Value {
