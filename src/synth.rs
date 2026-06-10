@@ -43,6 +43,9 @@ pub struct SynthOptions<'a> {
     pub model: Option<&'a str>,
     /// Number of synthesis runs to fan out concurrently; their results are unioned. 1 = single run.
     pub runs: usize,
+    /// Hard per-run cost cap in dollars, passed to the CLI (each run of a fan-out carries its own).
+    /// `None` = no cap.
+    pub max_budget_usd: Option<f64>,
     /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
     /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
@@ -276,11 +279,12 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             root.display()
         ));
     }
+    // A porcelain line is two status chars and a space, then the path ("old -> new" for renames).
+    const PORCELAIN_PATH_OFFSET: usize = 3;
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            // porcelain: two status chars, a space, then the path — "old -> new" for renames.
-            let path = line.get(3..)?.trim().trim_matches('"');
+            let path = line.get(PORCELAIN_PATH_OFFSET..)?.trim().trim_matches('"');
             let path = path.rsplit_once(" -> ").map_or(path, |(_, new)| new);
             (!path.is_empty()).then(|| root.join(path))
         })
@@ -378,6 +382,8 @@ struct RunReport<'a> {
     /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
     /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
     memory: &'a str,
+    /// The hard cost cap in effect, or `None` — surfaced every run so an uncapped run says so.
+    max_budget_usd: Option<f64>,
     context: &'a [String],
     excluded: &'a [String],
     /// Active `.arc/settings.json` layers in effect for this run (empty = built-in defaults only).
@@ -399,12 +405,16 @@ impl RunReport<'_> {
         } else {
             String::new()
         };
+        let budget = self
+            .max_budget_usd
+            .map_or_else(|| "none".to_owned(), crate::log::cost_display);
         let mut line = format!(
-            "model={}{}  tools={}  memory={}  context=[{}]",
+            "model={}{}  tools={}  memory={}  budget={}  context=[{}]",
             self.model,
             runs,
             tools,
             self.memory,
+            budget,
             self.context.join(", ")
         );
         if !self.excluded.is_empty() {
@@ -451,6 +461,7 @@ struct RunRecord<'a> {
     model: &'a str,
     runs: usize,
     memory: &'a str,
+    max_budget_usd: Option<f64>,
     structured: bool,
     sources: &'a [String],
     usage: &'a ai::Usage,
@@ -494,6 +505,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         } else {
             "isolated"
         },
+        max_budget_usd: opts.max_budget_usd,
         context: opts.sources,
         excluded: opts.excluded,
         config: opts.config,
@@ -560,6 +572,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             opts.dir,
             opts.ambient_memory,
             opts.schema,
+            opts.max_budget_usd,
             active,
         )?;
         (single, 1)
@@ -642,6 +655,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             model: &report.model,
             runs,
             memory: report.memory,
+            max_budget_usd: opts.max_budget_usd,
             structured: opts.schema.is_some(),
             sources: opts.sources,
             usage: &usage,
@@ -707,6 +721,7 @@ fn multi_synthesize(
                         opts.dir,
                         opts.ambient_memory,
                         opts.schema,
+                        opts.max_budget_usd,
                         active,
                     )
                 })

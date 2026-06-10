@@ -94,6 +94,8 @@ fn shim_target(path: &Path) -> Option<PathBuf> {
 struct ClaudeJson {
     result: Option<String>,
     is_error: Option<bool>,
+    /// Names the failure on an error payload (e.g. `error_max_budget_usd`), where `result` is absent.
+    subtype: Option<String>,
     total_cost_usd: Option<f64>,
     usage: Option<ClaudeUsage>,
     /// Per-model usage, one entry per model that ran — the payload's only model identification
@@ -126,10 +128,14 @@ pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
     let parsed: ClaudeJson =
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
     if parsed.is_error.unwrap_or(false) {
-        bail!(
-            "claude reported an error: {}",
-            parsed.result.unwrap_or_default()
-        );
+        // An error payload carries no `result` text (confirmed on a tripped --max-budget-usd run);
+        // its `subtype` names the failure instead.
+        let what = parsed
+            .result
+            .filter(|r| !r.is_empty())
+            .or(parsed.subtype)
+            .unwrap_or_else(|| "no detail in the payload".to_owned());
+        bail!("claude reported an error: {what}");
     }
     let text = parsed.result.context("claude JSON had no `result` field")?;
     // usage and cost are part of a successful response's contract; if the CLI omits them, error
@@ -173,6 +179,7 @@ pub fn synthesize(
     dir: &Path,
     ambient_memory: bool,
     json_schema: Option<&str>,
+    max_budget_usd: Option<f64>,
     mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
     let mut cmd = command("claude");
@@ -196,6 +203,12 @@ pub fn synthesize(
         cmd.args(allowed_tools);
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
         cmd.arg("--add-dir").arg(dir);
+    }
+    // Hard cost cap, enforced by the CLI between turns: the run errors (subtype
+    // `error_max_budget_usd`) once spend crosses the cap — the call in flight completes first, so
+    // the total can overshoot (confirmed by exercising a tripped cap).
+    if let Some(cap) = max_budget_usd {
+        cmd.arg("--max-budget-usd").arg(cap.to_string());
     }
     // Structured output (`--structured`): the result returns as a schema-validated `structured_output`
     // object, never scraped from prose. The which-resolved direct spawn (see `command`) passes this
@@ -277,11 +290,19 @@ pub fn synthesize(
         let _ = e.read_to_string(&mut stderr);
     }
     let status = child.wait()?;
+    // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
+    // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
+    let result_line = match (result_line, status.success()) {
+        (Some(line), _) => line,
+        (None, false) => bail!("claude exited with {}: {}", status, stderr.trim()),
+        (None, true) => bail!("claude produced no `result` event"),
+    };
+    let synthesis = parse_result(&result_line)?;
     if !status.success() {
-        bail!("claude exited with {}: {}", status, stderr.trim());
+        // The payload parsed as a success yet the process failed — surface the contradiction.
+        bail!("claude exited with {} despite a success result", status);
     }
-    let result_line = result_line.context("claude produced no `result` event")?;
-    parse_result(&result_line)
+    Ok(synthesis)
 }
 
 // AI-output handling (parse_result) and the prompt estimate are exercised by

@@ -5,31 +5,45 @@ use crate::cli::{ConfigAction, ConfigArgs, GlobalArgs};
 use crate::output::emit;
 use crate::settings::Settings;
 
-/// One settable scalar default: its dotted key, how to read its resolved value, and whether its
-/// value is a boolean. The single source for the key set — `get`, `set`, `list`, and validation all
-/// derive from this, so adding a setting is one row. (Rulesets are structured source-lists, not
-/// scalars, so they stay hand-edited or scaffolded.)
+/// One settable scalar default: its dotted key, how to read its resolved value, and how a raw `set`
+/// value is validated and typed into the JSON to store. The single source for the key set — `get`,
+/// `set`, `list`, and validation all derive from this, so adding a setting is one row. (Rulesets
+/// are structured source-lists, not scalars, so they stay hand-edited or scaffolded.)
 struct Setting {
     key: &'static str,
     read: fn(&Settings) -> Option<String>,
-    is_bool: bool,
+    parse: fn(&str) -> anyhow::Result<serde_json::Value>,
+}
+
+/// `parse` for the plain-string settings.
+fn parse_string(value: &str) -> anyhow::Result<serde_json::Value> {
+    Ok(serde_json::Value::String(value.to_owned()))
 }
 
 const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.model",
         read: |s| s.default_model.clone(),
-        is_bool: false,
+        parse: parse_string,
     },
     Setting {
         key: "defaults.ruleset",
         read: |s| s.default_ruleset.clone(),
-        is_bool: false,
+        parse: parse_string,
     },
     Setting {
         key: "defaults.logging",
         read: |s| Some(s.logging_enabled().to_string()),
-        is_bool: true,
+        parse: |v| Ok(serde_json::Value::Bool(v.parse::<bool>().context("expected `true` or `false`")?)),
+    },
+    Setting {
+        key: "defaults.max_budget_usd",
+        read: |s| s.default_max_budget_usd.map(|v| v.to_string()),
+        parse: |v| {
+            let cap: f64 = v.parse().context("expected a dollar amount")?;
+            anyhow::ensure!(cap.is_finite() && cap > 0.0, "the cap must be a positive dollar amount");
+            Ok(serde_json::Value::from(cap))
+        },
     },
 ];
 
@@ -115,15 +129,8 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
             .with_context(|| format!("invalid settings file {}", path.display()))?,
         None => serde_json::json!({}),
     };
-    let typed = if setting.is_bool {
-        serde_json::Value::Bool(
-            value
-                .parse::<bool>()
-                .with_context(|| format!("`{key}` must be `true` or `false`, not `{value}`"))?,
-        )
-    } else {
-        serde_json::Value::String(value.to_owned())
-    };
+    let typed = (setting.parse)(value)
+        .with_context(|| format!("invalid value `{value}` for `{key}`"))?;
     // Navigate (creating as needed) the dotted key path, e.g. `defaults.model`, and set the leaf.
     let parts: Vec<&str> = key.split('.').collect();
     let (leaf, parents) = parts.split_last().expect("a settable key is never empty");

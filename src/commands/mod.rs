@@ -57,6 +57,8 @@ pub fn run_synthesis(
         .model
         .clone()
         .or_else(|| settings.default_model.clone());
+    // Flag over configured default, like the model; neither set = no cap.
+    let max_budget_usd = args.max_budget_usd.or(settings.default_max_budget_usd);
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
@@ -99,6 +101,7 @@ pub fn run_synthesis(
         &SynthOptions {
             model: model.as_deref(),
             runs: args.runs,
+            max_budget_usd,
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,

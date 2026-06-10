@@ -16,6 +16,7 @@ pub struct Settings {
     pub default_model: Option<String>,
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
+    pub default_max_budget_usd: Option<f64>,
     /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
@@ -34,6 +35,7 @@ struct RawDefaults {
     model: Option<String>,
     ruleset: Option<String>,
     logging: Option<bool>,
+    max_budget_usd: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,6 +87,9 @@ impl Settings {
         }
         if raw.defaults.logging.is_some() {
             self.default_logging = raw.defaults.logging;
+        }
+        if raw.defaults.max_budget_usd.is_some() {
+            self.default_max_budget_usd = raw.defaults.max_budget_usd;
         }
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();

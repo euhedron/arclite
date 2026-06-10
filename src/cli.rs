@@ -39,7 +39,7 @@ pub enum Command {
     Status(StatusArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),
-    /// Get, set, or list arclite settings (the model, ruleset, and logging defaults).
+    /// Get, set, or list arclite settings (`config list` shows the keys).
     Config(ConfigArgs),
     /// Show the run history, or one run's full result with `<id>` (the completed-run log).
     Log(LogArgs),
@@ -93,14 +93,14 @@ pub enum ConfigAction {
     List,
     /// Print one setting's resolved value (e.g. `defaults.model`).
     Get {
-        /// The setting key: `defaults.model`, `defaults.ruleset`, or `defaults.logging`.
+        /// The setting key — `arc config list` shows the known keys.
         key: String,
     },
     /// Set a setting in a layer — the project's `.arc` by default, `--user` for `~/.arc`.
     Set {
-        /// The setting key: `defaults.model`, `defaults.ruleset`, or `defaults.logging`.
+        /// The setting key — `arc config list` shows the known keys.
         key: String,
-        /// The value (for `defaults.logging`, `true` or `false`).
+        /// The value (validated and typed per key).
         value: String,
         /// Write the user layer (`~/.arc/settings.json`) instead of the project's.
         #[arg(long)]
@@ -149,6 +149,11 @@ pub struct SynthArgs {
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
     pub dry_run: bool,
+    /// Hard per-run cost cap in dollars, enforced by the CLI between turns: the run stops as an
+    /// error once its spend crosses the cap (the call in flight completes, so the total can
+    /// overshoot). Overrides the configured `defaults.max_budget_usd`; unset = no cap.
+    #[arg(long, value_name = "USD")]
+    pub max_budget_usd: Option<f64>,
     /// Allow a Claude tool during synthesis (repeatable). Default: none.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,

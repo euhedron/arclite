@@ -78,7 +78,10 @@ fn row(r: &Value, now: u64) -> String {
     let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
     let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
     let repo_full = field(r, "repo");
-    let repo = repo_full.rsplit(['/', '\\']).next().unwrap_or(&repo_full);
+    let repo = repo_full
+        .rsplit(['/', '\\'])
+        .next()
+        .expect("rsplit always yields at least one piece");
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
     format!(
         "{id} · {} · {} · {} · {} · {}{}",
