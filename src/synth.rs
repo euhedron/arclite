@@ -28,12 +28,17 @@ const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 /// can't drift across schema and code.
 pub(crate) const RESULTS_KEY: &str = "results";
 
-/// Wrap a command's array-item schema in the shared `{ results: [ <item> ] }` envelope, so each
-/// command declares only its item shape. The CLI's structured output requires a root object (a
+/// The required companion to [`RESULTS_KEY`] in every structured envelope: a free-text overall read
+/// of the run. It makes an empty `results` a *judged* outcome — the model ran and found nothing —
+/// rather than indistinguishable from silence. Commentary only; the gate never reads it.
+pub(crate) const NOTE_KEY: &str = "note";
+
+/// Wrap a command's array-item schema in the shared `{ results: [ <item> ], note }` envelope, so
+/// each command declares only its item shape. The CLI's structured output requires a root object (a
 /// top-level array is rejected — confirmed by exercise), so the list can't be the root.
 pub(crate) fn results_schema(item: &str) -> String {
     format!(
-        r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}}}},"required":["{RESULTS_KEY}"]}}"#
+        r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}},"{NOTE_KEY}":{{"type":"string"}}}},"required":["{RESULTS_KEY}","{NOTE_KEY}"]}}"#
     )
 }
 
@@ -767,12 +772,14 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
     }
 }
 
-/// Union the `results` arrays of several structured outputs into one, deduping identical items.
-/// Generic over the item shape, so it serves repeats of one command and (later) different commands.
+/// Union the `results` arrays of several structured outputs into one, deduping identical items, and
+/// carry every run's `note` (labeled per run when there is more than one). Generic over the item
+/// shape, so it serves repeats of one command and (later) different commands.
 fn union_results<'a>(
     structured: impl Iterator<Item = &'a serde_json::Value>,
 ) -> serde_json::Value {
     let mut pooled: Vec<serde_json::Value> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for value in structured {
         if let Some(items) = value.get(RESULTS_KEY).and_then(serde_json::Value::as_array) {
             for item in items {
@@ -781,9 +788,23 @@ fn union_results<'a>(
                 }
             }
         }
+        if let Some(note) = value.get(NOTE_KEY).and_then(serde_json::Value::as_str) {
+            notes.push(note.to_owned());
+        }
     }
+    let note = if notes.len() == 1 {
+        notes.remove(0)
+    } else {
+        notes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| format!("run {}: {n}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let mut obj = serde_json::Map::new();
     obj.insert(RESULTS_KEY.to_owned(), serde_json::Value::Array(pooled));
+    obj.insert(NOTE_KEY.to_owned(), serde_json::Value::String(note));
     serde_json::Value::Object(obj)
 }
 

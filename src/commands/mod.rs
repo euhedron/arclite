@@ -43,6 +43,10 @@ const RANKED_NOTE: &str =
 /// (single-sourced like [`GROUNDING`]/[`RANKED_NOTE`], so it can't drift between commands).
 const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 
+/// Appended after the command's item-shape note: every structured run also returns a required
+/// top-level `note`, so an empty `results` is a judged outcome rather than silence.
+const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty.";
+
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
 /// the granted dir, cost reporting, or structured output. `structure` is the command's optional
@@ -93,6 +97,7 @@ pub fn run_synthesis(
         })?;
         prompt.push_str(STRUCTURED_NOTE);
         prompt.push_str(s.note);
+        prompt.push_str(NOTE_INSTRUCTION);
         // Gate on the `results` array the schemas produce — the key single-sourced in synth.
         let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);
         (Some(s.schema.as_str()), gate)

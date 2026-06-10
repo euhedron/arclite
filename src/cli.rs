@@ -187,9 +187,10 @@ pub struct SynthArgs {
     /// and reproducible across machines. Enable to deliberately apply your own CLAUDE.md standards.
     #[arg(long)]
     pub ambient_memory: bool,
-    /// Emit the command's structured output (a schema-validated `results` array) instead of prose,
-    /// where the command defines one. Optional; commands without a structured mode reject it.
-    /// Compose with `--json` for machine consumption.
+    /// Emit the command's structured output instead of prose, where the command defines one: a
+    /// schema-validated `results` array plus a required `note` — the run's overall read, so an
+    /// empty list is a judged outcome, not silence. Commands without a structured mode reject the
+    /// flag. Compose with `--json` for machine consumption.
     #[arg(long)]
     pub structured: bool,
     /// Gate on the command's results: exit non-zero if its structured `results` array is
