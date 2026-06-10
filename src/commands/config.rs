@@ -6,9 +6,10 @@ use crate::output::emit;
 use crate::settings::Settings;
 
 /// One settable scalar default: its dotted key, how to read its resolved value, and how a raw `set`
-/// value is validated and typed into the JSON to store. The single source for the key set — `get`,
-/// `set`, `list`, and validation all derive from this, so adding a setting is one row. (Rulesets
-/// are structured source-lists, not scalars, so they stay hand-edited or scaffolded.)
+/// value is validated and typed into the JSON to store. `get`, `set`, `list`, and validation all
+/// derive from this table; a new setting is one row here plus its typed field on
+/// [`Settings`]/`RawDefaults` (settings.rs), which own the load/merge side. (Rulesets are
+/// structured source-lists, not scalars, so they stay hand-edited or scaffolded.)
 struct Setting {
     key: &'static str,
     read: fn(&Settings) -> Option<String>,

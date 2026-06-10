@@ -111,14 +111,12 @@ fn age(secs: u64) -> String {
 
 fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let path = crate::log::result_path(id).context("cannot determine the result path")?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            bail!(
-                "no stored result for run `{id}` (runs predating the store, or made with logging off, aren't kept)"
-            )
-        }
-        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    let Some(text) = crate::read_optional(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?
+    else {
+        bail!(
+            "no stored result for run `{id}` (runs predating the store, or made with logging off, aren't kept)"
+        )
     };
     let stored: Value = serde_json::from_str(&text)
         .with_context(|| format!("invalid result file {}", path.display()))?;

@@ -30,6 +30,8 @@ struct Raw {
     rulesets: BTreeMap<String, RawRuleset>,
 }
 
+/// Scalar command defaults as written in `settings.json`. Each key is a typed field here (+ a merge
+/// arm below) and one row in the settable-key table in `commands/config.rs`.
 #[derive(Debug, Default, Deserialize)]
 struct RawDefaults {
     model: Option<String>,

@@ -6,8 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `extract` structured-output item: one proposed rule.
 const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"string"},"rule":{"type":"string"},"provenance":{"type":"string"}},"required":["id","rule","provenance"]}"#;
 
-/// The `extract` command. Output is *candidate* rules for a human to curate into a rules dir; they
-/// shape every future run, so quality matters.
+/// The `extract` command. Output is *candidate* rules for a human to curate into a rules dir.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EXTRACT_ITEM),
