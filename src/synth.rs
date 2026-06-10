@@ -52,6 +52,8 @@ pub struct SynthOptions<'a> {
     /// Hard per-run cost cap in dollars, passed to the CLI (each run of a fan-out carries its own).
     /// `None` = no cap.
     pub max_budget_usd: Option<f64>,
+    /// Whether `--ranked` ordered the results (it shapes the prompt, so it's reported + recorded).
+    pub ranked: bool,
     /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
     /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
@@ -390,6 +392,8 @@ struct RunReport<'a> {
     memory: &'a str,
     /// The hard cost cap in effect, or `None` — surfaced every run so an uncapped run says so.
     max_budget_usd: Option<f64>,
+    /// Whether the results were ordered by significance (`--ranked`).
+    ranked: bool,
     context: &'a [String],
     excluded: &'a [String],
     /// Active `.arc/settings.json` layers in effect for this run (empty = built-in defaults only).
@@ -415,12 +419,13 @@ impl RunReport<'_> {
             .max_budget_usd
             .map_or_else(|| "none".to_owned(), crate::log::cost_display);
         let mut line = format!(
-            "model={}{}  tools={}  memory={}  budget={}  context=[{}]",
+            "model={}{}  tools={}  memory={}  budget={}{}  context=[{}]",
             self.model,
             runs,
             tools,
             self.memory,
             budget,
+            if self.ranked { "  ranked" } else { "" },
             self.context.join(", ")
         );
         if !self.excluded.is_empty() {
@@ -470,7 +475,13 @@ struct RunRecord<'a> {
     runs: usize,
     memory: &'a str,
     max_budget_usd: Option<f64>,
+    /// Claude tools allowed during the run (empty = none — the default, isolated shape).
+    tools: &'a [String],
+    ranked: bool,
     structured: bool,
+    /// Size of the assembled prompt arc sent, in characters — the deterministic context-size
+    /// counterpart to the billed token ground truth nested in `usage`.
+    prompt_chars: usize,
     sources: &'a [String],
     usage: &'a ai::Usage,
     /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
@@ -514,6 +525,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             "isolated"
         },
         max_budget_usd: opts.max_budget_usd,
+        ranked: opts.ranked,
         context: opts.sources,
         excluded: opts.excluded,
         config: opts.config,
@@ -650,7 +662,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             runs,
             memory: report.memory,
             max_budget_usd: opts.max_budget_usd,
+            tools: opts.allowed_tools,
+            ranked: opts.ranked,
             structured: opts.schema.is_some(),
+            prompt_chars: prompt.chars().count(),
             sources: opts.sources,
             usage: &usage,
             gate: opts.gate,
@@ -710,13 +725,15 @@ fn synthesize_run(
 ) -> anyhow::Result<ai::Synthesis> {
     let active = crate::runs::register(opts.command, opts.dir, model, index);
     ai::synthesize(
-        prompt,
-        model,
-        opts.allowed_tools,
-        opts.dir,
-        opts.ambient_memory,
-        opts.schema,
-        opts.max_budget_usd,
+        &ai::Request {
+            prompt,
+            model,
+            allowed_tools: opts.allowed_tools,
+            dir: opts.dir,
+            ambient_memory: opts.ambient_memory,
+            json_schema: opts.schema,
+            max_budget_usd: opts.max_budget_usd,
+        },
         active,
     )
 }

@@ -167,19 +167,26 @@ pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
     })
 }
 
+/// One synthesis call's run-shaping configuration — a struct, so a new parameter is a field rather
+/// than another argument every call site must repeat in order.
+pub struct Request<'a> {
+    pub prompt: &'a str,
+    pub model: &'a str,
+    pub allowed_tools: &'a [String],
+    /// Repository root, granted to allowed tools via `--add-dir` (the working directory is neutral).
+    pub dir: &'a Path,
+    pub ambient_memory: bool,
+    pub json_schema: Option<&'a str>,
+    pub max_budget_usd: Option<f64>,
+}
+
 /// Run a synthesis through the Claude Code CLI with a controlled, isolated context: an
 /// explicit model, no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory`
 /// is set — no ambient memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls).
 /// So by default the sources arclite reports are authoritative, modulo Claude Code's own fixed base
 /// (date, env, tools). Costs real tokens.
 pub fn synthesize(
-    prompt: &str,
-    model: &str,
-    allowed_tools: &[String],
-    dir: &Path,
-    ambient_memory: bool,
-    json_schema: Option<&str>,
-    max_budget_usd: Option<f64>,
+    req: &Request,
     mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
     let mut cmd = command("claude");
@@ -193,32 +200,32 @@ pub fn synthesize(
         "--verbose",
         "--include-partial-messages",
         "--model",
-        model,
+        req.model,
         "--strict-mcp-config",
     ]);
     cmd.arg("--allowedTools");
-    if allowed_tools.is_empty() {
+    if req.allowed_tools.is_empty() {
         cmd.arg(""); // allowlist of none → no tool schemas loaded (minimal context)
     } else {
-        cmd.args(allowed_tools);
+        cmd.args(req.allowed_tools);
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
-        cmd.arg("--add-dir").arg(dir);
+        cmd.arg("--add-dir").arg(req.dir);
     }
     // Hard cost cap, enforced by the CLI between turns: the run errors (subtype
     // `error_max_budget_usd`) once spend crosses the cap — the call in flight completes first, so
     // the total can overshoot (confirmed by exercising a tripped cap).
-    if let Some(cap) = max_budget_usd {
+    if let Some(cap) = req.max_budget_usd {
         cmd.arg("--max-budget-usd").arg(cap.to_string());
     }
     // Structured output (`--structured`): the result returns as a schema-validated `structured_output`
     // object, never scraped from prose.
-    if let Some(schema) = json_schema {
+    if let Some(schema) = req.json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
     // Disable auto-loading of user/project CLAUDE.md + auto-memory. A neutral cwd alone does NOT stop
     // it — the user-level ~/.claude/CLAUDE.md loads regardless of cwd. This affects only context
     // loading, not the separate credential store, so auth is unaffected; `--ambient-memory` opts in.
-    if !ambient_memory {
+    if !req.ambient_memory {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     }
@@ -235,7 +242,7 @@ pub fn synthesize(
             .stdin
             .take()
             .expect("stdin was configured as piped");
-        stdin.write_all(prompt.as_bytes())?;
+        stdin.write_all(req.prompt.as_bytes())?;
     } // dropping stdin closes it, signalling end-of-input
 
     // Read the event stream line-by-line as it arrives: fold each `assistant` turn into live stats
