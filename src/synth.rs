@@ -558,24 +558,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Each run records its live progress to its own marker in the active-run registry (cleared when
-    // the run's `Active` guard drops), so `arc status` can show it; a `--runs N` fan-out registers one
-    // marker per thread in `multi_synthesize`.
     let (synthesis, runs) = if opts.runs > 1 {
         multi_synthesize(prompt, requested, opts)?
     } else {
-        let active = crate::runs::register(opts.command, opts.dir, requested, 0);
-        let single = ai::synthesize(
-            prompt,
-            requested,
-            opts.allowed_tools,
-            opts.dir,
-            opts.ambient_memory,
-            opts.schema,
-            opts.max_budget_usd,
-            active,
-        )?;
-        (single, 1)
+        (synthesize_run(prompt, requested, opts, 0)?, 1)
     };
     let usage = synthesis.usage;
     // From here the report reflects the model the response says ran, and how many runs were combined.
@@ -700,6 +686,29 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     })
 }
 
+/// Register one run in the active-run registry and synthesize it — the one invocation the single-run
+/// path and the `--runs N` fan-out share, so the parameter list can't drift between them. The marker
+/// records live progress for `arc status` and clears when its `Active` guard drops; `index`
+/// distinguishes a fan-out's concurrent runs (each gets its own marker, written only by its thread).
+fn synthesize_run(
+    prompt: &str,
+    model: &str,
+    opts: &SynthOptions,
+    index: usize,
+) -> anyhow::Result<ai::Synthesis> {
+    let active = crate::runs::register(opts.command, opts.dir, model, index);
+    ai::synthesize(
+        prompt,
+        model,
+        opts.allowed_tools,
+        opts.dir,
+        opts.ambient_memory,
+        opts.schema,
+        opts.max_budget_usd,
+        active,
+    )
+}
+
 /// Run the synthesis `opts.runs` times concurrently and combine the outcomes, returning the combined
 /// result and how many runs succeeded. A failed run is surfaced and skipped; only an all-fail errors.
 fn multi_synthesize(
@@ -710,22 +719,7 @@ fn multi_synthesize(
     let n = opts.runs;
     let outcomes: Vec<anyhow::Result<ai::Synthesis>> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..n)
-            .map(|index| {
-                scope.spawn(move || {
-                    // Each concurrent run gets its own marker (by index), written only by this thread.
-                    let active = crate::runs::register(opts.command, opts.dir, model, index);
-                    ai::synthesize(
-                        prompt,
-                        model,
-                        opts.allowed_tools,
-                        opts.dir,
-                        opts.ambient_memory,
-                        opts.schema,
-                        opts.max_budget_usd,
-                        active,
-                    )
-                })
-            })
+            .map(|index| scope.spawn(move || synthesize_run(prompt, model, opts, index)))
             .collect();
         handles
             .into_iter()
