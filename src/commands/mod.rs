@@ -20,7 +20,8 @@ use crate::cli::{GlobalArgs, SynthArgs};
 use crate::synth::{self, SynthOptions};
 
 /// An optional structured-output mode a command can offer: a JSON Schema the model's result is
-/// validated against (returned as `structured_output`), plus a prompt note describing the shape.
+/// validated against (returned as `structured_output`), plus a note describing its item shape
+/// (appended to the shared [`STRUCTURED_NOTE`] framing).
 /// The schema is the shared `results`-array envelope ([`crate::synth::results_schema`]) wrapping the
 /// command's own item shape — so commands declare only what differs. Used only when `--structured`
 /// is passed; commands without one reject the flag. The gate, `--ranked`, and multi-run aggregation
@@ -37,6 +38,10 @@ const GROUNDING: &str =
 /// Appended by `--ranked`: order the results by significance (the array order is the ranking).
 const RANKED_NOTE: &str =
     "\n\nOrder the results from most to least significant; the order is the ranking.";
+
+/// Shared framing for structured output, prepended to the command's own item-shape note
+/// (single-sourced like [`GROUNDING`]/[`RANKED_NOTE`], so it can't drift between commands).
+const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
@@ -86,6 +91,7 @@ pub fn run_synthesis(
                 "`{command}` has no structured output mode — drop --structured/--fail-on-findings"
             )
         })?;
+        prompt.push_str(STRUCTURED_NOTE);
         prompt.push_str(s.note);
         // Gate on the `results` array the schemas produce — the key single-sourced in synth.
         let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);

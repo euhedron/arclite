@@ -10,7 +10,7 @@ const SUGGEST_ITEM: &str = r#"{"type":"object","properties":{"suggestion":{"type
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(SUGGEST_ITEM),
-        note: "\n\nReturn the result as structured data — each item with `suggestion` (one line) and `rationale` (one clause).",
+        note: "each item with `suggestion` (one line) and `rationale` (one clause).",
     };
     super::run_synthesis(args, global, "suggest", Some(structure), |ctx| {
         format!(

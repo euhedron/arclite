@@ -10,7 +10,7 @@ const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EXTRACT_ITEM),
-        note: "\n\nReturn the result as structured data — one object per proposed rule, each with `id` (short kebab-case), `rule` (one tight paragraph stating the principle/anti-pattern and how to recognize it), and `provenance` (where in this repo it came from). Empty if there are none worth proposing.",
+        note: "one object per proposed rule, each with `id` (short kebab-case), `rule` (one tight paragraph stating the principle/anti-pattern and how to recognize it), and `provenance` (where in this repo it came from). Empty if there are none worth proposing.",
     };
     super::run_synthesis(args, global, "extract", Some(structure), |ctx| {
         format!(

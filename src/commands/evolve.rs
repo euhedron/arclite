@@ -10,7 +10,7 @@ const EVOLVE_ITEM: &str = r#"{"type":"object","properties":{"change":{"type":"st
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EVOLVE_ITEM),
-        note: "\n\nReturn the result as structured data — each item with `change` (a radical, drastic direction) and `rationale` (why it could be worth it despite seeming extreme).",
+        note: "each item with `change` (a radical, drastic direction) and `rationale` (why it could be worth it despite seeming extreme).",
     };
     super::run_synthesis(args, global, "evolve", Some(structure), |ctx| {
         format!(

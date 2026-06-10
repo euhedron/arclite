@@ -10,7 +10,7 @@ const AUDIT_ITEM: &str = r#"{"type":"object","properties":{"rule":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(AUDIT_ITEM),
-        note: "\n\nReturn the result as structured data — one object per concrete violation, each with `rule` (the rule id), `location` (file/area), and `reason` (one clause). Empty if there are none.",
+        note: "one object per concrete violation, each with `rule` (the rule id), `location` (file/area), and `reason` (one clause). Empty if there are none.",
     };
     super::run_synthesis(args, global, "audit", Some(structure), |ctx| {
         format!(
