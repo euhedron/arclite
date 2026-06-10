@@ -211,8 +211,7 @@ pub fn synthesize(
         cmd.arg("--max-budget-usd").arg(cap.to_string());
     }
     // Structured output (`--structured`): the result returns as a schema-validated `structured_output`
-    // object, never scraped from prose. The which-resolved direct spawn (see `command`) passes this
-    // quote-heavy arg through intact, where the old `cmd /C` path would have mangled it.
+    // object, never scraped from prose.
     if let Some(schema) = json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
@@ -286,9 +285,11 @@ pub fn synthesize(
     }
     // stderr is small for `claude -p` (warnings), so reading it after stdout drains won't deadlock.
     let mut stderr = String::new();
-    if let Some(mut e) = child.stderr.take() {
-        let _ = e.read_to_string(&mut stderr);
-    }
+    let _ = child
+        .stderr
+        .take()
+        .expect("stderr was configured as piped")
+        .read_to_string(&mut stderr);
     let status = child.wait()?;
     // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
     // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
