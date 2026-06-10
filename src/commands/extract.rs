@@ -10,7 +10,7 @@ const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EXTRACT_ITEM),
-        note: "one object per proposed rule, each with `id` (short kebab-case), `rule` (one tight paragraph stating the principle/anti-pattern and how to recognize it), and `provenance` (where in this repo it came from). Empty if there are none worth proposing.",
+        note: "one object per proposed rule: `id`, `rule`, `provenance`. Empty if there are none worth proposing.",
     };
     super::run_synthesis(args, global, "extract", Some(structure), |ctx| {
         format!(
@@ -21,9 +21,8 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              From the context above, propose a small set of discrete, reusable rules — each with a \
              short kebab-case id, one tight paragraph stating the principle/anti-pattern and how to \
              recognize it, and its provenance (where in this repo it came from). Favor anti-patterns \
-             and violated principles actually evidenced in the code over generic advice, and ground \
-             each in something concrete. Keep each to a single paragraph (rules are included verbatim \
-             into future runs). Skip anything you can't ground in the context above; treat any rules \
+             and violated principles actually evidenced in the code over generic advice. Keep each \
+             to a single paragraph (rules are included verbatim into future runs). Treat any rules \
              already present as existing policy and don't duplicate them."
         )
     })

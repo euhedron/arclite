@@ -10,7 +10,7 @@ const CRITIQUE_ITEM: &str = r#"{"type":"object","properties":{"location":{"type"
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(CRITIQUE_ITEM),
-        note: "each item with `location` (where) and `defect` (the problem, one clause).",
+        note: "each item: `location`, `defect`.",
     };
     super::run_synthesis(args, global, "critique", Some(structure), |ctx| {
         format!(

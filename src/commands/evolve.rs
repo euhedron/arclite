@@ -10,7 +10,7 @@ const EVOLVE_ITEM: &str = r#"{"type":"object","properties":{"change":{"type":"st
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EVOLVE_ITEM),
-        note: "each item with `change` (a radical, drastic direction) and `rationale` (why it could be worth it despite seeming extreme).",
+        note: "each item: `change`, `rationale`.",
     };
     super::run_synthesis(args, global, "evolve", Some(structure), |ctx| {
         format!(
@@ -19,9 +19,8 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              Propose drastic overhauls, structural reimaginings, and bold directions that would \
              normally go unspoken — challenge the fundamental assumptions, scope, and shape of the \
              project. What would a fresh attempt, unburdened by the current design, do differently? \
-             Treat what exists as a point of departure, not a constraint. Ground each proposal in \
-             something concrete above; for each, give the change and why it could be worth it despite \
-             seeming extreme."
+             Treat what exists as a point of departure, not a constraint. For each, give the change \
+             and why it could be worth it despite seeming extreme."
         )
     })
 }
