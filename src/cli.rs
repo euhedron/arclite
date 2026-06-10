@@ -53,6 +53,9 @@ pub enum Command {
     Config(ConfigArgs),
     /// Show the run history, or one run's full result with `<id>` (the completed-run log).
     Log(LogArgs),
+    /// Aggregate run stats from the log — runs, blocks, tokens, and cost over the past hour, day,
+    /// week, and all time, plus per-command totals.
+    Usage(UsageArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
     /// Synthesize a brief assessment of a repository.
@@ -141,6 +144,10 @@ pub struct LogArgs {
     #[arg(long)]
     pub all: bool,
 }
+
+/// Arguments for `arc usage`.
+#[derive(Debug, Args)]
+pub struct UsageArgs {}
 
 /// Arguments for `arc completions`.
 #[derive(Debug, Args)]

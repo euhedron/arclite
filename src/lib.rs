@@ -75,6 +75,9 @@ pub fn run() -> ExitCode {
             commands::config::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Log(args) => commands::log::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Usage(args) => {
+            commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Completions(args) => {
             clap_complete::generate(
                 args.shell,

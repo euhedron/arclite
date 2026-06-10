@@ -2,6 +2,7 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, LogArgs};
+use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE};
 use crate::output::emit;
 
 /// The `log` command.
@@ -27,18 +28,7 @@ const DEFAULT_LIMIT: usize = 20;
 /// The run records (newest first) that pass the `--command`/`--repo`/`--blocked` filters, plus how
 /// many log lines didn't parse.
 fn matching_records(args: &LogArgs) -> anyhow::Result<(Vec<Value>, usize)> {
-    let path = crate::log::path().context("cannot determine the run-log path")?;
-    let text = crate::read_optional(&path)
-        .with_context(|| format!("cannot read the run log {}", path.display()))?
-        .unwrap_or_default();
-    let mut records: Vec<Value> = Vec::new();
-    let mut unparsed = 0usize;
-    for line in crate::log::record_lines(&text) {
-        match serde_json::from_str::<Value>(line) {
-            Ok(v) => records.push(v),
-            Err(_) => unparsed += 1,
-        }
-    }
+    let (mut records, unparsed) = crate::log::records()?;
     records.retain(|r| keep(r, args));
     records.reverse(); // newest first (the log is append-only)
     Ok((records, unparsed))
@@ -128,11 +118,6 @@ fn row(r: &Value, now: u64) -> String {
         if blocked { " · BLOCKED" } else { "" },
     )
 }
-
-// Seconds per minute, hour, and day — the bucket thresholds and divisors for the relative age below.
-const SECS_PER_MINUTE: u64 = 60;
-const SECS_PER_HOUR: u64 = 60 * SECS_PER_MINUTE;
-const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
 
 /// A coarse relative age: seconds, minutes, hours, or days.
 fn age(secs: u64) -> String {

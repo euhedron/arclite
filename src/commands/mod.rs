@@ -11,6 +11,7 @@ pub mod rules;
 pub mod status;
 pub mod suggest;
 pub mod summarize;
+pub mod usage;
 
 use std::process::ExitCode;
 
@@ -113,6 +114,7 @@ pub fn run_synthesis(
             model: model.as_deref(),
             runs: args.runs,
             max_budget_usd,
+            ranked: args.ranked,
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,

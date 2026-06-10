@@ -7,13 +7,25 @@ use crate::cli::{GlobalArgs, InitArgs};
 use crate::output::emit;
 use crate::settings::Settings;
 
-/// Starter project settings: a `project` ruleset sourcing `.arc/rules`, set as the default, so the
-/// AI commands weigh the repo's own rules without further setup.
-const STARTER_SETTINGS: &str = r#"{
-  "defaults": { "ruleset": "project" },
-  "rulesets": { "project": { "sources": ["rules"] } }
+/// The rules subdirectory inside `.arc` — one name for the directory the scaffold creates and the
+/// starter ruleset's source, which must agree or the scaffolded default silently resolves to nothing.
+const RULES_DIR: &str = "rules";
+
+/// The tracked hooks directory — one name for the directory the scaffold writes and the
+/// `core.hooksPath` value that activates it, so a rename can't rot one against the other.
+const HOOKS_DIR: &str = "hooks";
+
+/// Starter project settings: a `project` ruleset sourcing `.arc/rules` ([`RULES_DIR`]), set as the
+/// default, so the AI commands weigh the repo's own rules without further setup.
+fn starter_settings() -> String {
+    format!(
+        r#"{{
+  "defaults": {{ "ruleset": "project" }},
+  "rulesets": {{ "project": {{ "sources": ["{RULES_DIR}"] }} }}
+}}
+"#
+    )
 }
-"#;
 
 /// Starter pre-push gate — a minimal composition the repo edits to taste.
 const STARTER_HOOK: &str = r#"#!/bin/sh
@@ -35,16 +47,16 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let mut created = Vec::new();
     let mut skipped = Vec::new();
 
-    ensure_dir(&arc.join("rules"), &mut created, &mut skipped)?;
+    ensure_dir(&arc.join(RULES_DIR), &mut created, &mut skipped)?;
     write_if_absent(
         &Settings::project_path(&root),
-        STARTER_SETTINGS,
+        &starter_settings(),
         &mut created,
         &mut skipped,
     )?;
 
     if args.hook {
-        let hooks = root.join("hooks");
+        let hooks = root.join(HOOKS_DIR);
         std::fs::create_dir_all(&hooks)
             .with_context(|| format!("cannot create {}", hooks.display()))?;
         let hook = hooks.join("pre-push");
@@ -106,7 +118,7 @@ fn write_if_absent(
 fn activate_hooks(root: &Path) -> anyhow::Result<()> {
     let ok = crate::ai::command("git")
         .current_dir(root)
-        .args(["config", "core.hooksPath", "hooks"])
+        .args(["config", "core.hooksPath", HOOKS_DIR])
         .status()
         .context("could not run git to set core.hooksPath")?
         .success();

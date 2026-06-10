@@ -6,7 +6,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use serde::Serialize;
+
+/// Seconds per minute, hour, and day — the time constants shared by `arc log`'s relative ages and
+/// `arc usage`'s window sums.
+pub const SECS_PER_MINUTE: u64 = 60;
+pub const SECS_PER_HOUR: u64 = 60 * SECS_PER_MINUTE;
+pub const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
 
 /// A cost formatted for display — the single statement of the dollar four-decimal format.
 pub fn cost_display(cost_usd: f64) -> String {
@@ -43,10 +50,28 @@ pub fn result_path(id: &str) -> Option<PathBuf> {
 }
 
 /// The record lines of a run-log `text`: non-blank lines, one JSON record each. The single
-/// definition of "a record line" — both [`count`] and `arc log`'s listing build on it, so the
+/// definition of "a record line" — both [`count`] and [`records`] build on it, so the
 /// record-per-line format lives in one place rather than drifting between them.
 pub fn record_lines(text: &str) -> impl Iterator<Item = &str> + '_ {
     text.lines().filter(|l| !l.trim().is_empty())
+}
+
+/// All run records, in log (oldest-first) order, plus how many lines didn't parse — surfaced, never
+/// dropped. The one loader `arc log` and `arc usage` share; an absent log is just zero records.
+pub fn records() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
+    let path = path().context("cannot determine the run-log path")?;
+    let text = crate::read_optional(&path)
+        .with_context(|| format!("cannot read the run log {}", path.display()))?
+        .unwrap_or_default();
+    let mut records = Vec::new();
+    let mut unparsed = 0usize;
+    for line in record_lines(&text) {
+        match serde_json::from_str(line) {
+            Ok(v) => records.push(v),
+            Err(_) => unparsed += 1,
+        }
+    }
+    Ok((records, unparsed))
 }
 
 /// Number of run records currently logged — for `doctor`. `Ok(0)` when the log is absent (no runs

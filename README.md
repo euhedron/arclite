@@ -25,7 +25,8 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # report structured facts about a repo
 arc status                           # runs currently in flight
-arc log                              # past runs (arc log <id> for a full result)
+arc log                              # past runs (arc log <id> for a full result; --last/--command/--blocked select)
+arc usage                            # cost/run/token rollup: hour, day, week, total
 arc rules                            # the rules in play (ruleset, sources, provenance)
 arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging, max budget)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
@@ -41,7 +42,7 @@ Shared options on every AI command select rules (`--ruleset`/`--rules`), shape t
 
 **Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set defaults (model, ruleset, logging, a hard cost cap) — by hand or with `arc config set` — and define **rulesets** — named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules live in `.arc/rules/` (its `self` ruleset, the configured default).
 
-**Logging** — every *real, completed* AI run appends a one-line JSON record — the run's parameters (command, repo, model, memory, context sources, and gate outcome) plus its ground-truth tokens + cost — to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics. The full result is also stored at `~/.arc/logs/results/<id>.json`, so `arc log` lists the history and `arc log <id>` re-shows a run without re-running it. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it (and the result store) off; dry runs are never logged (no spend, nothing to record).
+**Logging** — every *real, completed* AI run appends a one-line JSON record — the run's parameters (command, repo, model, memory, context sources, and gate outcome) plus its ground-truth tokens + cost — to `~/.arc/logs/runs.jsonl`: a durable trace that outlives the terminal and is the substrate for "is the spend earning its keep" metrics (`arc usage` is its local rollup). The full result is also stored at `~/.arc/logs/results/<id>.json`, so `arc log` lists the history and `arc log <id>` re-shows a run without re-running it. On by default; `arc doctor` shows the path and run count; `defaults.logging = false` turns it (and the result store) off; dry runs are never logged (no spend, nothing to record).
 
 **Gating on push** (opt-in) — arclite's own tracked `hooks/pre-push` runs `critique` and `suggest` (non-blocking advisories) concurrently with the `arc audit --include src --fail-on-findings` gate, blocking the push on any violation. (`--include src` scopes it to arclite's own source; `arc init --hook` scaffolds the generic gate for any repo to adapt — a fresh scaffold gates against its empty starter ruleset, passing vacuously (and saying so) until rules are curated, so the hook can be wired up before the rules exist.) Enable for a clone with `git config core.hooksPath hooks`; skip one push with `ARC_GATE=0 git push`; disable by unsetting `core.hooksPath`. It spends real AI tokens per push (it announces this and prints the cost) — deliberately pre-*push*, not pre-commit, and opt-in, because passive per-commit AI spend is arc's failure mode.
 
@@ -82,15 +83,23 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 
 ## Roadmap
 
-Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant).
+Open and unsettled — not a plan, an ordering, or a commitment; it evolves (items get added, dropped, or reshaped as signals warrant). Two lists, so what has landed and what is open can't blur.
 
-- [ ] Aggregate extracted **rules** across repos: dedup rules that recur in 2+ repos, promote them to shared pools, and merge provenance-aware (`extract` produces per-repo candidates today; the cross-repo part is open).
-- [ ] Aggregate per-run logs into metrics — across runs, repos, and (eventually) a team (command/gate frequency, audit pass-rate over time, cost trends) to see whether the rules are earning their keep. Per-run logging to `~/.arc/logs/runs.jsonl` ships; the cross-run/cross-repo/team rollup is the open part.
-- [ ] **Multi-run strategies** — `--runs N` ships: run a command N times concurrently and union the deduped `results`. Open: a secondary-agent combine that dedupes/synthesizes semantically (and buckets by consensus, for ranking); sequential pass-forward (each run sees prior findings); and fanning the same union across *different* commands (e.g. a concurrent pre-push gate).
-- [ ] `arc status` lists in-flight runs (ships) — one marker file per run, written on start and cleared on exit (a `--runs N` fan-out is N independent markers), the in-flight complement to the completed-run log. Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
-- [ ] **Live run stats** (ships) — the synthesis layer streams the CLI's events (`--output-format stream-json --include-partial-messages`) and updates each run's marker as they arrive, so `arc status` shows live progress: output **characters** (the continuous signal; exact tokens land only at completion — the streaming Reference explains why), plus turns and tool-calls at each boundary. Open: richer per-run detail.
+**Landed, with open edges:**
+
+- [x] **Multi-run** — `--runs N`: run a command N times concurrently and union the deduped `results`. Open: a secondary-agent combine that dedupes/synthesizes semantically (and buckets by consensus, for ranking); sequential pass-forward (each run sees prior findings); and fanning the same union across *different* commands (e.g. a concurrent pre-push gate).
+- [x] **Run logging + local rollup** — every completed run appends to `~/.arc/logs/runs.jsonl` (ground-truth usage + cost and the run's parameters), and `arc usage` rolls it up: runs, blocks, tokens, and cost by hour/day/week/total, plus per-command totals. Open: cross-repo and (eventually) team aggregation; trends over time (audit pass-rate, cost curves) to see whether the rules are earning their keep.
+- [x] **`arc status`** — in-flight runs: one marker file per run, written on start and cleared on exit (a `--runs N` fan-out is N independent markers). Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
+- [x] **Live run stats** — the synthesis layer streams the CLI's events (`--output-format stream-json --include-partial-messages`) and updates each run's marker as they arrive, so `arc status` shows live progress: output **characters** (the continuous signal; exact tokens land only at completion — the streaming Reference explains why), plus turns and tool-calls at each boundary. Open: richer per-run detail.
+
+**Open:**
+
+- [ ] Aggregate extracted **rules** across repos: dedup rules that recur in 2+ repos, promote them to shared pools, and merge provenance-aware (`extract` produces per-repo candidates today).
+- [ ] **Smooth onboarding & rule capture** — initializing and using arclite in any repo should be intuitive end to end: `arc init`, then discovering/extracting the rules a repo already embodies and curating them into the configured ruleset, without friction.
+- [ ] **Codex CLI as an alternative synthesis backend** — selectable per run/config alongside the Claude Code CLI, so usage can be distributed across subscriptions; the concrete first step of the agent-agnostic question.
+- [ ] **Surface the available models** — from the CLI (and the eventual TUI): which model ids can be configured, without guessing. Open: how to enumerate them headlessly.
 - [ ] **Log errored runs too** — a run that fails mid-flight (e.g. a tripped `--max-budget-usd` cap) spends real money, and the CLI's error payload carries its ground-truth usage + cost, but only completed runs are recorded today.
-- [ ] **`arc tui`** — an interactive TUI over the same commands: arrow-key navigation, and a self-refreshing view that updates in place rather than re-running a command — e.g. a live `status` that streams each run's progress as it happens, a clear QOL win over re-running `arc status`. Precedent: the Claude Code and Codex CLIs/TUIs (their interactive-mode + terminal-config docs are under References). Deferred — floated, not yet designed.
+- [ ] **`arc tui`** — an interactive TUI over the same commands: arrow-key navigation, easy result browsing, and a self-refreshing view that updates in place rather than re-running a command — e.g. a live `status` that streams each run's progress as it happens. Precedent: the Claude Code and Codex CLIs/TUIs (their interactive-mode + terminal-config docs are under References). Deferred — floated, not yet designed.
 - [ ] Search across one or more repos.
 - [ ] A "lexicon" — canonical project terms + casing that linting enforces (to auto-catch casing/naming drift in product and repo names).
 - [ ] Fetch Claude docs → Markdown for citable reference snippets (cite specific lines; *derive* where valuable). Sources under **References**.
@@ -99,8 +108,8 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 ## Open questions
 
 - **Rules — format & lifecycle.** The rule format (a **Markdown file**; filename stem = `id`) and ruleset composition ship (see Configuration). Open: frontmatter for *selective inclusion* (`kind`, `scope`, `tags`), added only when something filters on it; rename-stability of filename-ids; whether prompts/todos share the format.
-- **Gating / hooks for any command (cost-visible).** The gate (`--fail-on-findings`) and the pre-push hook ship (see **Gating on push**). Still open: **Claude Code hook events** invoking `arc` (complementary to git hooks, not a replacement), and whether a pre-commit variant ever earns its keep.
-- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` surfaces what's worth attention, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules, `evolve` proposes radical change). The first five work within the current frame; `evolve` deliberately challenges it. Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb.
+- **Gating / hooks for any command (cost-visible).** The gate (`--fail-on-findings`) and the pre-push hook ship (see **Gating on push**). Still open: **Claude Code hook events** invoking `arc` (complementary to git hooks, not a replacement), whether a pre-commit variant ever earns its keep, and whether the tracked `hooks/` folder should live under `.arc/` with the rest of arclite's per-repo footprint.
+- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` surfaces what's worth attention, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules, `evolve` proposes radical change). The first five work within the current frame; `evolve` deliberately challenges it. Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb. Also open: whether the AI verbs should group under one `arc run <verb>` (one substrate, prompt-differentiated, any per-verb defaults living in settings) or stay top-level.
 - **Auto-context depth.** The default context includes the *detected* manifests (root or nested) + the root README. Open: search wider for docs vs. keeping a light default + explicit `--include`.
 - **Prompts as files?** Command prompts are inline in code today. Externalizing them as **Markdown** (the same substrate as rules) would make them tunable without a rebuild — do it when a prompt needs tuning without recompiling.
 - **Reclaim the `arc` name.** The binary is *already* `arc` (it shadows any legacy `arc` at install time); the open part is renaming the repo (here + on GitHub) and formally superseding legacy arc.
@@ -108,7 +117,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 
 ## Related repositories
 
-- <https://github.com/nikganderson/arc/src/> — legacy arc (reference-only).
+- <https://github.com/nikganderson/arc/src/> — legacy arc (deprecated — its README banners the supersession and the MCP/hook cleanup steps; reference-only).
 - <https://github.com/nikganderson/ida/src/> — IDA, a live repo arclite is exercised against.
 - <https://github.com/nikganderson/quant/src/> — quant, likewise.
 
