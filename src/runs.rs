@@ -14,22 +14,19 @@ use serde::{Deserialize, Serialize};
 pub struct ActiveRun {
     pub pid: u32,
     /// Distinguishes the concurrent runs of a `--runs N` fan-out within one process.
-    #[serde(default)]
     pub index: usize,
     pub command: String,
     pub repo: String,
     pub model: String,
     pub started_at: u64,
-    /// Live progress, updated as the run streams. `#[serde(default)]` so a marker written before any
-    /// output — or by an older binary — still reads.
-    #[serde(default)]
+    /// Live progress, updated as the run streams. Every field is written at registration, so there
+    /// are no serde defaults: a marker that can't be read in full surfaces as unreadable rather
+    /// than as fabricated zeros.
     pub turns: u64,
-    #[serde(default)]
     pub tool_calls: u64,
     /// Characters — not tokens — because the exact token count arrives only at message end (see
     /// [`crate::ai::synthesize`]); characters are the continuous live signal, and the billed token
     /// count lands in the final run report.
-    #[serde(default)]
     pub output_chars: u64,
 }
 
