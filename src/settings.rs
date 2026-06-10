@@ -81,18 +81,10 @@ impl Settings {
         let dir = path
             .parent()
             .expect("a .arc/settings.json path always has a parent");
-        if raw.defaults.model.is_some() {
-            self.default_model = raw.defaults.model;
-        }
-        if raw.defaults.ruleset.is_some() {
-            self.default_ruleset = raw.defaults.ruleset;
-        }
-        if raw.defaults.logging.is_some() {
-            self.default_logging = raw.defaults.logging;
-        }
-        if raw.defaults.max_budget_usd.is_some() {
-            self.default_max_budget_usd = raw.defaults.max_budget_usd;
-        }
+        overlay(&mut self.default_model, raw.defaults.model);
+        overlay(&mut self.default_ruleset, raw.defaults.ruleset);
+        overlay(&mut self.default_logging, raw.defaults.logging);
+        overlay(&mut self.default_max_budget_usd, raw.defaults.max_budget_usd);
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
             self.rulesets.insert(id, sources); // project (merged last) wins on id collision
@@ -109,6 +101,14 @@ impl Settings {
     /// "on unless `defaults.logging = false`" rule that `run_synthesis` gates on and `config` reports.
     pub fn logging_enabled(&self) -> bool {
         self.default_logging != Some(false)
+    }
+}
+
+/// Overlay one default from a later settings layer: a set value wins, an unset one leaves the
+/// earlier layer's in place — the layering rule, stated once for every scalar default.
+fn overlay<T>(slot: &mut Option<T>, value: Option<T>) {
+    if value.is_some() {
+        *slot = value;
     }
 }
 

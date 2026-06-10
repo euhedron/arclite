@@ -32,9 +32,14 @@ pub fn path() -> Option<PathBuf> {
     Some(logs_dir()?.join("runs.jsonl"))
 }
 
+/// The result-store directory, `~/.arc/logs/results` — one `<id>.json` per run.
+pub fn results_dir() -> Option<PathBuf> {
+    Some(logs_dir()?.join("results"))
+}
+
 /// The file storing one run's full result, `~/.arc/logs/results/<id>.json` — read by `arc log <id>`.
 pub fn result_path(id: &str) -> Option<PathBuf> {
-    Some(logs_dir()?.join("results").join(format!("{id}.json")))
+    Some(results_dir()?.join(format!("{id}.json")))
 }
 
 /// The record lines of a run-log `text`: non-blank lines, one JSON record each. The single

@@ -42,6 +42,16 @@ pub(crate) fn read_optional(path: &std::path::Path) -> std::io::Result<Option<St
     }
 }
 
+/// List a directory, with a missing directory as `None` — [`read_optional`]'s absent-vs-failed
+/// distinction for directories, shared by the run-registry and result-store listings.
+pub(crate) fn read_dir_optional(dir: &std::path::Path) -> std::io::Result<Option<std::fs::ReadDir>> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
 /// `SUCCESS`, the gate's distinct block code, or `FAILURE` with the error on stderr.
 #[must_use]
@@ -65,6 +75,15 @@ pub fn run() -> ExitCode {
             commands::config::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Log(args) => commands::log::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Completions(args) => {
+            clap_complete::generate(
+                args.shell,
+                &mut <Cli as clap::CommandFactory>::command(),
+                "arc",
+                &mut std::io::stdout(),
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
         Command::Suggest(args) => commands::suggest::run(args, &cli.global),
         Command::Extract(args) => commands::extract::run(args, &cli.global),

@@ -2,12 +2,22 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+/// The exit-code contract, shown under `arc --help` — load-bearing for hooks/CI/agents that branch
+/// on status. The gate code is formatted in from its one definition, [`crate::synth::GATE_BLOCKED_EXIT`].
+fn exit_codes_help() -> String {
+    format!(
+        "Exit codes:\n  0  success\n  1  error\n  {}  blocked — an opt-in --fail-on-findings gate found `results`",
+        crate::synth::GATE_BLOCKED_EXIT
+    )
+}
+
 /// Top-level arclite command-line interface.
 #[derive(Debug, Parser)]
 #[command(
     name = "arc",
     version,
     about = env!("CARGO_PKG_DESCRIPTION"),
+    after_help = exit_codes_help(),
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -43,6 +53,8 @@ pub enum Command {
     Config(ConfigArgs),
     /// Show the run history, or one run's full result with `<id>` (the completed-run log).
     Log(LogArgs),
+    /// Generate a shell completion script for `arc` (write it where your shell loads completions).
+    Completions(CompletionsArgs),
     /// Synthesize a brief assessment of a repository.
     Summarize(SynthArgs),
     /// Suggest where attention is best spent in a repository.
@@ -111,11 +123,30 @@ pub enum ConfigAction {
 /// Arguments for `arc log`.
 #[derive(Debug, Args)]
 pub struct LogArgs {
-    /// A run id (from `arc log`) to show in full; omit to list recent runs.
+    /// A run id — or unique id prefix — to show in full; omit to list recent runs.
     pub id: Option<String>,
-    /// List all runs, not just the most recent.
+    /// Show the newest run (after any filters) in full, e.g. `arc log --last --command audit`.
+    #[arg(long, conflicts_with = "id")]
+    pub last: bool,
+    /// Only runs of this command (e.g. `audit`).
+    #[arg(long, value_name = "CMD")]
+    pub command: Option<String>,
+    /// Only runs whose repo path contains this (case-insensitive).
+    #[arg(long, value_name = "TEXT")]
+    pub repo: Option<String>,
+    /// Only runs where the gate blocked.
+    #[arg(long)]
+    pub blocked: bool,
+    /// List all matching runs, not just the most recent.
     #[arg(long)]
     pub all: bool,
+}
+
+/// Arguments for `arc completions`.
+#[derive(Debug, Args)]
+pub struct CompletionsArgs {
+    /// The shell to generate for.
+    pub shell: clap_complete::Shell,
 }
 
 /// Arguments for `arc inspect`.

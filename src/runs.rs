@@ -111,12 +111,10 @@ pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
     let Some(dir) = dir() else {
         return Ok((Vec::new(), Vec::new()));
     };
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
-        Err(e) => {
-            return Err(e).with_context(|| format!("cannot read the run registry {}", dir.display()));
-        }
+    let Some(entries) = crate::read_dir_optional(&dir)
+        .with_context(|| format!("cannot read the run registry {}", dir.display()))?
+    else {
+        return Ok((Vec::new(), Vec::new()));
     };
     let mut runs = Vec::new();
     let mut unreadable = Vec::new();

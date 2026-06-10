@@ -19,7 +19,8 @@ const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also lo
 
 /// Exit code when an opt-in gate (`--fail-on-findings`) blocks — distinct from `1` (arclite error)
 /// so a hook/CI can tell "found violations" apart from "the tool failed". Any non-zero blocks.
-const GATE_BLOCKED_EXIT: u8 = 2;
+/// Also formatted into the `arc --help` exit-code section (see `cli::exit_codes_help`).
+pub(crate) const GATE_BLOCKED_EXIT: u8 = 2;
 
 const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 
@@ -439,6 +440,8 @@ impl RunReport<'_> {
 
 #[derive(Serialize)]
 struct SynthOutput<'a> {
+    /// The run's id when logging is on — the key `arc log <id>` and the result store use.
+    id: Option<String>,
     run: RunReport<'a>,
     synthesis: String,
     usage: ai::Usage,
@@ -634,7 +637,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     }
     // Append a durable run record (real runs only) before emitting — observability that outlives
     // the terminal scrollback. A logging failure warns but never fails the command.
-    let logged = if opts.log {
+    let (logged, id) = if opts.log {
         let ts = crate::log::now_secs();
         let id = format!("{ts}-{}", std::process::id());
         let record = RunRecord {
@@ -663,17 +666,21 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
                 structured: structured.as_ref(),
             },
         );
-        logged
+        (logged, Some(id))
     } else {
-        None
+        (None, None)
     };
-    // Disclose where the run was logged (or that logging is off) — the log location is never hidden.
-    match &logged {
-        Some(path) => human.push_str(&format!("\nlogged: {}", path.display())),
-        None if !opts.log => human.push_str(LOGGING_OFF_NOTE),
-        None => {} // logging on but the append failed — append() already warned to stderr
+    // Disclose where the run was logged and its id (`arc log <id>` re-shows it), or that logging is
+    // off — the log location is never hidden.
+    match (&logged, &id) {
+        (Some(path), Some(id)) => {
+            human.push_str(&format!("\nlogged: {} · id {id}", path.display()));
+        }
+        (None, _) if !opts.log => human.push_str(LOGGING_OFF_NOTE),
+        _ => {} // logging on but the append failed — append() already warned to stderr
     }
     let out = SynthOutput {
+        id,
         run: report,
         synthesis: text,
         usage,
