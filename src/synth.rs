@@ -89,7 +89,7 @@ pub struct SynthOptions<'a> {
     pub kinds: bool,
     /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
-    /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
+    /// Repository root for the run — see [`crate::ai::Request`] for how it reaches allowed tools.
     pub dir: &'a Path,
     /// Human-readable descriptions of the context pieces included (for the run report).
     pub sources: &'a [String],
@@ -814,8 +814,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
 
 /// Register one run in the active-run registry and synthesize it — the one invocation the single-run
 /// path and the `--runs N` fan-out share, so the parameter list can't drift between them. The marker
-/// records live progress for `arc status` and clears when its `Active` guard drops; `index`
-/// distinguishes a fan-out's concurrent runs (each gets its own marker, written only by its thread).
+/// records live progress for `arc status` and clears when its `Active` guard drops.
 fn synthesize_run(
     prompt: &str,
     model: &str,

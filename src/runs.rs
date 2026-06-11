@@ -76,9 +76,8 @@ impl Drop for Active {
     }
 }
 
-/// Record an in-flight run; the returned guard clears its marker on drop. `index` distinguishes the
-/// runs of a `--runs N` fan-out within one process. Best-effort: returns `None` (the run proceeds
-/// untracked) if the registry can't be written, never failing the run.
+/// Record an in-flight run; the returned guard clears its marker on drop. Best-effort: returns
+/// `None` (the run proceeds untracked) if the registry can't be written, never failing the run.
 #[must_use]
 pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option<Active> {
     let dir = dir()?;

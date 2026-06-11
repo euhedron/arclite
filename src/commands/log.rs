@@ -93,7 +93,12 @@ fn cost(v: &Value) -> String {
 /// One log record as a compact row — tolerant of older records that predate some fields.
 fn row(r: &Value, now: u64) -> String {
     let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
-    let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
+    // A missing `ts` is surfaced as "?", not shown as a bogus age computed from 0 — matching how the
+    // other fields (and stored_human's absolute time) disclose an absent value rather than faking one.
+    let age = r
+        .get("ts")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)));
     let repo_full = field(r, "repo");
     let repo = repo_full
         .rsplit(['/', '\\'])
@@ -101,8 +106,7 @@ fn row(r: &Value, now: u64) -> String {
         .expect("rsplit always yields at least one piece");
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
     format!(
-        "{id} · {} · {} · {} · {} · {}{}",
-        age(now.saturating_sub(ts)),
+        "{id} · {age} · {} · {} · {} · {}{}",
         field(r, "command"),
         repo,
         field(r, "model"),
