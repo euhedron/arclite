@@ -195,22 +195,19 @@ fn gather_includes(
         let mut unreadable = 0usize;
         let mut duplicate = 0usize;
         for file in &files {
-            let canon = canonical(file);
-            if let Some(c) = &canon
-                && seen.contains(c)
-            {
-                duplicate += 1;
-                continue; // already in context — don't read or bill it twice
-            }
             let label = file.display().to_string();
-            if append_file(&label, file, max, &mut ctx, sources) {
-                if let Some(c) = canon {
-                    seen.push(c);
+            match add_unless_seen(file, &label, max, &mut ctx, sources, seen) {
+                Added::Ok => {}
+                Added::Duplicate => duplicate += 1, // already in context — not read or billed twice
+                // A walked file that vanished, or an explicit include that's missing/unreadable:
+                // counted in aggregate under a directory, named when it was an explicit file.
+                Added::Unreadable | Added::Missing => {
+                    if is_dir {
+                        unreadable += 1;
+                    } else {
+                        sources.push(unreadable_label(&label));
+                    }
                 }
-            } else if is_dir {
-                unreadable += 1;
-            } else {
-                sources.push(unreadable_label(&label));
             }
         }
         // Surface what was skipped under this path, rather than silently dropping or double-counting.
@@ -295,8 +292,50 @@ fn canonical(path: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(path).ok()
 }
 
-/// Append `path` to the context as `label` (recording its canonical path so `--include` won't
-/// double-count it); a present-but-unreadable file is surfaced, an absent one stays silent.
+/// What [`add_unless_seen`] did with a file.
+enum Added {
+    /// Appended and recorded in `seen`.
+    Ok,
+    /// Already in `seen` (a README/manifest or an earlier include) — not re-added.
+    Duplicate,
+    /// Present but unreadable.
+    Unreadable,
+    /// Absent.
+    Missing,
+}
+
+/// Add `path` to the context unless it's already there: skip if its canonical path is in `seen`,
+/// else append it (as `label`, capped at `max`) and record it in `seen`. The single place a context
+/// file is appended and deduped — README/manifests and every `--include`/`--changed` file share it,
+/// so the dedup identity can't drift. Callers handle the outcome (disclose, count, or ignore) as fits.
+fn add_unless_seen(
+    path: &Path,
+    label: &str,
+    max: Option<usize>,
+    text: &mut String,
+    sources: &mut Vec<String>,
+    seen: &mut Vec<PathBuf>,
+) -> Added {
+    let canon = canonical(path);
+    if let Some(c) = &canon
+        && seen.contains(c)
+    {
+        return Added::Duplicate;
+    }
+    if append_file(label, path, max, text, sources) {
+        if let Some(c) = canon {
+            seen.push(c);
+        }
+        Added::Ok
+    } else if path.exists() {
+        Added::Unreadable
+    } else {
+        Added::Missing
+    }
+}
+
+/// Append an auto-included file (README/manifest): a present-but-unreadable one is surfaced, an
+/// absent one stays silent (these are optional, so their absence isn't worth noting).
 fn add_file(
     path: &Path,
     label: &str,
@@ -305,11 +344,7 @@ fn add_file(
     sources: &mut Vec<String>,
     seen: &mut Vec<PathBuf>,
 ) {
-    if append_file(label, path, max, text, sources) {
-        if let Some(c) = canonical(path) {
-            seen.push(c);
-        }
-    } else if path.exists() {
+    if let Added::Unreadable = add_unless_seen(path, label, max, text, sources, seen) {
         sources.push(unreadable_label(label));
     }
 }
