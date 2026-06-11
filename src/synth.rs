@@ -167,20 +167,17 @@ fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
     (files, errors)
 }
 
-/// Expand each `--include` path (a file *or* a directory) into context text, applying the
-/// optional caller cap and skipping anything already in `seen` (canonical paths of files
-/// auto-added as README/manifests) so they aren't double-counted. Dirs walked gitignore-aware.
+/// Expand each `--include` path (a file *or* a directory) into context text, applying the optional
+/// caller cap. Skips any file already in context — README/manifests (pre-seeded in `seen`) *and* any
+/// earlier `--include`/`--changed` file, recording each one it adds — so overlapping inputs (an
+/// explicit file also under an included dir, or a `--changed` file under one) aren't read or billed
+/// twice. Dirs are walked gitignore-aware.
 fn gather_includes(
     paths: &[PathBuf],
     max: Option<usize>,
-    seen: &[PathBuf],
+    seen: &mut Vec<PathBuf>,
     sources: &mut Vec<String>,
 ) -> String {
-    let already_seen = |p: &Path| {
-        std::fs::canonicalize(p)
-            .map(|c| seen.contains(&c))
-            .unwrap_or(false)
-    };
     let mut ctx = String::new();
     for path in paths {
         let is_dir = path.is_dir();
@@ -190,27 +187,39 @@ fn gather_includes(
             (vec![path.clone()], 0)
         };
         let mut unreadable = 0usize;
+        let mut duplicate = 0usize;
         for file in &files {
-            if already_seen(file) {
-                continue; // already auto-included (README/manifest) — don't double-count
+            let canon = canonical(file);
+            if let Some(c) = &canon
+                && seen.contains(c)
+            {
+                duplicate += 1;
+                continue; // already in context — don't read or bill it twice
             }
             let label = file.display().to_string();
-            if !append_file(&label, file, max, &mut ctx, sources) {
-                if is_dir {
-                    unreadable += 1;
-                } else {
-                    sources.push(unreadable_label(&label));
+            if append_file(&label, file, max, &mut ctx, sources) {
+                if let Some(c) = canon {
+                    seen.push(c);
                 }
+            } else if is_dir {
+                unreadable += 1;
+            } else {
+                sources.push(unreadable_label(&label));
             }
         }
-        // Surface unreadable files walked under a directory, rather than silently dropping them.
+        // Surface what was skipped under this path, rather than silently dropping or double-counting.
+        if duplicate > 0 {
+            sources.push(format!(
+                "{duplicate} already-included file(s) under {} — skipped",
+                path.display()
+            ));
+        }
         if unreadable > 0 {
             sources.push(format!(
                 "{unreadable} unreadable file(s) under {} — skipped",
                 path.display()
             ));
         }
-        // Likewise surface entries the walk itself couldn't read (permission denied, I/O, …).
         if walk_errors > 0 {
             sources.push(format!(
                 "{walk_errors} unwalkable entr(ies) under {} — skipped",
@@ -273,6 +282,13 @@ fn append_file(
     true
 }
 
+/// The canonical path of `path`, if it resolves — the identity recorded in (and checked against)
+/// `seen`, so README/manifests and every `--include`/`--changed` file dedupe by identity, not by
+/// how the path was spelled.
+fn canonical(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok()
+}
+
 /// Append `path` to the context as `label` (recording its canonical path so `--include` won't
 /// double-count it); a present-but-unreadable file is surfaced, an absent one stays silent.
 fn add_file(
@@ -284,7 +300,7 @@ fn add_file(
     seen: &mut Vec<PathBuf>,
 ) {
     if append_file(label, path, max, text, sources) {
-        if let Ok(c) = std::fs::canonicalize(path) {
+        if let Some(c) = canonical(path) {
             seen.push(c);
         }
     } else if path.exists() {
@@ -390,7 +406,7 @@ pub fn gather_context(
         });
         includes.extend(files);
     }
-    text.push_str(&gather_includes(&includes, max, &seen, &mut sources));
+    text.push_str(&gather_includes(&includes, max, &mut seen, &mut sources));
     text.push_str(&gather_rules(rule_sources, &mut sources)?);
 
     let excluded = if includes.is_empty() {

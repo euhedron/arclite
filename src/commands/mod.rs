@@ -59,7 +59,7 @@ const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two cla
 /// command to weave into its own prompt as the substance of what it looks for. The descriptions are
 /// the categories the command surfaces; the labels are the `--kinds` vocabulary. One declaration
 /// feeds both this list and [`kinds_note`], so a command's prompt and its grouping vocabulary can't
-/// drift. ("taxonomy", not "criteria" — one general description per label, not a checklist.)
+/// drift.
 pub(crate) fn kind_list(kinds: &[(&str, &str)]) -> String {
     kinds
         .iter()

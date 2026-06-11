@@ -33,8 +33,8 @@ arc init    <repo>                   # add --hook for an opt-in pre-push gate
 arc summarize <repo>                 # runs on the default context (scan + README + manifests + any configured rules)
 arc suggest <repo> --include src     # --include adds files/dirs to the context
 arc audit   <repo> --ruleset <id>    # --ruleset selects the rules (else the configured default)
-arc critique <repo> --include src
-arc extract <repo> --include src
+arc critique <repo> --include src    # critically review a repo for quality defects
+arc extract <repo> --include src     # mine the reusable rules a repo already embodies
 arc evolve  <repo> --include src     # radical-change proposals (overhauls, reimaginings)
 ```
 
