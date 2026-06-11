@@ -596,6 +596,19 @@ struct DryRunOutput<'a> {
     prompt: &'a str,
 }
 
+/// The human display body for a synthesis result: the structured output pretty-printed when present,
+/// else the prose `text` (also the fallback if a structured value somehow won't serialize). One
+/// definition for the live run report and the stored-run replay, so they can't diverge — e.g. on
+/// whether a null structured value counts as present.
+pub(crate) fn body_display(structured: Option<&serde_json::Value>, text: &str) -> String {
+    match structured {
+        Some(value) if !value.is_null() => {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| text.to_owned())
+        }
+        _ => text.to_owned(),
+    }
+}
+
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
 pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let requested = opts.model.unwrap_or(DEFAULT_MODEL);
@@ -677,11 +690,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let structured = synthesis.structured;
     let text = synthesis.text;
     let cost = crate::log::cost_display(usage.cost_usd);
-    // Display body: the validated structured object (pretty-printed) when present, else the prose.
-    let body = match &structured {
-        Some(value) => serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes"),
-        None => text.clone(),
-    };
+    let body = body_display(structured.as_ref(), &text);
     // Count the gated findings before `structured` is moved out. The schema guarantees the field is
     // a present array; a missing one is the CLI ignoring the requested schema — an error, not a 0-pass.
     let gate_findings = match opts.gate {

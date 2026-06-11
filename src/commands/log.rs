@@ -245,9 +245,9 @@ fn stored_human(v: &Value) -> String {
         let blocked = run.get("blocked").and_then(Value::as_bool) == Some(true);
         meta.push_str(if blocked { " · gate: BLOCKED" } else { " · gate: passed" });
     }
-    let body = match v.get("structured") {
-        Some(s) if !s.is_null() => serde_json::to_string_pretty(s).unwrap_or_default(),
-        _ => v.get("text").and_then(Value::as_str).unwrap_or("").to_owned(),
-    };
+    let body = crate::synth::body_display(
+        v.get("structured"),
+        v.get("text").and_then(Value::as_str).unwrap_or(""),
+    );
     format!("{meta}\n\n{body}")
 }
