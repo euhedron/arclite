@@ -236,11 +236,11 @@ fn stored_human(v: &Value) -> String {
         field(&run, "repo"),
         field(&run, "model")
     ));
-    if let Some(runs) = run.get("runs").and_then(Value::as_u64).filter(|n| *n > 1) {
+    let runs = run.get("runs").and_then(Value::as_u64).unwrap_or(1) as usize;
+    if runs > 1 {
         meta.push_str(&format!(" · runs={runs}"));
     }
-    let budget =
-        crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64));
+    let budget = crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), runs);
     meta.push_str(&format!(
         " · memory={} · budget={budget} · {}",
         field(&run, "memory"),

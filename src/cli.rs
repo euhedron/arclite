@@ -247,7 +247,8 @@ pub struct SynthArgs {
     #[arg(long)]
     pub kinds: bool,
     /// Run the synthesis N times concurrently. Structured `results` are unioned (only byte-identical
-    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1.
+    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1; capped to a
+    /// sane maximum. A per-run `--max-budget-usd` applies to each, so N runs can spend up to N× it.
     #[arg(long, default_value_t = 1)]
     pub runs: usize,
 }

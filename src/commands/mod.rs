@@ -92,7 +92,12 @@ pub fn run_synthesis(
     structure: Option<Structure>,
     build_prompt: impl FnOnce(&str) -> String,
 ) -> anyhow::Result<ExitCode> {
-    anyhow::ensure!(args.runs >= 1, "--runs must be at least 1, got {}", args.runs);
+    anyhow::ensure!(
+        (1..=crate::synth::MAX_RUNS).contains(&args.runs),
+        "--runs must be between 1 and {}, got {}",
+        crate::synth::MAX_RUNS,
+        args.runs
+    );
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;

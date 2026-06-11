@@ -15,6 +15,12 @@ use crate::output::emit;
 /// reports the resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
+/// The ceiling on `--runs`. Each run is a full, concurrent `claude` process at real per-run cost, so
+/// an accidental `--runs 1000` would spawn a thousand of them and multiply spend a thousandfold. Kept
+/// modest — generous enough for consensus sampling, low enough that even the max isn't wasteful at a
+/// premium model's price. Enforced in `run_synthesis`.
+pub(crate) const MAX_RUNS: usize = 8;
+
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context (not counted here) — actual usage is reported after the call runs";
 
 /// Exit code when an opt-in gate (`--fail-on-findings`) blocks — distinct from `1` (arclite error)
@@ -460,7 +466,7 @@ impl RunReport<'_> {
         } else {
             String::new()
         };
-        let budget = crate::log::budget_display(self.max_budget_usd);
+        let budget = crate::log::budget_display(self.max_budget_usd, self.runs);
         let mut line = format!(
             "model={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
             self.model,

@@ -40,10 +40,20 @@ pub fn usage_display(
     )
 }
 
-/// An optional cost cap for display — `none` when uncapped, so the absence of a cap is explicit.
-/// Shared by the live run report and the stored-run view.
-pub fn budget_display(cap: Option<f64>) -> String {
-    cap.map_or_else(|| "none".to_owned(), cost_display)
+/// An optional cost cap for display — `none` when uncapped. The cap is *per run*, so across a
+/// `--runs N` fan-out (N > 1) the aggregate worst-case exposure is shown too: a user who set a
+/// budget shouldn't be surprised that N concurrent runs can each spend up to it. Shared by the live
+/// run report and the stored-run view.
+pub fn budget_display(cap: Option<f64>, runs: usize) -> String {
+    match cap {
+        None => "none".to_owned(),
+        Some(c) if runs > 1 => format!(
+            "{}/run (≤ {} across {runs} runs)",
+            cost_display(c),
+            cost_display(c * runs as f64)
+        ),
+        Some(c) => cost_display(c),
+    }
 }
 
 /// The recorded cost of a run record (`usage.cost_usd`), `None` when absent — the single accessor,
