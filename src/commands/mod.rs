@@ -25,11 +25,18 @@ use crate::synth::{self, SynthOptions};
 /// (appended to the shared [`STRUCTURED_NOTE`] framing).
 /// The schema is the shared `results`-array envelope ([`crate::synth::results_schema`]) wrapping the
 /// command's own item shape — so commands declare only what differs. Used only when `--structured`
-/// is passed; commands without one reject the flag. The gate, `--ranked`, and multi-run aggregation
-/// all treat the `results` array uniformly; `--fail-on-findings` blocks when it's non-empty.
+/// is passed; commands without one reject the flag. The gate, `--ranked`, `--kinds`, and multi-run
+/// aggregation all treat the `results` array uniformly; `--fail-on-findings` blocks when it's
+/// non-empty.
 pub struct Structure {
     pub schema: String,
     pub note: &'static str,
+    /// The command's kind taxonomy as (label, description) pairs, declared once. The command lists
+    /// it in its own prompt (via [`kind_list`]) as the substance of what it looks for; `--kinds`
+    /// reuses the labels as the suggested classification vocabulary. Empty = no taxonomy (`--kinds`
+    /// then lets the model label freely). "taxonomy" not "criteria" — one general description per
+    /// label, not a checklist of conditions.
+    pub kinds: &'static [(&'static str, &'static str)],
 }
 
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
@@ -47,6 +54,32 @@ const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 /// Appended after the command's item-shape note: every structured run also returns a required
 /// top-level `note`, so an empty `results` is a judged outcome rather than silence.
 const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty.";
+
+/// Render a command's kind taxonomy as a labelled list — `- label: description` per line — for the
+/// command to weave into its own prompt as the substance of what it looks for. The descriptions are
+/// the categories the command surfaces; the labels are the `--kinds` vocabulary. One declaration
+/// feeds both this list and [`kinds_note`], so a command's prompt and its grouping vocabulary can't
+/// drift. ("taxonomy", not "criteria" — one general description per label, not a checklist.)
+pub(crate) fn kind_list(kinds: &[(&str, &str)]) -> String {
+    kinds
+        .iter()
+        .map(|(label, description)| format!("- {label}: {description}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Appended by `--kinds`: ask for a per-item `kind`. With a declared taxonomy (already listed in the
+/// command's own prompt) the model picks from it but may use its own label when none fit — a
+/// deviation that is itself signal about the taxonomy's fit; with none, it labels freely. Like
+/// `--ranked`, this shapes the output in any mode; the classification is the lever's, never a
+/// command's prompt.
+fn kinds_note(has_taxonomy: bool) -> &'static str {
+    if has_taxonomy {
+        "\n\nAlso give each result a `kind` — one of the kinds listed above, or your own if none fit."
+    } else {
+        "\n\nAlso give each result a `kind` — its category of finding."
+    }
+}
 
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
@@ -86,9 +119,9 @@ pub fn run_synthesis(
     )?;
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);
-    // --structured emits the command's typed output; --fail-on-findings additionally gates on it
-    // (and implies it). Both require the command to define a structure — so the flag is rejected,
-    // not silently ignored, when a command has none.
+    // --structured emits the command's typed output; --fail-on-findings additionally gates on it.
+    // Both require the command to define a structure, so the flag is rejected — not silently
+    // ignored — when a command has none.
     let want_structured = args.structured || args.fail_on_findings;
     let (schema, gate) = if want_structured {
         let s = structure.as_ref().ok_or_else(|| {
@@ -101,10 +134,23 @@ pub fn run_synthesis(
         prompt.push_str(NOTE_INSTRUCTION);
         // Gate on the `results` array the schemas produce — the key single-sourced in synth.
         let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);
-        (Some(s.schema.as_str()), gate)
+        // --kinds adds a free-string `kind` to each item — not enum-locked, so the model can label
+        // off the command's suggested taxonomy when none fits (the deviation is signal).
+        let schema = if args.kinds {
+            synth::with_kind(&s.schema)?
+        } else {
+            s.schema.clone()
+        };
+        (Some(schema), gate)
     } else {
         (None, None)
     };
+    // --kinds and --ranked shape the output in any mode (a prompt note; structured runs also carry
+    // it in the `kind` field / array order above) — neither requires structured output.
+    if args.kinds {
+        let has_taxonomy = structure.as_ref().is_some_and(|s| !s.kinds.is_empty());
+        prompt.push_str(kinds_note(has_taxonomy));
+    }
     if args.ranked {
         prompt.push_str(RANKED_NOTE);
     }
@@ -115,6 +161,7 @@ pub fn run_synthesis(
             runs: args.runs,
             max_budget_usd,
             ranked: args.ranked,
+            kinds: args.kinds,
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,
@@ -123,7 +170,7 @@ pub fn run_synthesis(
             command,
             output: args.output.as_deref(),
             ambient_memory: args.ambient_memory,
-            schema,
+            schema: schema.as_deref(),
             gate,
             dry_run: args.dry_run,
             json: global.json,

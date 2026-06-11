@@ -34,6 +34,31 @@ pub(crate) const RESULTS_KEY: &str = "results";
 /// rather than indistinguishable from silence. Commentary only; the gate never reads it.
 pub(crate) const NOTE_KEY: &str = "note";
 
+/// The per-item classification field `--kinds` adds: each result carries its category of finding.
+/// Commentary/bucketing only — the gate never reads it.
+pub(crate) const KIND_KEY: &str = "kind";
+
+/// Add the `--kinds` field to a results schema: each item gains a required free-string [`KIND_KEY`].
+/// The suggested vocabulary (a command's taxonomy) lives in the prompt, *not* as a hard enum — the
+/// model may coin its own label when none fit, which is signal about the taxonomy's fit.
+pub(crate) fn with_kind(schema: &str) -> anyhow::Result<String> {
+    use anyhow::Context as _;
+    let mut root: serde_json::Value =
+        serde_json::from_str(schema).context("a command's results schema parses as JSON")?;
+    let item = root
+        .pointer_mut(&format!("/properties/{RESULTS_KEY}/items"))
+        .context("a results schema declares an items shape")?;
+    item.pointer_mut("/properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("a results item schema has properties")?
+        .insert(KIND_KEY.to_owned(), serde_json::json!({ "type": "string" }));
+    item.pointer_mut("/required")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("a results item schema has a required list")?
+        .push(KIND_KEY.into());
+    Ok(root.to_string())
+}
+
 /// Wrap a command's array-item schema in the shared `{ results: [ <item> ], note }` envelope, so
 /// each command declares only its item shape. The CLI's structured output requires a root object (a
 /// top-level array is rejected — confirmed by exercise), so the list can't be the root.
@@ -54,6 +79,8 @@ pub struct SynthOptions<'a> {
     pub max_budget_usd: Option<f64>,
     /// Whether `--ranked` ordered the results (it shapes the prompt, so it's reported + recorded).
     pub ranked: bool,
+    /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
+    pub kinds: bool,
     /// Claude tools to allow (empty = none).
     pub allowed_tools: &'a [String],
     /// Repository root, granted to allowed tools via `--add-dir` (the working directory is otherwise neutral).
@@ -221,7 +248,12 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
         .collect::<Vec<_>>()
         .join(", ");
     sources.push(format!("rules ({}): {ids}", rules.len()));
-    Ok(format!("\nRules:\n{}\n", crate::rules::render(&rules)))
+    // The weigh-against-these framing travels with the block itself — stated once, present exactly
+    // when rules are — rather than each command's prompt referencing rules that may not be in context.
+    Ok(format!(
+        "\nRules (the standards to weigh the repository against):\n{}\n",
+        crate::rules::render(&rules)
+    ))
 }
 
 /// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
@@ -389,6 +421,8 @@ struct RunReport<'a> {
     max_budget_usd: Option<f64>,
     /// Whether the results were ordered by significance (`--ranked`).
     ranked: bool,
+    /// Whether each result was labeled with a `kind` (`--kinds`).
+    kinds: bool,
     context: &'a [String],
     excluded: &'a [String],
     /// Active `.arc/settings.json` layers in effect for this run (empty = built-in defaults only).
@@ -412,13 +446,14 @@ impl RunReport<'_> {
         };
         let budget = crate::log::budget_display(self.max_budget_usd);
         let mut line = format!(
-            "model={}{}  tools={}  memory={}  budget={}{}  context=[{}]",
+            "model={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
             self.model,
             runs,
             tools,
             self.memory,
             budget,
             if self.ranked { "  ranked" } else { "" },
+            if self.kinds { "  kinds" } else { "" },
             self.context.join(", ")
         );
         if !self.excluded.is_empty() {
@@ -471,6 +506,7 @@ struct RunRecord<'a> {
     /// Claude tools allowed during the run (empty = none — the default, isolated shape).
     tools: &'a [String],
     ranked: bool,
+    kinds: bool,
     structured: bool,
     /// Size of the assembled prompt arc sent, in characters — the deterministic context-size
     /// counterpart to the billed token ground truth nested in `usage`.
@@ -519,6 +555,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         },
         max_budget_usd: opts.max_budget_usd,
         ranked: opts.ranked,
+        kinds: opts.kinds,
         context: opts.sources,
         excluded: opts.excluded,
         config: opts.config,
@@ -659,6 +696,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             max_budget_usd: opts.max_budget_usd,
             tools: opts.allowed_tools,
             ranked: opts.ranked,
+            kinds: opts.kinds,
             structured: opts.schema.is_some(),
             prompt_chars: prompt.chars().count(),
             sources: opts.sources,

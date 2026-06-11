@@ -11,6 +11,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EVOLVE_ITEM),
         note: "each item: `change`, `rationale`.",
+        kinds: &[], // no fixed taxonomy; --kinds lets the model label freely
     };
     super::run_synthesis(args, global, "evolve", Some(structure), |ctx| {
         format!(

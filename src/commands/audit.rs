@@ -11,6 +11,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(AUDIT_ITEM),
         note: "one object per violation: `rule`, `location`, `reason`. Empty if there are none.",
+        kinds: &[], // violations already bucket by their `rule`
     };
     super::run_synthesis(args, global, "audit", Some(structure), |ctx| {
         format!(

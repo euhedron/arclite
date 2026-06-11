@@ -241,6 +241,11 @@ pub struct SynthArgs {
     /// any command; off by default (results come back unordered).
     #[arg(long)]
     pub ranked: bool,
+    /// Label each result with a `kind` (its category of finding). Like `--ranked`, it shapes the
+    /// output in any mode — guiding prose, or adding a `kind` field to structured results. A command
+    /// may suggest a vocabulary; the model may use its own label when none fit. Off by default.
+    #[arg(long)]
+    pub kinds: bool,
     /// Run the synthesis N times concurrently. Structured `results` are unioned (only byte-identical
     /// items collapse); prose outputs are concatenated as per-run sections. Default: 1.
     #[arg(long, default_value_t = 1)]
