@@ -137,7 +137,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         lines.push(format!("{no_usage} run(s) lack usage data (excluded from the sums)"));
     }
     if unparsed > 0 {
-        lines.push(format!("{unparsed} unparseable log line(s) skipped"));
+        lines.push(crate::log::unparsed_note(unparsed));
     }
     let payload = serde_json::json!({
         "windows": windows,

@@ -73,7 +73,7 @@ fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     }
     // Unparseable lines are surfaced, not silently dropped, so the count can't quietly under-report.
     if unparsed > 0 {
-        lines.push(format!("{unparsed} unparseable log line(s) skipped"));
+        lines.push(crate::log::unparsed_note(unparsed));
     }
     let payload = serde_json::json!({
         "runs": shown,

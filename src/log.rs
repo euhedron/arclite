@@ -15,6 +15,11 @@ pub const SECS_PER_MINUTE: u64 = 60;
 pub const SECS_PER_HOUR: u64 = 60 * SECS_PER_MINUTE;
 pub const SECS_PER_DAY: u64 = 24 * SECS_PER_HOUR;
 
+/// The disclosure line for log lines [`records`] couldn't parse — one wording for every consumer.
+pub fn unparsed_note(unparsed: usize) -> String {
+    format!("{unparsed} unparseable log line(s) skipped")
+}
+
 /// A cost formatted for display — the single statement of the dollar four-decimal format.
 pub fn cost_display(cost_usd: f64) -> String {
     format!("${cost_usd:.4}")

@@ -15,13 +15,17 @@ const RULES_DIR: &str = "rules";
 /// `core.hooksPath` value that activates it, so a rename can't rot one against the other.
 const HOOKS_DIR: &str = "hooks";
 
-/// Starter project settings: a `project` ruleset sourcing `.arc/rules` ([`RULES_DIR`]), set as the
-/// default, so the AI commands weigh the repo's own rules without further setup.
+/// The scaffolded ruleset's name — referenced twice in the starter settings (as the configured
+/// default and as the ruleset's key), which must agree or the default resolves to nothing.
+const PROJECT_RULESET: &str = "project";
+
+/// Starter project settings: a [`PROJECT_RULESET`] ruleset sourcing `.arc/rules` ([`RULES_DIR`]),
+/// set as the default, so the AI commands weigh the repo's own rules without further setup.
 fn starter_settings() -> String {
     format!(
         r#"{{
-  "defaults": {{ "ruleset": "project" }},
-  "rulesets": {{ "project": {{ "sources": ["{RULES_DIR}"] }} }}
+  "defaults": {{ "ruleset": "{PROJECT_RULESET}" }},
+  "rulesets": {{ "{PROJECT_RULESET}": {{ "sources": ["{RULES_DIR}"] }} }}
 }}
 "#
     )
