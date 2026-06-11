@@ -125,26 +125,31 @@ struct Capped {
     truncated_to: Option<usize>,
 }
 
-/// Read a file as text. `max` is an *optional, caller-chosen* cap (a compression knob);
-/// by default (`None`) the whole file is read — context elision is never automatic.
-fn read_file(path: &Path, max: Option<usize>) -> Option<Capped> {
-    let text = std::fs::read_to_string(path).ok()?;
+/// Read a file as text, optionally capped. `max` is an *optional, caller-chosen* cap (a compression
+/// knob); by default (`None`) the whole file is read — context elision is never automatic. The
+/// absent-vs-present-but-unreadable distinction comes from [`crate::read_optional`] (the one place
+/// that classification lives): `Ok(None)` is absent, `Err` is unreadable.
+fn read_file(path: &Path, max: Option<usize>) -> std::io::Result<Option<Capped>> {
+    let Some(text) = crate::read_optional(path)? else {
+        return Ok(None);
+    };
     let original_chars = text.chars().count();
-    match max {
-        Some(cap) if original_chars > cap => Some(Capped {
+    let capped = match max {
+        Some(cap) if original_chars > cap => Capped {
             body: format!(
                 "{}\n…[truncated by arclite at {cap} chars]",
                 text.chars().take(cap).collect::<String>()
             ),
             original_chars,
             truncated_to: Some(cap),
-        }),
-        _ => Some(Capped {
+        },
+        _ => Capped {
             body: text,
             original_chars,
             truncated_to: None,
-        }),
-    }
+        },
+    };
+    Ok(Some(capped))
 }
 
 /// A `sources` label for a file, making any caller-applied truncation explicit.
@@ -269,20 +274,22 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
 }
 
 /// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
-/// the source label. Returns whether it was read; the caller surfaces a miss however it needs.
+/// the source label. `Ok(true)` = read and appended, `Ok(false)` = absent, `Err` = present but
+/// unreadable (the [`read_file`]/[`crate::read_optional`] distinction); the caller surfaces a miss
+/// however it needs.
 fn append_file(
     label: &str,
     path: &Path,
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
-) -> bool {
-    let Some(cap) = read_file(path, max) else {
-        return false;
+) -> std::io::Result<bool> {
+    let Some(cap) = read_file(path, max)? else {
+        return Ok(false);
     };
     sources.push(source_label(label, &cap));
     text.push_str(&format!("\n{label}:\n{}\n", cap.body));
-    true
+    Ok(true)
 }
 
 /// The canonical path of `path`, if it resolves — the identity recorded in (and checked against)
@@ -322,15 +329,15 @@ fn add_unless_seen(
     {
         return Added::Duplicate;
     }
-    if append_file(label, path, max, text, sources) {
-        if let Some(c) = canon {
-            seen.push(c);
+    match append_file(label, path, max, text, sources) {
+        Ok(true) => {
+            if let Some(c) = canon {
+                seen.push(c);
+            }
+            Added::Ok
         }
-        Added::Ok
-    } else if path.exists() {
-        Added::Unreadable
-    } else {
-        Added::Missing
+        Ok(false) => Added::Missing,
+        Err(_) => Added::Unreadable,
     }
 }
 
