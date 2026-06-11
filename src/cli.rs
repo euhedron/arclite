@@ -72,11 +72,9 @@ pub enum Command {
     Evolve(SynthArgs),
 }
 
-/// Arguments for `arc doctor`.
 #[derive(Debug, Args)]
 pub struct DoctorArgs {}
 
-/// Arguments for `arc status`.
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
 
@@ -145,7 +143,6 @@ pub struct LogArgs {
     pub all: bool,
 }
 
-/// Arguments for `arc usage`.
 #[derive(Debug, Args)]
 pub struct UsageArgs {}
 

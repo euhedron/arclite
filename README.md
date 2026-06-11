@@ -25,7 +25,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>                   # report structured facts about a repo
 arc status                           # runs currently in flight
-arc log                              # past runs (arc log <id> for a full result; --last/--command/--blocked select)
+arc log                              # past runs; arc log <id> re-shows one in full
 arc usage                            # cost/run/token rollup: hour, day, week, total
 arc rules                            # the rules in play (ruleset, sources, provenance)
 arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging, max budget)

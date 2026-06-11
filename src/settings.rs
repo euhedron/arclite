@@ -70,13 +70,11 @@ impl Settings {
 
     fn merge(&mut self, path: &Path) -> anyhow::Result<()> {
         // A missing file is fine — this layer is optional.
-        let Some(text) = crate::read_optional(path)
-            .with_context(|| format!("cannot read settings file {}", path.display()))?
+        let Some(text) = crate::read_optional(path).with_context(|| read_error(path))?
         else {
             return Ok(());
         };
-        let raw: Raw = serde_json::from_str(&text)
-            .with_context(|| format!("invalid settings file {}", path.display()))?;
+        let raw: Raw = serde_json::from_str(&text).with_context(|| parse_error(path))?;
         self.active.push(path.to_path_buf());
         let dir = path
             .parent()
@@ -110,6 +108,15 @@ fn overlay<T>(slot: &mut Option<T>, value: Option<T>) {
     if value.is_some() {
         *slot = value;
     }
+}
+
+/// The error context for a settings file that can't be read, and one that doesn't parse — one
+/// wording each, shared by the loader (`merge`) and `arc config set` so they can't drift apart.
+pub(crate) fn read_error(path: &Path) -> String {
+    format!("cannot read settings file {}", path.display())
+}
+pub(crate) fn parse_error(path: &Path) -> String {
+    format!("invalid settings file {}", path.display())
 }
 
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
