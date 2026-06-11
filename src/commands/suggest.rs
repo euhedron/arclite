@@ -6,8 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `suggest` structured-output item: one suggestion with its rationale.
 const SUGGEST_ITEM: &str = r#"{"type":"object","properties":{"suggestion":{"type":"string"},"rationale":{"type":"string"}},"required":["suggestion","rationale"]}"#;
 
-/// Suggest's attention taxonomy: the descriptions are the kinds of suggestion it makes (listed in
-/// its prompt), the labels its `--kinds` vocabulary — one declaration feeding both.
+/// Suggest's attention taxonomy (the (label, description) dual use: see [`Structure`]'s `kinds`).
 const SUGGEST_KINDS: &[(&str, &str)] = &[
     ("risk", "something fragile or hazardous worth hardening"),
     ("improvement", "working code or docs that could be clearer or simpler"),

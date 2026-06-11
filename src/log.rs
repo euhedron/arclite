@@ -159,20 +159,14 @@ fn write_best_effort(
     }
 }
 
-/// Append `record` as one JSON line to the [`path`] run log, returning the path written.
-/// Any failure is surfaced as a warning and returns `None` — logging never breaks the command.
+/// Append `record` as one JSON line to the [`path`] run log, returning the path written, or `None`
+/// (with a warning) if it can't be — logging never breaks the command.
 pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
     let Some(target) = path() else {
         eprintln!("arclite: run not logged (cannot determine the home directory)");
         return None;
     };
-    let line = match serde_json::to_string(record) {
-        Ok(line) => line,
-        Err(e) => {
-            eprintln!("arclite: run not logged (could not serialize record): {e}");
-            return None;
-        }
-    };
+    let line = serde_json::to_string(record).expect("a run record serializes");
     write_best_effort(target, "run not logged", |p| {
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(p)?;
         writeln!(file, "{line}")
@@ -183,12 +177,6 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
 /// written, or `None` if it couldn't be stored.
 pub fn store_result<T: Serialize>(id: &str, content: &T) -> Option<PathBuf> {
     let path = result_path(id)?;
-    let body = match serde_json::to_string_pretty(content) {
-        Ok(body) => body,
-        Err(e) => {
-            eprintln!("arclite: run result not stored (could not serialize): {e}");
-            return None;
-        }
-    };
+    let body = serde_json::to_string_pretty(content).expect("a run result serializes");
     write_best_effort(path, "run result not stored", |p| std::fs::write(p, &body))
 }

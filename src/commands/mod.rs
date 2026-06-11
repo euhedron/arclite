@@ -55,11 +55,9 @@ const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 /// top-level `note`, so an empty `results` is a judged outcome rather than silence.
 const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty.";
 
-/// Render a command's kind taxonomy as a labelled list — `- label: description` per line — for the
-/// command to weave into its own prompt as the substance of what it looks for. The descriptions are
-/// the categories the command surfaces; the labels are the `--kinds` vocabulary. One declaration
-/// feeds both this list and [`kinds_note`], so a command's prompt and its grouping vocabulary can't
-/// drift.
+/// Render a command's kind taxonomy ([`Structure`]'s `kinds`) as a labelled list — `- label:
+/// description` per line — for the command to weave into its own prompt. (Why one declaration serves
+/// both the prompt and `--kinds`: see that field.)
 pub(crate) fn kind_list(kinds: &[(&str, &str)]) -> String {
     kinds
         .iter()

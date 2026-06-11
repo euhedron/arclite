@@ -65,7 +65,7 @@ impl Active {
     }
 
     fn try_write(&self) -> std::io::Result<()> {
-        let json = serde_json::to_string(&self.run).map_err(std::io::Error::other)?;
+        let json = serde_json::to_string(&self.run).expect("an ActiveRun serializes");
         std::fs::write(&self.marker, json)
     }
 }

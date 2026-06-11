@@ -6,8 +6,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 /// The `critique` structured-output item: one defect and where it is.
 const CRITIQUE_ITEM: &str = r#"{"type":"object","properties":{"location":{"type":"string"},"defect":{"type":"string"}},"required":["location","defect"]}"#;
 
-/// Critique's defect taxonomy: the descriptions are the categories it surfaces (listed in its
-/// prompt), the labels its `--kinds` vocabulary — one declaration feeding both.
+/// Critique's defect taxonomy (the (label, description) dual use: see [`Structure`]'s `kinds`).
 const CRITIQUE_KINDS: &[(&str, &str)] = &[
     ("redundancy", "the same thing stated or built in more than one place"),
     ("inconsistency", "parts that contradict each other"),
