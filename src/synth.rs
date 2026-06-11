@@ -410,9 +410,7 @@ impl RunReport<'_> {
         } else {
             String::new()
         };
-        let budget = self
-            .max_budget_usd
-            .map_or_else(|| "none".to_owned(), crate::log::cost_display);
+        let budget = crate::log::budget_display(self.max_budget_usd);
         let mut line = format!(
             "model={}{}  tools={}  memory={}  budget={}{}  context=[{}]",
             self.model,
@@ -617,14 +615,16 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         None => None,
     };
     let mut human = format!(
-        "{}\n\nrun: {}\ncost: in {}  cache-write {}  cache-read {}  out {} | {}",
+        "{}\n\nrun: {}\ncost: {}",
         body,
         report.human(),
-        usage.input_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
-        usage.output_tokens,
-        cost,
+        crate::log::usage_display(
+            usage.input_tokens,
+            usage.cache_creation_input_tokens,
+            usage.cache_read_input_tokens,
+            usage.output_tokens,
+            usage.cost_usd,
+        ),
     );
     if let Some(path) = &written {
         human.push_str(&format!("\nwrote: {}", path.display()));

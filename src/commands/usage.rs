@@ -108,15 +108,17 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .iter()
         .map(|w| {
             format!(
-                "{}: {} runs ({} blocked) · in {}  cache-write {}  cache-read {}  out {} | {}",
+                "{}: {} runs ({} blocked) · {}",
                 w.window,
                 w.runs,
                 w.blocked,
-                w.input_tokens,
-                w.cache_creation_input_tokens,
-                w.cache_read_input_tokens,
-                w.output_tokens,
-                cost_display(w.cost_usd),
+                crate::log::usage_display(
+                    w.input_tokens,
+                    w.cache_creation_input_tokens,
+                    w.cache_read_input_tokens,
+                    w.output_tokens,
+                    w.cost_usd,
+                ),
             )
         })
         .collect();

@@ -20,6 +20,27 @@ pub fn cost_display(cost_usd: f64) -> String {
     format!("${cost_usd:.4}")
 }
 
+/// A token+cost tally formatted for display — the single statement of the
+/// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share.
+pub fn usage_display(
+    input: u64,
+    cache_write: u64,
+    cache_read: u64,
+    output: u64,
+    cost_usd: f64,
+) -> String {
+    format!(
+        "in {input}  cache-write {cache_write}  cache-read {cache_read}  out {output} | {}",
+        cost_display(cost_usd)
+    )
+}
+
+/// An optional cost cap for display — `none` when uncapped, so the absence of a cap is explicit.
+/// Shared by the live run report and the stored-run view.
+pub fn budget_display(cap: Option<f64>) -> String {
+    cap.map_or_else(|| "none".to_owned(), cost_display)
+}
+
 /// The recorded cost of a run record (`usage.cost_usd`), `None` when absent — the single accessor,
 /// so every reader handles absence deliberately (display `$?`, exclude-and-count in sums) rather
 /// than silently zeroing what would read as genuine zero spend.
