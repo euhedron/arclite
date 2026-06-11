@@ -596,14 +596,14 @@ struct DryRunOutput<'a> {
     prompt: &'a str,
 }
 
-/// The human display body for a synthesis result: the structured output pretty-printed when present,
-/// else the prose `text` (also the fallback if a structured value somehow won't serialize). One
-/// definition for the live run report and the stored-run replay, so they can't diverge — e.g. on
-/// whether a null structured value counts as present.
+/// The human display body for a synthesis result: the structured output pretty-printed when present
+/// (a null value counts as absent), else the prose `text`. One definition for the live run report
+/// and the stored-run replay, so they can't diverge. A `serde_json::Value` always re-serializes
+/// (string keys), so the pretty-print is infallible — asserted, as in [`combine_runs`].
 pub(crate) fn body_display(structured: Option<&serde_json::Value>, text: &str) -> String {
     match structured {
         Some(value) if !value.is_null() => {
-            serde_json::to_string_pretty(value).unwrap_or_else(|_| text.to_owned())
+            serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes")
         }
         _ => text.to_owned(),
     }
