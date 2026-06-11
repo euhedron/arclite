@@ -65,6 +65,16 @@ pub fn record_cost(record: &serde_json::Value) -> Option<f64> {
         .and_then(serde_json::Value::as_f64)
 }
 
+/// A string field of a run record, or the `?` sentinel if absent — the shared accessor for the
+/// record shape that `arc log` and `arc usage` both read, so the sentinel can't drift between them.
+pub fn field(record: &serde_json::Value, key: &str) -> String {
+    record
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("?")
+        .to_owned()
+}
+
 /// Current UNIX time in seconds.
 pub fn now_secs() -> u64 {
     SystemTime::now()

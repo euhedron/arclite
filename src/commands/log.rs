@@ -2,7 +2,7 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, LogArgs};
-use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE};
+use crate::log::{field, SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE};
 use crate::output::emit;
 
 /// The `log` command.
@@ -82,11 +82,6 @@ fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "unparsed": unparsed,
     });
     emit(&payload, &lines.join("\n"), global.json)
-}
-
-/// A string field of a record/run JSON object, or `?` if absent.
-fn field(v: &Value, key: &str) -> String {
-    v.get(key).and_then(Value::as_str).unwrap_or("?").to_owned()
 }
 
 /// The recorded cost of a record/run JSON object, formatted for display — `$?` when absent, so a

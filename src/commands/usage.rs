@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, UsageArgs};
-use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, cost_display};
+use crate::log::{cost_display, field, SECS_PER_DAY, SECS_PER_HOUR};
 use crate::output::emit;
 
 /// One aggregation window over the run log.
@@ -85,11 +85,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // All-time per-command totals, for "where is the spend going".
     let mut by_command: BTreeMap<String, CommandTotal> = BTreeMap::new();
     for r in &records {
-        let command = r
-            .get("command")
-            .and_then(Value::as_str)
-            .unwrap_or("?")
-            .to_owned();
+        let command = field(r, "command");
         let entry = by_command
             .entry(command.clone())
             .or_insert_with(|| CommandTotal {
