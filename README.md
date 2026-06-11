@@ -136,3 +136,9 @@ Claude Code docs arclite leverages or draws on (cite specific behavior; *derive*
 - <https://platform.claude.com/docs/en/build-with-claude/streaming> — the Messages API streaming event flow (`message_start` → `content_block_delta`s → one `message_delta`): the exact token count lands only at message end, so `arc status` streams live output *characters* and reports exact tokens at completion.
 - <https://code.claude.com/docs/en/interactive-mode> — keyboard shortcuts, input modes, command history, the status-area task list, footer status indicators: precedent for a prospective `arc tui`.
 - <https://code.claude.com/docs/en/terminal-config> — terminal behaviors a TUI must respect (multiline-input keys, notifications, flicker-free fullscreen rendering, theming); also informs a prospective `arc tui`.
+
+Codex CLI docs (for the **alternative-backend** roadmap item — `codex exec` is a headless peer to `claude -p`; also open-source Rust, a reference for a prospective `arc tui`):
+
+- <https://developers.openai.com/codex/noninteractive> — `codex exec`: headless/non-interactive runs, the `--json` event stream (`turn.completed` carries token usage — but no dollar cost), `--output-schema` for validated structured output, `--sandbox`/`--ask-for-approval`, and the API-key vs ChatGPT-subscription auth that would let usage spread across subscriptions.
+- <https://developers.openai.com/codex/cli/reference> — the codex CLI flags a backend would map arclite's run parameters to (`-m/--model`, `--output-schema`, `-o/--output-last-message`, `-s/--sandbox`, `-a/--ask-for-approval`, `-C/--cd`, `--skip-git-repo-check`).
+- <https://github.com/openai/codex> — codex source (open-source Rust): the backend's ground truth, and a worked example for the eventual TUI.

@@ -120,6 +120,19 @@ fn write_if_absent(
 
 /// Point git at the committed `hooks/` directory so the pre-push gate runs — the opt-in activation.
 fn activate_hooks(root: &Path) -> anyhow::Result<()> {
+    // Don't clobber a core.hooksPath the user already set for something else — surface it and stop,
+    // rather than silently overwriting (the scaffold is careful never to clobber files; so is this).
+    let existing = crate::ai::command("git")
+        .current_dir(root)
+        .args(["config", "--get", "core.hooksPath"])
+        .output()
+        .context("could not run git to read core.hooksPath")?;
+    let current = String::from_utf8_lossy(&existing.stdout).trim().to_owned();
+    anyhow::ensure!(
+        current.is_empty() || current == HOOKS_DIR,
+        "core.hooksPath is already set to `{current}` — leaving it untouched; set it to `{HOOKS_DIR}` \
+         (or unset it) yourself to activate the arclite gate"
+    );
     let ok = crate::ai::command("git")
         .current_dir(root)
         .args(["config", "core.hooksPath", HOOKS_DIR])

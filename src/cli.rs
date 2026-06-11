@@ -192,9 +192,9 @@ pub struct SynthArgs {
     /// Allow a Claude tool during synthesis (repeatable). Default: none.
     #[arg(long = "allow-tool", value_name = "TOOL")]
     pub allow_tool: Vec<String>,
-    /// Directory of Markdown rule files to weigh the synthesis against (anti-patterns, standards,
+    /// A rule directory or `.md` file to weigh the synthesis against (anti-patterns, standards,
     /// principles, …). Ad-hoc override that takes precedence over `--ruleset` and the default.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "PATH")]
     pub rules: Option<PathBuf>,
     /// Use a named ruleset from `.arc/settings.json` (composing its sources). Overrides the
     /// configured `defaults.ruleset`; `--rules <DIR>` overrides both.
@@ -244,8 +244,9 @@ pub struct SynthArgs {
     #[arg(long)]
     pub kinds: bool,
     /// Run the synthesis N times concurrently. Structured `results` are unioned (only byte-identical
-    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1; capped to a
-    /// sane maximum. A per-run `--max-budget-usd` applies to each, so N runs can spend up to N× it.
+    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1; bounded to a
+    /// small maximum — a larger value is rejected, never silently capped. A per-run `--max-budget-usd`
+    /// applies to each, so N runs can spend up to N× it.
     #[arg(long, default_value_t = 1)]
     pub runs: usize,
 }

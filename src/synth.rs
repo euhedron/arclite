@@ -165,6 +165,12 @@ fn unreadable_label(label: &str) -> String {
     format!("{label} (unreadable — skipped)")
 }
 
+/// A `sources` label for an explicit `--include` path that isn't there — distinct from
+/// [`unreadable_label`] so a typo'd path reads as missing, not as present-but-unreadable.
+fn missing_label(label: &str) -> String {
+    format!("{label} (missing — skipped)")
+}
+
 /// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped) and the
 /// count of walk errors (unreadable entries) so callers can surface them, not drop them.
 fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
@@ -204,8 +210,10 @@ fn gather_includes(
             match add_unless_seen(file, &label, max, &mut ctx, sources, seen) {
                 Added::Ok => {}
                 Added::Duplicate => duplicate += 1, // already in context — not read or billed twice
-                // A walked file that vanished, or an explicit include that's missing/unreadable:
-                // counted in aggregate under a directory, named when it was an explicit file.
+                // An explicit --include that's absent reads as missing; one present-but-unreadable as
+                // unreadable. Under a walked dir both fold into the unreadable tally (a file the walk
+                // just listed then couldn't read is a mid-walk race, not a user's typo).
+                Added::Missing if !is_dir => sources.push(missing_label(&label)),
                 Added::Unreadable | Added::Missing => {
                     if is_dir {
                         unreadable += 1;
@@ -877,8 +885,11 @@ fn multi_synthesize(
 /// prose commands, present each run's text in turn.
 fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
     let usage = sum_usage(&runs);
-    if runs.iter().all(|r| r.structured.is_some()) {
-        let combined = union_results(runs.iter().filter_map(|r| r.structured.as_ref()));
+    // Structured iff *every* run produced structured output; one prose run and the whole batch is
+    // presented as prose. Collecting `Option<&Value>`s into `Option<Vec<_>>` expresses that all-or-
+    // prose split in one step — no separate `all(is_some)` guard, no filter that can never filter.
+    if let Some(structured) = runs.iter().map(|r| r.structured.as_ref()).collect::<Option<Vec<_>>>() {
+        let combined = union_results(structured.into_iter());
         let text =
             serde_json::to_string_pretty(&combined).expect("a serde_json::Value re-serializes");
         ai::Synthesis {
