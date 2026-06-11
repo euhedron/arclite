@@ -10,7 +10,7 @@ const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EXTRACT_ITEM),
-        note: "one object per proposed rule: `id`, `rule`, `provenance`. Empty if there are none worth proposing.",
+        note: "one object per proposed rule: `id`, `rule`, `provenance`.",
         kinds: &[], // no fixed taxonomy; --kinds lets the model label freely
     };
     super::run_synthesis(args, global, "extract", Some(structure), |ctx| {

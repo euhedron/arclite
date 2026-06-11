@@ -42,6 +42,12 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     ];
     // Records without usage data can't contribute to the sums — counted and surfaced, not dropped.
     let mut no_usage = 0usize;
+    // A record with no timestamp can't be placed in a finite window (it lands in the all-time total
+    // only); count it so the windowed sums' omission is disclosed rather than silent.
+    let no_timestamp = records
+        .iter()
+        .filter(|r| r.get("ts").and_then(Value::as_u64).is_none())
+        .count();
     let windows: Vec<Window> = spans
         .iter()
         .map(|(label, span)| {
@@ -56,6 +62,8 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 output_tokens: 0,
             };
             for r in &records {
+                // No `ts` → epoch 0, older than any finite window, so the record lands in the
+                // all-time total only; the count is surfaced below as `no_timestamp`.
                 let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
                 if span.is_some_and(|s| now.saturating_sub(ts) > s) {
                     continue;
@@ -132,6 +140,11 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if no_usage > 0 {
         lines.push(format!("{no_usage} run(s) lack usage data (excluded from the sums)"));
     }
+    if no_timestamp > 0 {
+        lines.push(format!(
+            "{no_timestamp} run(s) without a timestamp (in the all-time total only, not the timed windows)"
+        ));
+    }
     if unparsed > 0 {
         lines.push(crate::log::unparsed_note(unparsed));
     }
@@ -139,6 +152,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "windows": windows,
         "by_command": by_command,
         "no_usage": no_usage,
+        "no_timestamp": no_timestamp,
         "unparsed": unparsed,
     });
     emit(&payload, &lines.join("\n"), global.json)

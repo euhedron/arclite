@@ -92,7 +92,7 @@ fn cost(v: &Value) -> String {
 
 /// One log record as a compact row — tolerant of older records that predate some fields.
 fn row(r: &Value, now: u64) -> String {
-    let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
+    let id = field(r, "id");
     // A missing `ts` is surfaced as "?", not shown as a bogus age computed from 0 — matching how the
     // other fields (and stored_human's absolute time) disclose an absent value rather than faking one.
     let age = r
