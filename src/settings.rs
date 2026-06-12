@@ -82,6 +82,12 @@ impl Settings {
         overlay(&mut self.default_model, raw.defaults.model);
         overlay(&mut self.default_ruleset, raw.defaults.ruleset);
         overlay(&mut self.default_logging, raw.defaults.logging);
+        // Validate a hand-edited cap on load too — `arc config set` checks it, but a malformed value
+        // typed straight into settings.json would otherwise silently disable the safety lever.
+        if let Some(cap) = raw.defaults.max_budget_usd {
+            validate_budget(cap)
+                .with_context(|| format!("invalid defaults.max_budget_usd in {}", path.display()))?;
+        }
         overlay(&mut self.default_max_budget_usd, raw.defaults.max_budget_usd);
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
@@ -117,6 +123,16 @@ pub(crate) fn read_error(path: &Path) -> String {
 }
 pub(crate) fn parse_error(path: &Path) -> String {
     format!("invalid settings file {}", path.display())
+}
+
+/// The validity rule for a budget cap — a positive, finite dollar amount — stated once for both
+/// `arc config set` and settings load, so a hand-edited bad value can't silently neuter the cap.
+pub(crate) fn validate_budget(cap: f64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        cap.is_finite() && cap > 0.0,
+        "the budget cap must be a positive dollar amount"
+    );
+    Ok(())
 }
 
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are

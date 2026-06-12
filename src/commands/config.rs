@@ -42,7 +42,7 @@ const SETTINGS: &[Setting] = &[
         read: |s| s.default_max_budget_usd.map(|v| v.to_string()),
         parse: |v| {
             let cap: f64 = v.parse().context("expected a dollar amount")?;
-            anyhow::ensure!(cap.is_finite() && cap > 0.0, "the cap must be a positive dollar amount");
+            crate::settings::validate_budget(cap)?;
             Ok(serde_json::Value::from(cap))
         },
     },
