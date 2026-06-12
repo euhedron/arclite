@@ -24,9 +24,9 @@ pub struct ActiveRun {
     /// than as fabricated zeros.
     pub turns: u64,
     pub tool_calls: u64,
-    /// Characters — not tokens — because the exact token count arrives only at message end (see
-    /// [`crate::ai::Backend::synthesize`]); characters are the continuous live signal, and the billed token
-    /// count lands in the final run report.
+    /// Characters — not tokens — because the exact token count arrives only at message end;
+    /// characters are the continuous live signal, and the billed token count lands in the final
+    /// run report.
     pub output_chars: u64,
 }
 
