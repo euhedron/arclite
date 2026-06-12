@@ -111,7 +111,7 @@ fn row(r: &Value, now: u64) -> String {
         repo,
         field(r, "model"),
         cost(r),
-        if blocked { " · BLOCKED" } else { "" },
+        if blocked { format!(" · {}", crate::log::gate_label(blocked)) } else { String::new() },
     )
 }
 
@@ -247,7 +247,7 @@ fn stored_human(v: &Value) -> String {
     ));
     if run.get("gate").and_then(Value::as_str).is_some() {
         let blocked = run.get("blocked").and_then(Value::as_bool) == Some(true);
-        meta.push_str(if blocked { " · gate: BLOCKED" } else { " · gate: passed" });
+        meta.push_str(&format!(" · gate: {}", crate::log::gate_label(blocked)));
     }
     let body = crate::synth::body_display(
         v.get("structured"),

@@ -20,6 +20,12 @@ pub fn unparsed_note(unparsed: usize) -> String {
     format!("{unparsed} unparseable log line(s) skipped")
 }
 
+/// The gate-outcome label for a `blocked` flag — one wording shared by the run report and the
+/// stored-run view (and the `arc log` row, which shows it only when blocked).
+pub fn gate_label(blocked: bool) -> &'static str {
+    if blocked { "BLOCKED" } else { "passed" }
+}
+
 /// A cost formatted for display — the single statement of the dollar four-decimal format.
 pub fn cost_display(cost_usd: f64) -> String {
     format!("${cost_usd:.4}")

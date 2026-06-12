@@ -758,7 +758,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     if let (Some(field), Some(n)) = (opts.gate, gate_findings) {
         human.push_str(&format!(
             "\ngate: {} — {n} `{field}`{}",
-            if gate_blocked { "BLOCKED" } else { "passed" },
+            crate::log::gate_label(gate_blocked),
             if gate_blocked {
                 format!(" (exit {GATE_BLOCKED_EXIT})")
             } else {
