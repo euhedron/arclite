@@ -108,11 +108,7 @@ pub fn run_synthesis(
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
-    let config: Vec<String> = settings
-        .active
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
+    let config = settings.active_display();
     let ctx = synth::gather_context(
         &args.path,
         &args.include,

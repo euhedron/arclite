@@ -36,7 +36,7 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         }
     }
     lines.push(match settings.active.as_slice() {
-        [] => "settings: built-in defaults (no .arc/settings.json active)".to_owned(),
+        [] => format!("settings: {}", crate::settings::NO_LAYERS),
         active => format!(
             "settings: {}",
             active.iter().map(|p| rel(p)).collect::<Vec<_>>().join(", ")

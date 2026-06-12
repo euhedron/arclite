@@ -106,6 +106,12 @@ impl Settings {
     pub fn logging_enabled(&self) -> bool {
         self.default_logging != Some(false)
     }
+
+    /// The active settings-file layers as absolute-path display strings (user then project) — the
+    /// projection the run report and `arc config list` share (`arc rules` shows them repo-relative).
+    pub fn active_display(&self) -> Vec<String> {
+        self.active.iter().map(|p| p.display().to_string()).collect()
+    }
 }
 
 /// Overlay one default from a later settings layer: a set value wins, an unset one leaves the
@@ -134,6 +140,10 @@ pub(crate) fn validate_budget(cap: f64) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// The line shown when no `.arc/settings.json` layer is active — one wording for the run report,
+/// `arc config list`, and `arc rules` (the empty-layers case had drifted across the three).
+pub(crate) const NO_LAYERS: &str = "built-in defaults (no .arc/settings.json active)";
 
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
 /// relative to the settings file's own directory `dir` (so a repo's ruleset referencing `rules`

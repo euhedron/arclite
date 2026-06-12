@@ -76,7 +76,7 @@ struct Listed {
 /// Show every default's resolved value (after user-then-project layering) and the active layers.
 fn list(global: &GlobalArgs) -> anyhow::Result<()> {
     let s = Settings::load(std::path::Path::new("."))?;
-    let layers: Vec<String> = s.active.iter().map(|p| p.display().to_string()).collect();
+    let layers = s.active_display();
     let mut lines: Vec<String> = SETTINGS
         .iter()
         .map(|st| {
@@ -90,7 +90,7 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
     lines.push(format!(
         "layers: {}",
         if layers.is_empty() {
-            "(none — built-in defaults)".to_owned()
+            crate::settings::NO_LAYERS.to_owned()
         } else {
             layers.join(", ")
         }

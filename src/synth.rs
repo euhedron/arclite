@@ -540,7 +540,7 @@ impl RunReport<'_> {
         line.push_str(&format!(
             "\nconfig: {}",
             if self.config.is_empty() {
-                "built-in defaults (no .arc/settings.json active)".to_owned()
+                crate::settings::NO_LAYERS.to_owned()
             } else {
                 self.config.join(", ")
             }
