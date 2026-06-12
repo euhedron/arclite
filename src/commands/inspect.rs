@@ -154,6 +154,8 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             top
         },
     );
+    // Surface the walk's gitignore filtering so the counts above aren't read as the whole tree.
+    human.push_str(&format!("\nscope      {}", crate::walk::SCOPE_NOTE));
     // Surface unreadable entries (kept out of the counts above) so the scan isn't quietly partial.
     if report.walk_errors > 0 {
         human.push_str(&format!(

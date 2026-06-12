@@ -196,8 +196,10 @@ fn gather_includes(
     sources: &mut Vec<String>,
 ) -> String {
     let mut ctx = String::new();
+    let mut walked_dir = false;
     for path in paths {
         let is_dir = path.is_dir();
+        walked_dir |= is_dir;
         let (files, walk_errors) = if is_dir {
             walk_files(path)
         } else {
@@ -242,6 +244,10 @@ fn gather_includes(
                 path.display()
             ));
         }
+    }
+    // A walked --include directory yields the gitignore-filtered view, like the scan; surface it.
+    if walked_dir {
+        sources.push(format!("walked directories: {}", crate::walk::SCOPE_NOTE));
     }
     ctx
 }

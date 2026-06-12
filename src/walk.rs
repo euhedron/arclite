@@ -5,6 +5,10 @@ use std::path::Path;
 
 use ignore::WalkBuilder;
 
+/// How the walk shapes completeness — surfaced by callers so gitignore exclusion isn't a silent
+/// default: a scan's counts and `--include <dir>` context are this filtered view, not the whole tree.
+pub const SCOPE_NOTE: &str = "gitignore-aware — `.git` and `.gitignore`d paths excluded";
+
 /// A configured, gitignore-aware walk of `dir`.
 pub fn configured(dir: &Path) -> ignore::Walk {
     WalkBuilder::new(dir)
