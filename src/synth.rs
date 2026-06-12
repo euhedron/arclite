@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::ai;
+use crate::ai::{self, Backend};
 use crate::output::emit;
 
 /// Default model when `--model` is omitted. Update when a newer model supersedes it; the run
@@ -837,7 +837,7 @@ fn synthesize_run(
     index: usize,
 ) -> anyhow::Result<ai::Synthesis> {
     let active = crate::runs::register(opts.command, opts.dir, model, index);
-    ai::synthesize(
+    ai::ClaudeBackend.synthesize(
         &ai::Request {
             prompt,
             model,

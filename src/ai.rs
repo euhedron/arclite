@@ -180,12 +180,38 @@ pub struct Request<'a> {
     pub max_budget_usd: Option<f64>,
 }
 
-/// Run a synthesis through the Claude Code CLI with a controlled, isolated context: an
-/// explicit model, no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory`
-/// is set — no ambient memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls).
-/// So by default the sources arclite reports are authoritative, modulo Claude Code's own fixed base
-/// (date, env, tools). Costs real tokens.
-pub fn synthesize(
+/// A synthesis backend — a headless agent CLI arclite drives. It translates a backend-neutral
+/// [`Request`] into that CLI's own invocation, folds the CLI's streamed events into the live-progress
+/// marker, and parses the result into a [`Synthesis`]. The synthesis logic lives behind this trait,
+/// rather than in one CLI-specific function, so a second backend (Codex is next) slots in without the
+/// rest of arclite knowing which CLI ran.
+pub trait Backend {
+    /// Run one synthesis, streaming live progress into `progress`. Costs real tokens.
+    fn synthesize(
+        &self,
+        req: &Request,
+        progress: Option<crate::runs::Active>,
+    ) -> anyhow::Result<Synthesis>;
+}
+
+/// The Claude Code CLI backend — `claude -p` with a controlled, isolated context: an explicit model,
+/// no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory` is set — no ambient
+/// memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls). So by default the
+/// sources arclite reports are authoritative, modulo Claude Code's own fixed base (date, env, tools).
+pub struct ClaudeBackend;
+
+impl Backend for ClaudeBackend {
+    fn synthesize(
+        &self,
+        req: &Request,
+        progress: Option<crate::runs::Active>,
+    ) -> anyhow::Result<Synthesis> {
+        synthesize_claude(req, progress)
+    }
+}
+
+/// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
+fn synthesize_claude(
     req: &Request,
     mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
