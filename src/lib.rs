@@ -30,16 +30,21 @@ pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
-/// Read a file's text, with a missing file as `None` — the one statement of the "absent is benign,
-/// any other IO failure is a real error" distinction, shared by every optional-file read so a
-/// permission/corruption failure can't masquerade as "nothing there yet". Each caller decides what
+/// Map a fallible read to optional: a `NotFound` error becomes `Ok(None)` (absent is benign), any
+/// other error propagates. The one statement of the "absent vs present-but-failed" distinction, so a
+/// permission/corruption failure can't masquerade as "nothing there yet"; each caller decides what
 /// absence means.
-pub(crate) fn read_optional(path: &std::path::Path) -> std::io::Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
+fn optional<T>(result: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Read a file's text, with a missing file as `Ok(None)` (via [`optional`]).
+pub(crate) fn read_optional(path: &std::path::Path) -> std::io::Result<Option<String>> {
+    optional(std::fs::read_to_string(path))
 }
 
 /// Resolve a user-supplied path against `base`: a leading `~/` (or `~\`) expands to the home
@@ -61,14 +66,9 @@ pub(crate) fn resolve_path(base: &std::path::Path, raw: &std::path::Path) -> std
     }
 }
 
-/// List a directory, with a missing directory as `None` — [`read_optional`]'s absent-vs-failed
-/// distinction for directories, shared by the run-registry and result-store listings.
+/// List a directory, with a missing directory as `Ok(None)` (via [`optional`]).
 pub(crate) fn read_dir_optional(dir: &std::path::Path) -> std::io::Result<Option<std::fs::ReadDir>> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => Ok(Some(entries)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    optional(std::fs::read_dir(dir))
 }
 
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
