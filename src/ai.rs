@@ -187,9 +187,8 @@ pub struct Request<'a> {
 /// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
 pub const DEFAULT_BACKEND: &str = "claude";
 
-/// The claude backend's default model — a named, documented, single-sourced constant (the
-/// `no-hardcoded-magic-values` rule permits these; it guards unnamed behaviour-shaping literals).
-/// Update when a newer model supersedes it; the run reports the resolved id the response returns.
+/// The claude backend's default model. Update when a newer model supersedes it; the run reports the
+/// resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 /// The codex backend's default model — specified explicitly (not read from codex's own `config.toml`)
