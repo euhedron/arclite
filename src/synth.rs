@@ -11,15 +11,6 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// Default model when `--model` is omitted. Update when a newer model supersedes it; the run
-/// reports the resolved id the response returns.
-const DEFAULT_MODEL: &str = "claude-opus-4-8";
-
-/// Default model for the `codex` backend when `--model` is omitted — specified explicitly (not read
-/// from codex's own `config.toml`) so a codex run is self-contained. The highest tier at time of
-/// writing; update as codex's models advance.
-const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
-
 /// The ceiling on `--runs`. Each run is a full, concurrent `claude` process at real per-run cost, so
 /// an unbounded count would run away on both load and spend. Kept modest — generous for consensus
 /// sampling, low enough that even the max isn't wasteful at a premium model's price. Enforced in
@@ -106,8 +97,9 @@ fn close_objects(node: &mut serde_json::Value) {
 
 /// Configuration shared by every synthesis-backed command.
 pub struct SynthOptions<'a> {
-    /// Model id; `None` uses [`DEFAULT_MODEL`].
-    pub model: Option<&'a str>,
+    /// The resolved model id for the run (the backend already applied `--model`, the shared default,
+    /// or its own default), reported as the requested model until the response names what actually ran.
+    pub model: &'a str,
     /// Number of synthesis runs to fan out concurrently; their results are unioned. 1 = single run.
     pub runs: usize,
     /// Hard per-run cost cap in dollars, passed to the CLI (each run of a fan-out carries its own).
@@ -116,6 +108,9 @@ pub struct SynthOptions<'a> {
     /// Synthesis backend (`claude` | `codex`) — selects the CLI and shapes cost reporting (codex:
     /// tokens only); reported + recorded so the output says which backend ran.
     pub backend: &'a str,
+    /// Codex reasoning effort, resolved + surfaced because it shapes cost; `None` for backends that
+    /// don't use it (so it's never a hidden billed default).
+    pub reasoning_effort: Option<&'a str>,
     /// Whether `--ranked` ordered the results (it shapes the prompt, so it's reported + recorded).
     pub ranked: bool,
     /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
@@ -524,14 +519,20 @@ struct RunReport<'a> {
     model: String,
     /// Synthesis backend that ran (`claude` | `codex`).
     backend: &'a str,
-    /// How many synthesis runs were combined (1 = single; >1 = concurrent multi-run, unioned).
+    /// How many synthesis runs were combined (1 = single; >1 = concurrent multi-run, unioned). The
+    /// count that *succeeded* — compare with `runs_requested` to see whether any were dropped.
     runs: usize,
+    /// How many runs were requested (`--runs N`). When it exceeds `runs`, some failed and were
+    /// skipped — surfaced here so a `--json` consumer sees the drop in the payload, not just on stderr.
+    runs_requested: usize,
     tools: Vec<&'a str>,
     /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
     /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
     memory: &'a str,
     /// The hard cost cap in effect, or `None` — surfaced every run so an uncapped run says so.
     max_budget_usd: Option<f64>,
+    /// Codex reasoning effort in effect, surfaced because it shapes cost; `None` for backends without it.
+    reasoning_effort: Option<&'a str>,
     /// Whether the results were ordered by significance (`--ranked`).
     ranked: bool,
     /// Whether each result was labeled with a `kind` (`--kinds`).
@@ -552,17 +553,36 @@ impl RunReport<'_> {
         } else {
             self.tools.join(",")
         };
-        let runs = if self.runs > 1 {
-            format!("  runs={}", self.runs)
+        // Surface a multi-run fan-out and any dropped (failed) runs: `runs=N` when all N succeed,
+        // else `runs=N (M ok, K failed)`, so a drop shows here in the report, not only on stderr.
+        let runs = if self.runs_requested > 1 {
+            if self.runs == self.runs_requested {
+                format!("  runs={}", self.runs_requested)
+            } else {
+                format!(
+                    "  runs={} ({} ok, {} failed)",
+                    self.runs_requested,
+                    self.runs,
+                    self.runs_requested - self.runs
+                )
+            }
         } else {
             String::new()
         };
-        let budget = crate::log::budget_display(self.max_budget_usd, self.runs);
+        // The cap's worst-case exposure is over the runs *attempted* (each can spend up to it before
+        // failing), so size it by the requested count, not the surviving one.
+        let budget = crate::log::budget_display(self.max_budget_usd, self.runs_requested);
+        // Reasoning effort is cost-shaping, so surface it next to the backend that uses it.
+        let reasoning = match self.reasoning_effort {
+            Some(effort) => format!("  reasoning={effort}"),
+            None => String::new(),
+        };
         let mut line = format!(
-            "model={}{}  backend={}  tools={}  memory={}  budget={}{}{}  context=[{}]",
+            "model={}{}  backend={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
             self.model,
             runs,
             self.backend,
+            reasoning,
             tools,
             self.memory,
             budget,
@@ -616,8 +636,12 @@ struct RunRecord<'a> {
     model: &'a str,
     backend: &'a str,
     runs: usize,
+    /// Runs requested (`--runs N`) — exceeds `runs` when some failed, so the durable trace shows the drop too.
+    runs_requested: usize,
     memory: &'a str,
     max_budget_usd: Option<f64>,
+    /// Codex reasoning effort recorded (cost-shaping); `None` for backends without it.
+    reasoning_effort: Option<&'a str>,
     /// Claude tools allowed during the run (empty = none — the default, isolated shape).
     tools: &'a [String],
     ranked: bool,
@@ -669,17 +693,15 @@ pub(crate) fn body_display(structured: Option<&serde_json::Value>, text: &str) -
 
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
 pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
-    // The default model is backend-specific (codex needs a codex model, not claude's default).
-    let requested = opts.model.unwrap_or(match opts.backend {
-        "codex" => DEFAULT_CODEX_MODEL,
-        _ => DEFAULT_MODEL,
-    });
+    // The model was resolved by the backend (per-backend defaults live there, not here).
+    let requested = opts.model;
     // The report names the model that actually ran (set from the response after the call); until
     // then it holds the requested model — all a dry run can name, since nothing runs.
     let mut report = RunReport {
         model: requested.to_owned(),
         backend: opts.backend,
         runs: opts.runs,
+        runs_requested: opts.runs,
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
         memory: if opts.ambient_memory {
             "ambient"
@@ -687,6 +709,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             "isolated"
         },
         max_budget_usd: opts.max_budget_usd,
+        reasoning_effort: opts.reasoning_effort,
         ranked: opts.ranked,
         kinds: opts.kinds,
         context: opts.sources,
@@ -822,8 +845,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             model: &report.model,
             backend: opts.backend,
             runs,
+            runs_requested: opts.runs,
             memory: report.memory,
             max_budget_usd: opts.max_budget_usd,
+            reasoning_effort: opts.reasoning_effort,
             tools: opts.allowed_tools,
             ranked: opts.ranked,
             kinds: opts.kinds,
@@ -895,6 +920,7 @@ fn synthesize_run(
             ambient_memory: opts.ambient_memory,
             json_schema: opts.schema,
             max_budget_usd: opts.max_budget_usd,
+            reasoning_effort: opts.reasoning_effort,
         },
         active,
     )

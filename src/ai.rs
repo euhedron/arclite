@@ -180,13 +180,27 @@ pub struct Request<'a> {
     pub ambient_memory: bool,
     pub json_schema: Option<&'a str>,
     pub max_budget_usd: Option<f64>,
+    /// Codex reasoning effort (`-c model_reasoning_effort`); `None` for backends that don't use it.
+    pub reasoning_effort: Option<&'a str>,
 }
+
+/// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
+pub const DEFAULT_BACKEND: &str = "claude";
+
+/// The claude backend's default model — a named, documented, single-sourced constant (the
+/// `no-hardcoded-magic-values` rule permits these; it guards unnamed behaviour-shaping literals).
+/// Update when a newer model supersedes it; the run reports the resolved id the response returns.
+const DEFAULT_MODEL: &str = "claude-opus-4-8";
+
+/// The codex backend's default model — specified explicitly (not read from codex's own `config.toml`)
+/// so a codex run is self-contained. The highest tier at time of writing; update as codex advances.
+const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 
 /// A synthesis backend — a headless agent CLI arclite drives. It translates a backend-neutral
 /// [`Request`] into that CLI's own invocation, folds the CLI's streamed events into the live-progress
-/// marker, and parses the result into a [`Synthesis`]. The synthesis logic lives behind this trait,
-/// rather than in one CLI-specific function, so a second backend (Codex is next) slots in without the
-/// rest of arclite knowing which CLI ran.
+/// marker, and parses the result into a [`Synthesis`]. Per-backend policy — its default model, whether
+/// it honors a native spend cap, which requested capabilities it can't — lives behind this trait too,
+/// so the rest of arclite drives any backend without branching on which CLI it is.
 pub trait Backend {
     /// Run one synthesis, streaming live progress into `progress`. Costs real tokens.
     fn synthesize(
@@ -194,6 +208,48 @@ pub trait Backend {
         req: &Request,
         progress: Option<crate::runs::Active>,
     ) -> anyhow::Result<Synthesis>;
+
+    /// This backend's default model, when neither `--model` nor an applicable configured default is
+    /// set. Per-backend because the backends' model families differ.
+    fn default_model(&self) -> &'static str;
+
+    /// Resolve the run's model: an explicit `--model` wins; else the shared `defaults.model` setting
+    /// when it applies to this backend; else [`Backend::default_model`]. Default: the shared default
+    /// applies (the claude backend); a backend whose models differ overrides to ignore it.
+    fn resolve_model(&self, explicit: Option<&str>, shared_default: Option<&str>) -> String {
+        explicit
+            .map(str::to_owned)
+            .or_else(|| shared_default.map(str::to_owned))
+            .unwrap_or_else(|| self.default_model().to_owned())
+    }
+
+    /// Resolve the run's per-run spend cap from the explicit `--max-budget-usd` and the configured
+    /// default. Default: both apply (the backend honors a native cap). A backend with none returns
+    /// `None`, so neither an explicit cap (already refused by [`Backend::reject_unsupported`]) nor a
+    /// default is mistaken for an enforced limit.
+    fn resolve_budget(&self, explicit: Option<f64>, default: Option<f64>) -> Option<f64> {
+        explicit.or(default)
+    }
+
+    /// Reject, before any spend, a requested capability this backend can't honor — surfaced as an
+    /// error, never silently dropped. Default: honor everything. A backend overrides to refuse what it
+    /// lacks; no backend is privileged — each declares its own limits here.
+    fn reject_unsupported(
+        &self,
+        max_budget_usd: Option<f64>,
+        allowed_tools: &[String],
+    ) -> anyhow::Result<()> {
+        let _ = (max_budget_usd, allowed_tools);
+        Ok(())
+    }
+
+    /// The reasoning effort this backend runs at, given any configured value — surfaced in the report
+    /// and applied to the call, because it shapes cost. Default: `None` (the backend has no such knob).
+    /// A backend with one returns the effective value (the configured one, else its own default).
+    fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
+        let _ = configured;
+        None
+    }
 }
 
 /// Select a synthesis backend by name — the single home of the known backends and their wording.
@@ -212,6 +268,10 @@ pub fn backend(name: &str) -> anyhow::Result<Box<dyn Backend>> {
 pub struct ClaudeBackend;
 
 impl Backend for ClaudeBackend {
+    fn default_model(&self) -> &'static str {
+        DEFAULT_MODEL
+    }
+
     fn synthesize(
         &self,
         req: &Request,
@@ -219,6 +279,50 @@ impl Backend for ClaudeBackend {
     ) -> anyhow::Result<Synthesis> {
         synthesize_claude(req, progress)
     }
+}
+
+/// Spawn a configured agent-CLI `cmd`, feed it `prompt` on stdin, and fold its stdout JSONL event
+/// stream line-by-line through `on_event` — called with `(the event's "type", the parsed event, the
+/// raw line)`, non-JSON lines skipped — then drain stderr and wait. Returns the exit status and
+/// captured stderr. This is the process-driving scaffold both backends share: spawn from a neutral cwd
+/// with piped stdio, write the prompt, stream events, drain, wait. The backends differ only in how they
+/// build `cmd` and what they fold out of each event, so this plumbing lives here once and can't drift.
+fn drive(
+    mut cmd: Command,
+    prompt: &str,
+    launch_err: &'static str,
+    mut on_event: impl FnMut(&str, &serde_json::Value, &str),
+) -> anyhow::Result<(std::process::ExitStatus, String)> {
+    cmd.current_dir(std::env::temp_dir()) // neutral cwd; the agent's working root is set per-backend
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().context(launch_err)?;
+    {
+        let mut stdin = child.stdin.take().expect("stdin was configured as piped");
+        stdin.write_all(prompt.as_bytes())?;
+    } // dropping stdin closes it, signalling end-of-input
+    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line?;
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue; // non-JSON noise (e.g. a stdin warning) — skip
+        };
+        let kind = event
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        on_event(kind, &event, &line);
+    }
+    // stderr is small (the CLIs emit only warnings there), so reading it after stdout drains won't deadlock.
+    let mut stderr = String::new();
+    let _ = child
+        .stderr
+        .take()
+        .expect("stderr was configured as piped")
+        .read_to_string(&mut stderr);
+    let status = child.wait()?;
+    Ok((status, stderr))
 }
 
 /// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
@@ -265,33 +369,16 @@ fn synthesize_claude(
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     }
-    cmd.current_dir(std::env::temp_dir())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .context("failed to launch `claude` — is the Claude Code CLI installed and on PATH?")?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .expect("stdin was configured as piped");
-        stdin.write_all(req.prompt.as_bytes())?;
-    } // dropping stdin closes it, signalling end-of-input
-
-    // Read the event stream line-by-line as it arrives: fold each `assistant` turn into live stats
-    // (via `on_turn`) and keep the final `result` event — the payload `parse_result` understands.
-    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    // Drive the process and fold the event stream: each `assistant` turn updates live stats, each
+    // content_block_delta's text is the continuous char signal, and the final `result` event is the
+    // payload `parse_result` understands (kept as its raw line).
     let mut result_line: Option<String> = None;
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line?;
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue; // non-JSON noise (e.g. a stdin warning) — skip
-        };
-        match event.get("type").and_then(serde_json::Value::as_str) {
-            Some("stream_event") => {
+    let (status, stderr) = drive(
+        cmd,
+        req.prompt,
+        "failed to launch `claude` — is the Claude Code CLI installed and on PATH?",
+        |kind, event, raw| match kind {
+            "stream_event" => {
                 // A content_block_delta's text is the streamed output; its length is the continuous
                 // live signal. Only text_delta carries a string `text` (tool-input/thinking deltas
                 // don't), so probing that field both filters to it and extracts it in one step.
@@ -305,7 +392,7 @@ fn synthesize_claude(
                     p.record_text(text.chars().count() as u64);
                 }
             }
-            Some("assistant") => {
+            "assistant" => {
                 if let Some(p) = progress.as_mut() {
                     let tool_calls = event
                         .pointer("/message/content")
@@ -322,18 +409,10 @@ fn synthesize_claude(
                     p.record_turn(tool_calls);
                 }
             }
-            Some("result") => result_line = Some(line),
+            "result" => result_line = Some(raw.to_owned()),
             _ => {}
-        }
-    }
-    // stderr is small for `claude -p` (warnings), so reading it after stdout drains won't deadlock.
-    let mut stderr = String::new();
-    let _ = child
-        .stderr
-        .take()
-        .expect("stderr was configured as piped")
-        .read_to_string(&mut stderr);
-    let status = child.wait()?;
+        },
+    )?;
     // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
     // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
     let result_line = match (result_line, status.success()) {
@@ -349,9 +428,10 @@ fn synthesize_claude(
     Ok(synthesis)
 }
 
-/// Reasoning effort arclite requests of codex — specified explicitly (not read from the user's
-/// `~/.codex/config.toml`) so a run is self-contained, via `-c model_reasoning_effort`. The highest
-/// tier, matching the audit/critique role where judgment quality matters more than latency.
+/// The codex backend's *default* reasoning effort, used when `defaults.codex_reasoning_effort` isn't
+/// set — specified explicitly (not read from codex's `config.toml`) so a run is self-contained, and
+/// surfaced in the run report since it shapes cost. The highest tier, matching the audit/critique role
+/// where judgment quality matters more than latency.
 const CODEX_REASONING_EFFORT: &str = "xhigh";
 
 /// The Codex CLI backend — `codex exec` with a read-only sandbox and a JSON event stream, the second
@@ -362,6 +442,44 @@ const CODEX_REASONING_EFFORT: &str = "xhigh";
 pub struct CodexBackend;
 
 impl Backend for CodexBackend {
+    fn default_model(&self) -> &'static str {
+        DEFAULT_CODEX_MODEL
+    }
+
+    /// codex's models differ from claude's, so the shared `defaults.model` (a claude id) doesn't apply.
+    fn resolve_model(&self, explicit: Option<&str>, _shared_default: Option<&str>) -> String {
+        explicit
+            .map(str::to_owned)
+            .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_owned())
+    }
+
+    /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).
+    fn resolve_budget(&self, _explicit: Option<f64>, _default: Option<f64>) -> Option<f64> {
+        None
+    }
+
+    fn reject_unsupported(
+        &self,
+        max_budget_usd: Option<f64>,
+        allowed_tools: &[String],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            max_budget_usd.is_none(),
+            "--max-budget-usd requests a native per-run spend cap, which the codex backend has no equivalent for"
+        );
+        anyhow::ensure!(
+            allowed_tools.is_empty(),
+            "--allow-tool (a claude-style tool-name allowlist) isn't mapped onto codex's tool model (MCP + sandbox) yet"
+        );
+        Ok(())
+    }
+
+    /// codex bills by reasoning effort, so the effective value (configured, else the default) is
+    /// surfaced and applied — never a hidden cost-shaping knob.
+    fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
+        Some(configured.unwrap_or(CODEX_REASONING_EFFORT).to_owned())
+    }
+
     fn synthesize(
         &self,
         req: &Request,
@@ -416,14 +534,26 @@ fn synthesize_codex(
         .arg("--sandbox")
         .arg("read-only") // arclite never has codex mutate the repo
         .arg("--skip-git-repo-check") // arclite points at any dir, not necessarily a git repo
+        .arg("--ignore-user-config") // ignore ~/.codex/config.toml — arclite sets the run explicitly, so it's reproducible (auth.json is separate, so it still applies)
+        .arg("--ignore-rules") // skip project .rules execpolicy (arclite runs read-only regardless)
         .arg("--model")
         .arg(req.model)
         .arg("-c")
-        .arg(format!("model_reasoning_effort={CODEX_REASONING_EFFORT}"))
+        .arg("approval_policy=never") // a headless run must never pause for approval (not an exec flag, so set via config)
         .arg("--cd")
         .arg(req.dir)
         .arg("-o")
         .arg(&out_path);
+    // Reasoning effort is cost-shaping, so the caller resolves + surfaces it (the codex backend always
+    // supplies one via `reasoning_effort()`) and it's applied here, not hidden as a fixed default.
+    if let Some(effort) = req.reasoning_effort {
+        cmd.arg("-c").arg(format!("model_reasoning_effort={effort}"));
+    }
+    // Isolate the repo's AGENTS.md (codex's ambient-memory analog) by default — embed 0 bytes of it —
+    // mirroring claude's CLAUDE.md isolation; `--ambient-memory` opts into loading it.
+    if !req.ambient_memory {
+        cmd.arg("-c").arg("project_doc_max_bytes=0");
+    }
     // Structured output: codex validates the final message against a schema *file* (claude takes it
     // inline), so materialize the request's schema to the run's temp dir.
     if let Some(schema) = req.json_schema {
@@ -432,35 +562,20 @@ fn synthesize_codex(
             .with_context(|| format!("cannot write codex schema to {}", schema_path.display()))?;
         cmd.arg("--output-schema").arg(&schema_path);
     }
-    // req.max_budget_usd: codex exec has no budget cap — surfaced as claude-only by the caller, not here.
-    // req.allowed_tools: codex runs read-only with no granted tools. req.ambient_memory: AGENTS.md
-    // isolation (codex's CLAUDE_CODE_DISABLE_* analog) is still to be wired.
-    cmd.current_dir(std::env::temp_dir()) // neutral cwd; --cd sets the agent's working root
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .context("failed to launch `codex` — is the Codex CLI installed and on PATH?")?;
-    {
-        let mut stdin = child.stdin.take().expect("stdin was configured as piped");
-        stdin.write_all(req.prompt.as_bytes())?;
-    } // dropping stdin closes it
-
-    // Parse the JSONL event stream: fold agent-message items + completed turns into live progress and
-    // keep the final usage. The structured result itself comes from the `-o` artifact below.
-    let stdout = child.stdout.take().expect("stdout was configured as piped");
+    // arclite drives codex read-only with no tools by choice (--sandbox read-only, no MCP). codex
+    // itself supports tools (MCP servers + sandbox-governed built-ins); arclite just hasn't mapped
+    // --allow-tool onto that model yet — the gap is in the integration, not in codex.
+    // Drive the process and fold the JSONL event stream: agent-message items + completed turns update
+    // live progress and the final usage; the structured result itself comes from the `-o` artifact below.
     let mut usage: Option<CodexUsage> = None;
     let mut agent_text = String::new();
     let mut failure: Option<String> = None;
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line?;
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue; // non-JSON noise — skip
-        };
-        match event.get("type").and_then(serde_json::Value::as_str) {
-            Some("turn.completed") => {
+    let (status, stderr) = drive(
+        cmd,
+        req.prompt,
+        "failed to launch `codex` — is the Codex CLI installed and on PATH?",
+        |kind, event, _raw| match kind {
+            "turn.completed" => {
                 usage = event
                     .get("usage")
                     .and_then(|u| serde_json::from_value(u.clone()).ok());
@@ -468,7 +583,7 @@ fn synthesize_codex(
                     p.record_turn(0); // codex tool-call accounting is coarser than claude's; turns only
                 }
             }
-            Some("item.completed") => {
+            "item.completed" => {
                 if let Some(item) = event.get("item")
                     && item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message")
                     && let Some(text) = item.get("text").and_then(serde_json::Value::as_str)
@@ -479,7 +594,7 @@ fn synthesize_codex(
                     }
                 }
             }
-            Some("turn.failed") | Some("error") => {
+            "turn.failed" | "error" => {
                 failure = Some(
                     event
                         .pointer("/error/message")
@@ -490,15 +605,8 @@ fn synthesize_codex(
                 );
             }
             _ => {}
-        }
-    }
-    let mut stderr = String::new();
-    let _ = child
-        .stderr
-        .take()
-        .expect("stderr was configured as piped")
-        .read_to_string(&mut stderr);
-    let status = child.wait()?;
+        },
+    )?;
     if let Some(msg) = failure {
         bail!("codex reported an error: {msg}");
     }

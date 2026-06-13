@@ -18,6 +18,8 @@ pub struct Settings {
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
     pub default_max_budget_usd: Option<f64>,
+    /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
+    pub default_codex_reasoning_effort: Option<String>,
     /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
@@ -40,6 +42,7 @@ struct RawDefaults {
     ruleset: Option<String>,
     logging: Option<bool>,
     max_budget_usd: Option<f64>,
+    codex_reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -92,6 +95,10 @@ impl Settings {
                 .with_context(|| format!("invalid defaults.max_budget_usd in {}", path.display()))?;
         }
         overlay(&mut self.default_max_budget_usd, raw.defaults.max_budget_usd);
+        overlay(
+            &mut self.default_codex_reasoning_effort,
+            raw.defaults.codex_reasoning_effort,
+        );
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
             self.rulesets.insert(id, sources); // project (merged last) wins on id collision

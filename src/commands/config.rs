@@ -51,6 +51,11 @@ const SETTINGS: &[Setting] = &[
             Ok(serde_json::Value::from(cap))
         },
     },
+    Setting {
+        key: "defaults.codex_reasoning_effort",
+        read: |s| s.default_codex_reasoning_effort.clone(),
+        parse: parse_string,
+    },
 ];
 
 /// Look up a settable key, or error listing the known set — so `get` and `set` validate one way.

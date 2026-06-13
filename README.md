@@ -30,12 +30,12 @@ arc usage                            # cost/run/token rollup: hour, day, week, t
 arc rules                            # the rules in play (ruleset, sources, provenance)
 arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging, max budget)
 arc init    <repo>                   # add --hook for an opt-in pre-push gate
-arc summarize <repo>                 # runs on the default context (scan + README + manifests + any configured rules)
-arc suggest <repo> --include src     # --include adds files/dirs to the context
-arc audit   <repo> --ruleset <id>    # --ruleset selects the rules (else the configured default)
-arc critique <repo> --include src    # critically review a repo for quality defects
-arc extract <repo> --include src     # mine the reusable rules a repo already embodies
-arc evolve  <repo> --include src     # radical-change proposals (overhauls, reimaginings)
+arc summarize <repo>                 # the default context: repo scan + README + manifests + any configured rules
+arc suggest   <repo> --include src   # --include adds files/dirs to the context
+arc audit     <repo> --ruleset <id>  # --ruleset picks the rules (else the configured default)
+arc critique  <repo> --backend codex # --backend chooses the synthesis engine (claude | codex)
+arc extract   <repo> --runs 3        # --runs fans out N concurrent runs, unioned
+arc evolve    <repo> --ranked        # --ranked orders the results by significance
 ```
 
 Every AI command shares the same options — to select the rules, shape the context, choose the model and tools, bound or preview the spend, and control output (including the **gate**) — described authoritatively by `arc <command> --help`, not re-listed here where the copy would rot. Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost.
@@ -91,7 +91,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 - [x] **Run logging + local rollup** — every completed run appends to `~/.arc/logs/runs.jsonl` (ground-truth usage + cost and the run's parameters), and `arc usage` rolls it up: runs, blocks, tokens, and cost by hour/day/week/total, plus per-command totals. Open: cross-repo and (eventually) team aggregation; trends over time (audit pass-rate, cost curves) to see whether the rules are earning their keep.
 - [x] **`arc status`** — in-flight runs: one marker file per run, written on start and cleared on exit (a `--runs N` fan-out is N independent markers). Open: pruning entries a hard-killed process leaves behind (a cross-platform liveness check); clean/error/unwind exits already clear themselves.
 - [x] **Live run stats** — the synthesis layer streams the CLI's events (`--output-format stream-json --include-partial-messages`) and updates each run's marker as they arrive, so `arc status` shows live progress: output **characters** (the continuous signal; exact tokens land only at completion — the streaming Reference explains why), plus turns and tool-calls at each boundary. Open: richer per-run detail.
-- [x] **Codex backend** — `--backend codex` (+ `defaults.backend`) drives `codex exec` alongside the default claude backend, behind one `Backend` trait, so usage can spread across subscriptions; the run report + log are backend-tagged and the model default is backend-aware (`gpt-5.5`). Open: codex reports tokens but no dollar cost, so `arc usage`'s mixed-backend aggregation wants refining; `--max-budget-usd`/`--allow-tool` are claude-only; AGENTS.md isolation (codex's `CLAUDE_CODE_DISABLE_*` analog) and finer live progress aren't wired yet.
+- [x] **Codex backend** — `--backend codex` (+ `defaults.backend`) drives `codex exec` behind one `Backend` trait, so usage can spread across subscriptions. Runs are self-contained (ignore the user's codex config; model/reasoning/sandbox/approval set explicitly) and isolated by default (AGENTS.md suppressed, mirroring claude's CLAUDE.md; `--ambient-memory` opts it back in — both verified). Report + log are backend-tagged; the model default is backend-aware (`gpt-5.5`). A capability a backend can't honor is rejected before spend, never silently dropped and never framed as one CLI being privileged: codex has no native spend cap (so `--max-budget-usd` is rejected for it), and `--allow-tool` isn't mapped onto codex's own tool model (MCP + sandbox) yet. Open: `arc usage` mixed-backend aggregation (codex: tokens, no cost); coarser live progress (items, not char deltas); the `--allow-tool`→codex bridge.
 
 **Open:**
 
@@ -138,8 +138,18 @@ Claude Code docs arclite leverages or draws on (cite specific behavior; *derive*
 - <https://code.claude.com/docs/en/interactive-mode> — keyboard shortcuts, input modes, command history, the status-area task list, footer status indicators: precedent for a prospective `arc tui`.
 - <https://code.claude.com/docs/en/terminal-config> — terminal behaviors a TUI must respect (multiline-input keys, notifications, flicker-free fullscreen rendering, theming); also informs a prospective `arc tui`.
 
-Codex CLI docs (for the **alternative-backend** roadmap item — `codex exec` is a headless peer to `claude -p`; also open-source Rust, a reference for a prospective `arc tui`):
+Codex CLI docs (codex is a synthesis backend — `--backend codex`; also open-source Rust, a reference for a prospective `arc tui`):
 
-- <https://developers.openai.com/codex/noninteractive> — `codex exec`: headless/non-interactive runs, the `--json` event stream (`turn.completed` carries token usage — but no dollar cost), `--output-schema` for validated structured output, `--sandbox`/`--ask-for-approval`, and the API-key vs ChatGPT-subscription auth that would let usage spread across subscriptions.
-- <https://developers.openai.com/codex/cli/reference> — the codex CLI flags a backend would map arclite's run parameters to (`-m/--model`, `--output-schema`, `-o/--output-last-message`, `-s/--sandbox`, `-a/--ask-for-approval`, `-C/--cd`, `--skip-git-repo-check`).
+- <https://developers.openai.com/codex/noninteractive> — `codex exec`: the headless entry arclite drives (`--json` events, `--output-schema`, `-o`, prompt on stdin).
+- <https://developers.openai.com/codex/cli/reference> — CLI flags (top-level vs `exec`): `-m`, `-s/--sandbox`, `-c`, `-C/--cd`, `--output-schema`, `-o`, `--skip-git-repo-check`, `--ignore-user-config`, `--ignore-rules`.
+- <https://developers.openai.com/codex/cli/features> — the feature surface (exec, MCP, images, resume, model selection).
+- <https://developers.openai.com/codex/cli/slash-commands> — interactive slash commands (TUI precedent; several have config/flag equivalents).
+- <https://developers.openai.com/codex/config-basic> — config basics (`~/.codex/config.toml`, model, reasoning, sandbox/approval).
+- <https://developers.openai.com/codex/config-reference> — full config keys: `model_reasoning_effort` (`minimal|low|medium|high|xhigh`), `project_doc_max_bytes` (the AGENTS.md control), `sandbox_mode`, `approval_policy`, `shell_environment_policy`.
+- <https://developers.openai.com/codex/config-advanced> — profiles, per-project config, AGENTS.md/instruction control, MCP.
+- <https://developers.openai.com/codex/config-sample> — a worked sample `config.toml`.
+- <https://developers.openai.com/codex/environment-variables> — env vars: `CODEX_API_KEY` (exec auth), `CODEX_HOME`, TLS/cert.
+- <https://developers.openai.com/codex/permissions> — the permission model (presets, `default_permissions`, network) — note it does *not* compose with `sandbox_mode`.
+- <https://developers.openai.com/codex/agent-approvals-security> — sandbox modes × approval policies; the locked-down non-interactive combo (`sandbox read-only` + `approval_policy=never`).
+- <https://developers.openai.com/codex/mcp> — MCP servers/tools (`[mcp_servers]`): codex's tool model (the `--allow-tool`→codex bridge target).
 - <https://github.com/openai/codex> — codex source (open-source Rust): the backend's ground truth, and a worked example for the eventual TUI.

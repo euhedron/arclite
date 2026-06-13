@@ -99,33 +99,23 @@ pub fn run_synthesis(
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
-    // Backend: flag over configured default, defaulting to claude. Validated now (before any spend).
-    let backend = args
+    // Backend: the `--backend` flag over the configured default, else arclite's default. The resolved
+    // instance owns the per-backend policy below — which model default applies, whether a native spend
+    // cap is honored, and which requested capabilities it can't — so this function never branches on
+    // the backend name (that lives only in `ai::backend`, the single home of the known backends).
+    let backend_name = args
         .backend
         .clone()
         .or_else(|| settings.default_backend.clone())
-        .unwrap_or_else(|| "claude".to_owned());
-    crate::ai::backend(&backend)?;
-    // The model default is backend-specific: an explicit `--model` carries over, but the configured
-    // `defaults.model` (a claude id) does not apply to codex — codex falls back to its own default.
-    let model = args.model.clone().or_else(|| {
-        if backend == "codex" {
-            None
-        } else {
-            settings.default_model.clone()
-        }
-    });
-    // `--max-budget-usd` is a claude-only cap (`codex exec` has none) — reject it explicitly for codex
-    // rather than silently ignore it.
-    let max_budget_usd = if backend == "codex" {
-        anyhow::ensure!(
-            args.max_budget_usd.is_none(),
-            "--max-budget-usd is claude-only; `codex exec` has no per-run budget cap"
-        );
-        None
-    } else {
-        args.max_budget_usd.or(settings.default_max_budget_usd)
-    };
+        .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
+    let backend = crate::ai::backend(&backend_name)?;
+    // Reject, before any spend, a requested capability this backend can't honor — surfaced as an
+    // error, never silently dropped.
+    backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;
+    let model = backend.resolve_model(args.model.as_deref(), settings.default_model.as_deref());
+    let max_budget_usd = backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
+    let reasoning_effort =
+        backend.reasoning_effort(settings.default_codex_reasoning_effort.as_deref());
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
@@ -177,10 +167,11 @@ pub fn run_synthesis(
     synth::run(
         &prompt,
         &SynthOptions {
-            model: model.as_deref(),
-            backend: &backend,
+            model: &model,
+            backend: &backend_name,
             runs: args.runs,
             max_budget_usd,
+            reasoning_effort: reasoning_effort.as_deref(),
             ranked: args.ranked,
             kinds: args.kinds,
             allowed_tools: &args.allow_tool,
