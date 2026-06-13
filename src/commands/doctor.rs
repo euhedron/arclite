@@ -23,6 +23,8 @@ struct Tools {
     cargo: Option<String>,
     git: Option<String>,
     claude: Option<String>,
+    /// The Codex CLI — optional, only needed for the `--backend codex` synthesis backend.
+    codex: Option<String>,
 }
 
 /// Where per-run records are logged and how many exist — so logging is discoverable (on by
@@ -63,6 +65,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             cargo: probe("cargo"),
             git: probe("git"),
             claude: probe("claude"),
+            codex: probe("codex"),
         },
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
@@ -76,7 +79,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         Err(e) => format!("unreadable: {e}"),
     };
     let human = format!(
-        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}\nclaude  {}\nlogs    {} ({})",
+        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}\nclaude  {}\ncodex   {}\nlogs    {} ({})",
         report.arclite,
         report.runtime.os,
         report.runtime.arch,
@@ -84,6 +87,11 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         report.tools.cargo.as_deref().unwrap_or("not found"),
         report.tools.git.as_deref().unwrap_or("not found"),
         report.tools.claude.as_deref().unwrap_or("not found"),
+        report
+            .tools
+            .codex
+            .as_deref()
+            .unwrap_or("not found (only needed for --backend codex)"),
         report.logs.path.as_deref().unwrap_or("unavailable (no home dir)"),
         runs_display,
     );
