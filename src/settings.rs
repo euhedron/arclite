@@ -14,6 +14,7 @@ use serde::Deserialize;
 #[derive(Debug, Default)]
 pub struct Settings {
     pub default_model: Option<String>,
+    pub default_backend: Option<String>,
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
     pub default_max_budget_usd: Option<f64>,
@@ -35,6 +36,7 @@ struct Raw {
 #[derive(Debug, Default, Deserialize)]
 struct RawDefaults {
     model: Option<String>,
+    backend: Option<String>,
     ruleset: Option<String>,
     logging: Option<bool>,
     max_budget_usd: Option<f64>,
@@ -80,6 +82,7 @@ impl Settings {
             .parent()
             .expect("a .arc/settings.json path always has a parent");
         overlay(&mut self.default_model, raw.defaults.model);
+        overlay(&mut self.default_backend, raw.defaults.backend);
         overlay(&mut self.default_ruleset, raw.defaults.ruleset);
         overlay(&mut self.default_logging, raw.defaults.logging);
         // Validate a hand-edited cap on load too — `arc config set` checks it, but a malformed value

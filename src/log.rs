@@ -31,6 +31,12 @@ pub fn cost_display(cost_usd: f64) -> String {
     format!("${cost_usd:.4}")
 }
 
+/// A cost that may be unavailable: `Some` renders as dollars, `None` as the case where the backend
+/// reports token usage but no dollar cost (codex). One wording, shared by the run report and `arc usage`.
+pub fn cost_or_unavailable(cost_usd: Option<f64>) -> String {
+    cost_usd.map_or_else(|| "tokens only (no $)".to_owned(), cost_display)
+}
+
 /// A token+cost tally formatted for display — the single statement of the
 /// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share.
 pub fn usage_display(
@@ -38,11 +44,11 @@ pub fn usage_display(
     cache_write: u64,
     cache_read: u64,
     output: u64,
-    cost_usd: f64,
+    cost_usd: Option<f64>,
 ) -> String {
     format!(
         "in {input}  cache-write {cache_write}  cache-read {cache_read}  out {output} | {}",
-        cost_display(cost_usd)
+        cost_or_unavailable(cost_usd)
     )
 }
 

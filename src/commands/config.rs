@@ -28,6 +28,11 @@ const SETTINGS: &[Setting] = &[
         parse: parse_string,
     },
     Setting {
+        key: "defaults.backend",
+        read: |s| s.default_backend.clone(),
+        parse: parse_string,
+    },
+    Setting {
         key: "defaults.ruleset",
         read: |s| s.default_ruleset.clone(),
         parse: parse_string,

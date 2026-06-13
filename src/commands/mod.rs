@@ -99,12 +99,33 @@ pub fn run_synthesis(
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
-    let model = args
-        .model
+    // Backend: flag over configured default, defaulting to claude. Validated now (before any spend).
+    let backend = args
+        .backend
         .clone()
-        .or_else(|| settings.default_model.clone());
-    // Flag over configured default, like the model; neither set = no cap.
-    let max_budget_usd = args.max_budget_usd.or(settings.default_max_budget_usd);
+        .or_else(|| settings.default_backend.clone())
+        .unwrap_or_else(|| "claude".to_owned());
+    crate::ai::backend(&backend)?;
+    // The model default is backend-specific: an explicit `--model` carries over, but the configured
+    // `defaults.model` (a claude id) does not apply to codex — codex falls back to its own default.
+    let model = args.model.clone().or_else(|| {
+        if backend == "codex" {
+            None
+        } else {
+            settings.default_model.clone()
+        }
+    });
+    // `--max-budget-usd` is a claude-only cap (`codex exec` has none) — reject it explicitly for codex
+    // rather than silently ignore it.
+    let max_budget_usd = if backend == "codex" {
+        anyhow::ensure!(
+            args.max_budget_usd.is_none(),
+            "--max-budget-usd is claude-only; `codex exec` has no per-run budget cap"
+        );
+        None
+    } else {
+        args.max_budget_usd.or(settings.default_max_budget_usd)
+    };
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
@@ -157,6 +178,7 @@ pub fn run_synthesis(
         &prompt,
         &SynthOptions {
             model: model.as_deref(),
+            backend: &backend,
             runs: args.runs,
             max_budget_usd,
             ranked: args.ranked,

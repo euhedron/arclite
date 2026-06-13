@@ -8,12 +8,17 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::ai::{self, Backend};
+use crate::ai;
 use crate::output::emit;
 
 /// Default model when `--model` is omitted. Update when a newer model supersedes it; the run
 /// reports the resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
+
+/// Default model for the `codex` backend when `--model` is omitted — specified explicitly (not read
+/// from codex's own `config.toml`) so a codex run is self-contained. The highest tier at time of
+/// writing; update as codex's models advance.
+const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 
 /// The ceiling on `--runs`. Each run is a full, concurrent `claude` process at real per-run cost, so
 /// an unbounded count would run away on both load and spend. Kept modest — generous for consensus
@@ -67,11 +72,36 @@ pub(crate) fn with_kind(schema: &str) -> anyhow::Result<String> {
 
 /// Wrap a command's array-item schema in the shared `{ results: [ <item> ], note }` envelope, so
 /// each command declares only its item shape. The CLI's structured output requires a root object (a
-/// top-level array is rejected — confirmed by exercise), so the list can't be the root.
+/// top-level array is rejected — confirmed by exercise), so the list can't be the root. Every object
+/// is then closed (`additionalProperties: false`): codex's structured output requires it (confirmed
+/// by exercise — it 400s otherwise), claude accepts it, so it lives here once rather than in each
+/// command's item schema.
 pub(crate) fn results_schema(item: &str) -> String {
-    format!(
+    let envelope = format!(
         r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}},"{NOTE_KEY}":{{"type":"string"}}}},"required":["{RESULTS_KEY}","{NOTE_KEY}"]}}"#
-    )
+    );
+    let mut root: serde_json::Value =
+        serde_json::from_str(&envelope).expect("a command's assembled results schema is valid JSON");
+    close_objects(&mut root);
+    root.to_string()
+}
+
+/// Recursively set `additionalProperties: false` on every object node in a JSON Schema — the
+/// closed-object shape OpenAI/codex structured output requires (and claude accepts). One statement,
+/// applied by [`results_schema`] to the whole envelope (and so to each command's embedded item).
+fn close_objects(node: &mut serde_json::Value) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if map.get("type").and_then(serde_json::Value::as_str) == Some("object") {
+                map.insert("additionalProperties".to_owned(), serde_json::Value::Bool(false));
+            }
+            for child in map.values_mut() {
+                close_objects(child);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(close_objects),
+        _ => {}
+    }
 }
 
 /// Configuration shared by every synthesis-backed command.
@@ -83,6 +113,9 @@ pub struct SynthOptions<'a> {
     /// Hard per-run cost cap in dollars, passed to the CLI (each run of a fan-out carries its own).
     /// `None` = no cap.
     pub max_budget_usd: Option<f64>,
+    /// Synthesis backend (`claude` | `codex`) — selects the CLI and shapes cost reporting (codex:
+    /// tokens only); reported + recorded so the output says which backend ran.
+    pub backend: &'a str,
     /// Whether `--ranked` ordered the results (it shapes the prompt, so it's reported + recorded).
     pub ranked: bool,
     /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
@@ -489,6 +522,8 @@ pub fn gather_context(
 #[derive(Serialize)]
 struct RunReport<'a> {
     model: String,
+    /// Synthesis backend that ran (`claude` | `codex`).
+    backend: &'a str,
     /// How many synthesis runs were combined (1 = single; >1 = concurrent multi-run, unioned).
     runs: usize,
     tools: Vec<&'a str>,
@@ -524,9 +559,10 @@ impl RunReport<'_> {
         };
         let budget = crate::log::budget_display(self.max_budget_usd, self.runs);
         let mut line = format!(
-            "model={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
+            "model={}{}  backend={}  tools={}  memory={}  budget={}{}{}  context=[{}]",
             self.model,
             runs,
+            self.backend,
             tools,
             self.memory,
             budget,
@@ -578,6 +614,7 @@ struct RunRecord<'a> {
     command: &'a str,
     repo: String,
     model: &'a str,
+    backend: &'a str,
     runs: usize,
     memory: &'a str,
     max_budget_usd: Option<f64>,
@@ -632,11 +669,16 @@ pub(crate) fn body_display(structured: Option<&serde_json::Value>, text: &str) -
 
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
 pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
-    let requested = opts.model.unwrap_or(DEFAULT_MODEL);
+    // The default model is backend-specific (codex needs a codex model, not claude's default).
+    let requested = opts.model.unwrap_or(match opts.backend {
+        "codex" => DEFAULT_CODEX_MODEL,
+        _ => DEFAULT_MODEL,
+    });
     // The report names the model that actually ran (set from the response after the call); until
     // then it holds the requested model — all a dry run can name, since nothing runs.
     let mut report = RunReport {
         model: requested.to_owned(),
+        backend: opts.backend,
         runs: opts.runs,
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
         memory: if opts.ambient_memory {
@@ -710,7 +752,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
-    let cost = crate::log::cost_display(usage.cost_usd);
+    let cost = crate::log::cost_or_unavailable(usage.cost_usd);
     let body = body_display(structured.as_ref(), &text);
     // Count the gated findings before `structured` is moved out. The schema guarantees the field is
     // a present array; a missing one is the CLI ignoring the requested schema — an error, not a 0-pass.
@@ -778,6 +820,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             command: opts.command,
             repo: opts.dir.display().to_string(),
             model: &report.model,
+            backend: opts.backend,
             runs,
             memory: report.memory,
             max_budget_usd: opts.max_budget_usd,
@@ -843,7 +886,7 @@ fn synthesize_run(
     index: usize,
 ) -> anyhow::Result<ai::Synthesis> {
     let active = crate::runs::register(opts.command, opts.dir, model, index);
-    ai::ClaudeBackend.synthesize(
+    ai::backend(opts.backend)?.synthesize(
         &ai::Request {
             prompt,
             model,
@@ -964,7 +1007,7 @@ fn sum_usage(runs: &[ai::Synthesis]) -> ai::Usage {
         total.output_tokens += run.usage.output_tokens;
         total.cache_creation_input_tokens += run.usage.cache_creation_input_tokens;
         total.cache_read_input_tokens += run.usage.cache_read_input_tokens;
-        total.cost_usd += run.usage.cost_usd;
+        total.cost_usd = total.cost_usd.zip(run.usage.cost_usd).map(|(a, b)| a + b);
     }
     total
 }

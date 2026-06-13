@@ -178,9 +178,13 @@ pub struct SynthArgs {
     /// Path to the repository or directory (defaults to the current directory).
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Model to use (a Claude model id). Omit to use the built-in default.
+    /// Model id to use (a claude or codex model, matching `--backend`). Omit for the backend's default.
     #[arg(long)]
     pub model: Option<String>,
+    /// Synthesis backend: `claude` (default) or `codex`. Codex reports token usage but no dollar cost,
+    /// and `--max-budget-usd` is claude-only. Overrides the configured `defaults.backend`.
+    #[arg(long, value_name = "NAME")]
+    pub backend: Option<String>,
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
     pub dry_run: bool,

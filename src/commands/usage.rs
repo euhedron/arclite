@@ -121,7 +121,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                     w.cache_creation_input_tokens,
                     w.cache_read_input_tokens,
                     w.output_tokens,
-                    w.cost_usd,
+                    Some(w.cost_usd),
                 ),
             )
         })
