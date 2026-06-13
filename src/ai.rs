@@ -450,7 +450,7 @@ impl Backend for CodexBackend {
     fn resolve_model(&self, explicit: Option<&str>, _shared_default: Option<&str>) -> String {
         explicit
             .map(str::to_owned)
-            .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_owned())
+            .unwrap_or_else(|| self.default_model().to_owned())
     }
 
     /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).
@@ -562,13 +562,10 @@ fn synthesize_codex(
             .with_context(|| format!("cannot write codex schema to {}", schema_path.display()))?;
         cmd.arg("--output-schema").arg(&schema_path);
     }
-    // arclite drives codex read-only with no tools by choice (--sandbox read-only, no MCP). codex
-    // itself supports tools (MCP servers + sandbox-governed built-ins); arclite just hasn't mapped
-    // --allow-tool onto that model yet — the gap is in the integration, not in codex.
+    // codex runs read-only with no tools here (--sandbox read-only, no MCP configured).
     // Drive the process and fold the JSONL event stream: agent-message items + completed turns update
     // live progress and the final usage; the structured result itself comes from the `-o` artifact below.
     let mut usage: Option<CodexUsage> = None;
-    let mut agent_text = String::new();
     let mut failure: Option<String> = None;
     let (status, stderr) = drive(
         cmd,
@@ -587,11 +584,9 @@ fn synthesize_codex(
                 if let Some(item) = event.get("item")
                     && item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message")
                     && let Some(text) = item.get("text").and_then(serde_json::Value::as_str)
+                    && let Some(p) = progress.as_mut()
                 {
-                    agent_text = text.to_owned();
-                    if let Some(p) = progress.as_mut() {
-                        p.record_text(text.chars().count() as u64);
-                    }
+                    p.record_text(text.chars().count() as u64);
                 }
             }
             "turn.failed" | "error" => {
@@ -614,11 +609,12 @@ fn synthesize_codex(
         bail!("codex exited with {}: {}", status, stderr.trim());
     }
     let usage = usage.context("codex produced no `turn.completed` usage event")?;
-    // The final structured result is the `-o` artifact (clean + schema-valid); fall back to the last
-    // agent message if `-o` wasn't written.
+    // The result is codex's `-o` artifact (clean + schema-valid) — its documented result channel, so
+    // an absent/empty one on an otherwise-successful run is surfaced rather than papered over, the way
+    // the claude path bails when its result event is missing.
     let text = crate::read_optional(&out_path)?
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or(agent_text);
+        .context("codex exited successfully but wrote no result to its `-o` artifact")?;
     let structured = if req.json_schema.is_some() {
         Some(
             serde_json::from_str(text.trim())

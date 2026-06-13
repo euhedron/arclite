@@ -23,14 +23,14 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 
 ```sh
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
-arc inspect <repo>                   # report structured facts about a repo
-arc status                           # runs currently in flight
-arc log                              # past runs; arc log <id> re-shows one in full
-arc usage                            # cost/run/token rollup: hour, day, week, total
-arc rules                            # the rules in play (ruleset, sources, provenance)
-arc config set defaults.model <id>   # get/set/list settings (model, ruleset, logging, max budget)
-arc init    <repo>                   # add --hook for an opt-in pre-push gate
-arc summarize <repo>                 # the default context: repo scan + README + manifests + any configured rules
+arc inspect <repo>
+arc status
+arc log [<id>]
+arc usage
+arc rules
+arc config set defaults.model <id>
+arc init <repo> --hook
+arc summarize <repo>
 arc suggest   <repo> --include src   # --include adds files/dirs to the context
 arc audit     <repo> --ruleset <id>  # --ruleset picks the rules (else the configured default)
 arc critique  <repo> --backend codex # --backend chooses the synthesis engine (claude | codex)
@@ -38,7 +38,7 @@ arc extract   <repo> --runs 3        # --runs fans out N concurrent runs, unione
 arc evolve    <repo> --ranked        # --ranked orders the results by significance
 ```
 
-Every AI command shares the same options — to select the rules, shape the context, choose the model and tools, bound or preview the spend, and control output (including the **gate**) — described authoritatively by `arc <command> --help`, not re-listed here where the copy would rot. Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost.
+Run `arc <command> --help` for what a command does and its full options — authoritative there, not restated here where the copy would rot. The AI commands share one option surface (select the rules, shape the context, choose the model/tools/backend, bound or preview the spend, control output and the **gate**). Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost.
 
 **Configuration** lives in `.arc/settings.json`, layered user (`~/.arc/`) then project (`<repo>/.arc/`): set command defaults — by hand or with `arc config set` — and define **rulesets**, named compositions of *sources* (directories or files of Markdown rules, including shared pools). Project layers over user; `--ruleset`/`--rules` override per run. arclite's own rules are its `self` ruleset, the configured default.
 
