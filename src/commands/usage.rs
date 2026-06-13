@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, UsageArgs};
-use crate::log::{cost_display, field, SECS_PER_DAY, SECS_PER_HOUR};
+use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, cost_display, field};
 use crate::output::emit;
 
 /// One aggregation window over the run log.
@@ -40,8 +40,10 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         ("week", Some(7 * SECS_PER_DAY)),
         ("total", None),
     ];
-    // Records without usage data can't contribute to the sums — counted and surfaced, not dropped.
+    // Records with no `usage` object at all can't contribute to any sum; costless records (codex:
+    // tokens but no dollar cost) contribute to token sums but not cost. Both are counted + surfaced.
     let mut no_usage = 0usize;
+    let mut tokens_only = 0usize;
     // A record with no timestamp can't be placed in a finite window (it lands in the all-time total
     // only); count it so the windowed sums' omission is disclosed rather than silent.
     let no_timestamp = records
@@ -72,19 +74,30 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 if r.get("blocked").and_then(Value::as_bool) == Some(true) {
                     w.blocked += 1;
                 }
-                let Some(cost) = crate::log::record_cost(r) else {
+                // Sum tokens for any record carrying a `usage` object — claude *and* codex. Codex
+                // reports tokens without a dollar cost, so keying the token sums off cost (as before)
+                // dropped codex usage entirely; only a record with no usage at all is excluded here.
+                let Some(usage) = r.get("usage") else {
                     if span.is_none() {
-                        no_usage += 1; // count once, on the all-time pass
+                        no_usage += 1; // no usage object — counted once, on the all-time pass
                     }
                     continue;
                 };
-                w.cost_usd += cost;
-                let usage = r.get("usage").expect("cost_usd was read from within usage");
                 let n = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
                 w.input_tokens += n("input_tokens");
                 w.cache_creation_input_tokens += n("cache_creation_input_tokens");
                 w.cache_read_input_tokens += n("cache_read_input_tokens");
                 w.output_tokens += n("output_tokens");
+                // Cost is summed only when present; a costless run (codex) is counted separately so the
+                // cost figure's partialness is disclosed rather than silently read as $0.
+                match crate::log::record_cost(r) {
+                    Some(cost) => w.cost_usd += cost,
+                    None => {
+                        if span.is_none() {
+                            tokens_only += 1;
+                        }
+                    }
+                }
             }
             w
         })
@@ -137,8 +150,15 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             ));
         }
     }
+    if tokens_only > 0 {
+        lines.push(format!(
+            "{tokens_only} run(s) report tokens only — no dollar cost (codex); counted in the token sums, not the cost"
+        ));
+    }
     if no_usage > 0 {
-        lines.push(format!("{no_usage} run(s) lack usage data (excluded from the sums)"));
+        lines.push(format!(
+            "{no_usage} run(s) lack usage data entirely (excluded from all sums)"
+        ));
     }
     if no_timestamp > 0 {
         lines.push(format!(
@@ -151,6 +171,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let payload = serde_json::json!({
         "windows": windows,
         "by_command": by_command,
+        "tokens_only": tokens_only,
         "no_usage": no_usage,
         "no_timestamp": no_timestamp,
         "unparsed": unparsed,

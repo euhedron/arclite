@@ -68,6 +68,23 @@ pub fn budget_display(cap: Option<f64>, runs: usize) -> String {
     }
 }
 
+/// A multi-run fan-out's summary for the run report and the stored-run replay — `runs=N`, or
+/// `runs=N (M ok, K failed)` when some were dropped — or `None` for a single run. Single-sourced so
+/// the two views can't drift in how they show the fan-out, its drops, or (sized by the same attempted
+/// count) the worst-case budget exposure.
+pub fn runs_summary(succeeded: usize, requested: usize) -> Option<String> {
+    if requested <= 1 {
+        None
+    } else if succeeded == requested {
+        Some(format!("runs={requested}"))
+    } else {
+        Some(format!(
+            "runs={requested} ({succeeded} ok, {} failed)",
+            requested - succeeded
+        ))
+    }
+}
+
 /// The recorded cost of a run record (`usage.cost_usd`), `None` when absent — the single accessor,
 /// so every reader handles absence deliberately (display `$?`, exclude-and-count in sums) rather
 /// than silently zeroing what would read as genuine zero spend.
@@ -180,7 +197,10 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
     };
     let line = serde_json::to_string(record).expect("a run record serializes");
     write_best_effort(target, "run not logged", |p| {
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(p)?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)?;
         writeln!(file, "{line}")
     })
 }

@@ -8,12 +8,18 @@ const CRITIQUE_ITEM: &str = r#"{"type":"object","properties":{"location":{"type"
 
 /// Critique's defect taxonomy (the (label, description) dual use: see [`Structure`]'s `kinds`).
 const CRITIQUE_KINDS: &[(&str, &str)] = &[
-    ("redundancy", "the same thing stated or built in more than one place"),
+    (
+        "redundancy",
+        "the same thing stated or built in more than one place",
+    ),
     ("inconsistency", "parts that contradict each other"),
     ("staleness", "claims that no longer match reality"),
     ("gap", "missing pieces or unhandled cases"),
     ("dead", "unused or unreachable elements"),
-    ("tightening", "what could be consolidated, restructured, or clarified"),
+    (
+        "tightening",
+        "what could be consolidated, restructured, or clarified",
+    ),
 ];
 
 /// The `critique` command.

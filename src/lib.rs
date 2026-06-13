@@ -67,7 +67,9 @@ pub(crate) fn resolve_path(base: &std::path::Path, raw: &std::path::Path) -> std
 }
 
 /// List a directory, with a missing directory as `Ok(None)` (via [`optional`]).
-pub(crate) fn read_dir_optional(dir: &std::path::Path) -> std::io::Result<Option<std::fs::ReadDir>> {
+pub(crate) fn read_dir_optional(
+    dir: &std::path::Path,
+) -> std::io::Result<Option<std::fs::ReadDir>> {
     optional(std::fs::read_dir(dir))
 }
 
@@ -81,7 +83,9 @@ pub fn run() -> ExitCode {
     // return their own ExitCode so an opt-in gate (`--fail-on-findings`) surfaces as a distinct
     // non-zero code without being an error.
     let result = match &cli.command {
-        Command::Doctor(args) => commands::doctor::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Doctor(args) => {
+            commands::doctor::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Inspect(args) => {
             commands::inspect::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
@@ -94,9 +98,7 @@ pub fn run() -> ExitCode {
             commands::config::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Log(args) => commands::log::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
-        Command::Usage(args) => {
-            commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
-        }
+        Command::Usage(args) => commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Completions(args) => {
             clap_complete::generate(
                 args.shell,

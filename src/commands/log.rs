@@ -2,7 +2,7 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, LogArgs};
-use crate::log::{field, SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE};
+use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE, field};
 use crate::output::emit;
 
 /// The `log` command.
@@ -42,7 +42,9 @@ fn keep(r: &Value, args: &LogArgs) -> bool {
         return false;
     }
     if let Some(repo) = &args.repo
-        && !field(r, "repo").to_lowercase().contains(&repo.to_lowercase())
+        && !field(r, "repo")
+            .to_lowercase()
+            .contains(&repo.to_lowercase())
     {
         return false;
     }
@@ -84,10 +86,16 @@ fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     emit(&payload, &lines.join("\n"), global.json)
 }
 
-/// The recorded cost of a record/run JSON object, formatted for display — `$?` when absent, so a
-/// missing cost can't read as genuine zero spend.
+/// The recorded cost of a record/run JSON object, formatted for display. When the record carries
+/// usage, this is the same rendering the live run report uses (`$X`, or "tokens only (no $)" for a
+/// backend like codex that reports tokens but no cost) — so a run reads the same logged as it did
+/// live. A record with no usage at all has a genuinely-absent cost, shown `$?` (never a bogus $0).
 fn cost(v: &Value) -> String {
-    crate::log::record_cost(v).map_or_else(|| "$?".to_owned(), crate::log::cost_display)
+    if v.get("usage").is_some() {
+        crate::log::cost_or_unavailable(crate::log::record_cost(v))
+    } else {
+        "$?".to_owned()
+    }
 }
 
 /// One log record as a compact row — tolerant of older records that predate some fields.
@@ -111,7 +119,11 @@ fn row(r: &Value, now: u64) -> String {
         repo,
         field(r, "model"),
         cost(r),
-        if blocked { format!(" · {}", crate::log::gate_label(blocked)) } else { String::new() },
+        if blocked {
+            format!(" · {}", crate::log::gate_label(blocked))
+        } else {
+            String::new()
+        },
     )
 }
 
@@ -147,7 +159,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// A UNIX timestamp as `YYYY-MM-DD HH:MM UTC` — UTC because it's exact without a timezone
 /// dependency, and labeled so it can't be misread as local time.
 fn datetime_utc(secs: u64) -> String {
-    let (y, m, d) = civil_from_days(i64::try_from(secs / SECS_PER_DAY).expect("fits until year ~25e12"));
+    let (y, m, d) =
+        civil_from_days(i64::try_from(secs / SECS_PER_DAY).expect("fits until year ~25e12"));
     let rem = secs % SECS_PER_DAY;
     format!(
         "{y:04}-{m:02}-{d:02} {:02}:{:02} UTC",
@@ -159,8 +172,8 @@ fn datetime_utc(secs: u64) -> String {
 fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let id = resolve_id(id)?;
     let path = crate::log::result_path(&id).context("cannot determine the result path")?;
-    let Some(text) = crate::read_optional(&path)
-        .with_context(|| format!("cannot read {}", path.display()))?
+    let Some(text) =
+        crate::read_optional(&path).with_context(|| format!("cannot read {}", path.display()))?
     else {
         bail!(
             "no stored result for run `{id}` (runs predating the store, or made with logging off, aren't kept)"
@@ -228,7 +241,12 @@ fn stored_human(v: &Value) -> String {
         .get("ts")
         .and_then(Value::as_u64)
         .map_or_else(|| "?".to_owned(), datetime_utc);
-    let mut meta = format!("{} · {} · arc v{}", field(&run, "id"), when, field(&run, "version"));
+    let mut meta = format!(
+        "{} · {} · arc v{}",
+        field(&run, "id"),
+        when,
+        field(&run, "version")
+    );
     meta.push_str(&format!(
         "\n{} · {} · {}",
         field(&run, "command"),
@@ -236,10 +254,17 @@ fn stored_human(v: &Value) -> String {
         field(&run, "model")
     ));
     let runs = run.get("runs").and_then(Value::as_u64).unwrap_or(1) as usize;
-    if runs > 1 {
-        meta.push_str(&format!(" · runs={runs}"));
+    let requested = run
+        .get("runs_requested")
+        .and_then(Value::as_u64)
+        .map_or(runs, |r| r as usize);
+    if let Some(s) = crate::log::runs_summary(runs, requested) {
+        meta.push_str(&format!(" · {s}"));
     }
-    let budget = crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), runs);
+    let budget = crate::log::budget_display(
+        run.get("max_budget_usd").and_then(Value::as_f64),
+        requested,
+    );
     meta.push_str(&format!(
         " · memory={} · budget={budget} · {}",
         field(&run, "memory"),

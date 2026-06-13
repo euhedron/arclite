@@ -92,7 +92,11 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             .codex
             .as_deref()
             .unwrap_or("not found (only needed for --backend codex)"),
-        report.logs.path.as_deref().unwrap_or("unavailable (no home dir)"),
+        report
+            .logs
+            .path
+            .as_deref()
+            .unwrap_or("unavailable (no home dir)"),
         runs_display,
     );
 

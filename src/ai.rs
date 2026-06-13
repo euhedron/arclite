@@ -5,6 +5,8 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::settings::Settings;
+
 /// Token usage and cost for one synthesis call — ground truth from the CLI's response. `cost_usd` is
 /// `Some` when the CLI returns an authoritative dollar cost (claude), and `None` when the backend
 /// reports token usage but no cost (codex reports tokens only — no fabricated estimate).
@@ -212,13 +214,17 @@ pub trait Backend {
     /// set. Per-backend because the backends' model families differ.
     fn default_model(&self) -> &'static str;
 
-    /// Resolve the run's model: an explicit `--model` wins; else the shared `defaults.model` setting
-    /// when it applies to this backend; else [`Backend::default_model`]. Default: the shared default
-    /// applies (the claude backend); a backend whose models differ overrides to ignore it.
-    fn resolve_model(&self, explicit: Option<&str>, shared_default: Option<&str>) -> String {
+    /// This backend's configured default model from settings (`defaults.model` for claude,
+    /// `defaults.codex_model` for codex), or `None` if unset. Required, so model resolution never
+    /// branches on the backend name and a new backend must declare its own key rather than inherit one.
+    fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str>;
+
+    /// Resolve the run's model: an explicit `--model` wins; else this backend's configured default
+    /// (its [`Backend::configured_model`]); else [`Backend::default_model`].
+    fn resolve_model(&self, explicit: Option<&str>, configured: Option<&str>) -> String {
         explicit
             .map(str::to_owned)
-            .or_else(|| shared_default.map(str::to_owned))
+            .or_else(|| configured.map(str::to_owned))
             .unwrap_or_else(|| self.default_model().to_owned())
     }
 
@@ -269,6 +275,10 @@ pub struct ClaudeBackend;
 impl Backend for ClaudeBackend {
     fn default_model(&self) -> &'static str {
         DEFAULT_MODEL
+    }
+
+    fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
+        settings.default_model.as_deref()
     }
 
     fn synthesize(
@@ -382,7 +392,9 @@ fn synthesize_claude(
                 // live signal. Only text_delta carries a string `text` (tool-input/thinking deltas
                 // don't), so probing that field both filters to it and extracts it in one step.
                 if let Some(p) = progress.as_mut()
-                    && event.pointer("/event/type").and_then(serde_json::Value::as_str)
+                    && event
+                        .pointer("/event/type")
+                        .and_then(serde_json::Value::as_str)
                         == Some("content_block_delta")
                     && let Some(text) = event
                         .pointer("/event/delta/text")
@@ -445,11 +457,8 @@ impl Backend for CodexBackend {
         DEFAULT_CODEX_MODEL
     }
 
-    /// codex's models differ from claude's, so the shared `defaults.model` (a claude id) doesn't apply.
-    fn resolve_model(&self, explicit: Option<&str>, _shared_default: Option<&str>) -> String {
-        explicit
-            .map(str::to_owned)
-            .unwrap_or_else(|| self.default_model().to_owned())
+    fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
+        settings.default_codex_model.as_deref()
     }
 
     /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).
@@ -546,7 +555,8 @@ fn synthesize_codex(
     // Reasoning effort is cost-shaping, so the caller resolves + surfaces it (the codex backend always
     // supplies one via `reasoning_effort()`) and it's applied here, not hidden as a fixed default.
     if let Some(effort) = req.reasoning_effort {
-        cmd.arg("-c").arg(format!("model_reasoning_effort={effort}"));
+        cmd.arg("-c")
+            .arg(format!("model_reasoning_effort={effort}"));
     }
     // Isolate the repo's AGENTS.md (codex's ambient-memory analog) by default — embed 0 bytes of it —
     // mirroring claude's CLAUDE.md isolation; `--ambient-memory` opts into loading it.

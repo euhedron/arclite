@@ -130,16 +130,16 @@ pub struct LogArgs {
     #[arg(long, conflicts_with = "id")]
     pub last: bool,
     /// Only runs of this command (e.g. `audit`).
-    #[arg(long, value_name = "CMD")]
+    #[arg(long, value_name = "CMD", conflicts_with = "id")]
     pub command: Option<String>,
     /// Only runs whose repo path contains this (case-insensitive).
-    #[arg(long, value_name = "TEXT")]
+    #[arg(long, value_name = "TEXT", conflicts_with = "id")]
     pub repo: Option<String>,
     /// Only runs where the gate blocked.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "id")]
     pub blocked: bool,
     /// List all matching runs, not just the most recent.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "id")]
     pub all: bool,
 }
 

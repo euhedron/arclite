@@ -40,7 +40,11 @@ const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.logging",
         read: |s| Some(s.logging_enabled().to_string()),
-        parse: |v| Ok(serde_json::Value::Bool(v.parse::<bool>().context("expected `true` or `false`")?)),
+        parse: |v| {
+            Ok(serde_json::Value::Bool(
+                v.parse::<bool>().context("expected `true` or `false`")?,
+            ))
+        },
     },
     Setting {
         key: "defaults.max_budget_usd",
@@ -50,6 +54,11 @@ const SETTINGS: &[Setting] = &[
             crate::settings::validate_budget(cap)?;
             Ok(serde_json::Value::from(cap))
         },
+    },
+    Setting {
+        key: "defaults.codex_model",
+        read: |s| s.default_codex_model.clone(),
+        parse: parse_string,
     },
     Setting {
         key: "defaults.codex_reasoning_effort",
@@ -63,7 +72,11 @@ fn setting(key: &str) -> anyhow::Result<&'static Setting> {
     SETTINGS.iter().find(|s| s.key == key).ok_or_else(|| {
         anyhow::anyhow!(
             "unknown setting `{key}` (known: {})",
-            SETTINGS.iter().map(|s| s.key).collect::<Vec<_>>().join(", ")
+            SETTINGS
+                .iter()
+                .map(|s| s.key)
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     })
 }
@@ -133,16 +146,15 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
         Settings::project_path(std::path::Path::new("."))
     };
     // Load the existing layer (or start fresh) as a Value, so unrelated keys round-trip untouched.
-    let mut root: serde_json::Value = match crate::read_optional(&path)
-        .with_context(|| crate::settings::read_error(&path))?
-    {
-        Some(text) => {
-            serde_json::from_str(&text).with_context(|| crate::settings::parse_error(&path))?
-        }
-        None => serde_json::json!({}),
-    };
-    let typed = (setting.parse)(value)
-        .with_context(|| format!("invalid value `{value}` for `{key}`"))?;
+    let mut root: serde_json::Value =
+        match crate::read_optional(&path).with_context(|| crate::settings::read_error(&path))? {
+            Some(text) => {
+                serde_json::from_str(&text).with_context(|| crate::settings::parse_error(&path))?
+            }
+            None => serde_json::json!({}),
+        };
+    let typed =
+        (setting.parse)(value).with_context(|| format!("invalid value `{value}` for `{key}`"))?;
     // Navigate (creating as needed) the dotted key path, e.g. `defaults.model`, and set the leaf.
     let parts: Vec<&str> = key.split('.').collect();
     let (leaf, parents) = parts.split_last().expect("a settable key is never empty");

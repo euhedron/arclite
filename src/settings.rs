@@ -18,6 +18,8 @@ pub struct Settings {
     pub default_ruleset: Option<String>,
     pub default_logging: Option<bool>,
     pub default_max_budget_usd: Option<f64>,
+    /// Codex backend's default model (`defaults.codex_model`); `None` uses the built-in codex default.
+    pub default_codex_model: Option<String>,
     /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
     pub default_codex_reasoning_effort: Option<String>,
     /// The settings files actually loaded, in layer order (user then project).
@@ -42,6 +44,7 @@ struct RawDefaults {
     ruleset: Option<String>,
     logging: Option<bool>,
     max_budget_usd: Option<f64>,
+    codex_model: Option<String>,
     codex_reasoning_effort: Option<String>,
 }
 
@@ -75,8 +78,7 @@ impl Settings {
 
     fn merge(&mut self, path: &Path) -> anyhow::Result<()> {
         // A missing file is fine — this layer is optional.
-        let Some(text) = crate::read_optional(path).with_context(|| read_error(path))?
-        else {
+        let Some(text) = crate::read_optional(path).with_context(|| read_error(path))? else {
             return Ok(());
         };
         let raw: Raw = serde_json::from_str(&text).with_context(|| parse_error(path))?;
@@ -91,10 +93,15 @@ impl Settings {
         // Validate a hand-edited cap on load too — `arc config set` checks it, but a malformed value
         // typed straight into settings.json would otherwise silently disable the safety lever.
         if let Some(cap) = raw.defaults.max_budget_usd {
-            validate_budget(cap)
-                .with_context(|| format!("invalid defaults.max_budget_usd in {}", path.display()))?;
+            validate_budget(cap).with_context(|| {
+                format!("invalid defaults.max_budget_usd in {}", path.display())
+            })?;
         }
-        overlay(&mut self.default_max_budget_usd, raw.defaults.max_budget_usd);
+        overlay(
+            &mut self.default_max_budget_usd,
+            raw.defaults.max_budget_usd,
+        );
+        overlay(&mut self.default_codex_model, raw.defaults.codex_model);
         overlay(
             &mut self.default_codex_reasoning_effort,
             raw.defaults.codex_reasoning_effort,
@@ -120,7 +127,10 @@ impl Settings {
     /// The active settings-file layers as absolute-path display strings (user then project) — the
     /// projection the run report and `arc config list` share (`arc rules` shows them repo-relative).
     pub fn active_display(&self) -> Vec<String> {
-        self.active.iter().map(|p| p.display().to_string()).collect()
+        self.active
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect()
     }
 }
 

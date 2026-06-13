@@ -6,7 +6,7 @@ use assert_cmd::Command;
 #[test]
 fn inspect_json_reports_counts_and_manifest() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let assert = Command::cargo_bin("arclite")
+    let assert = Command::cargo_bin("arc")
         .unwrap()
         .args(["inspect", dir, "--json"])
         .assert()

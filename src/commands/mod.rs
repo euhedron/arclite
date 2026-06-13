@@ -40,8 +40,7 @@ pub struct Structure {
 }
 
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
-const GROUNDING: &str =
-    "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
+const GROUNDING: &str = "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
 
 /// Appended by `--ranked`: order the results by significance (the array order is the ranking).
 const RANKED_NOTE: &str =
@@ -112,8 +111,9 @@ pub fn run_synthesis(
     // Reject, before any spend, a requested capability this backend can't honor — surfaced as an
     // error, never silently dropped.
     backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;
-    let model = backend.resolve_model(args.model.as_deref(), settings.default_model.as_deref());
-    let max_budget_usd = backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
+    let model = backend.resolve_model(args.model.as_deref(), backend.configured_model(&settings));
+    let max_budget_usd =
+        backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
     let reasoning_effort =
         backend.reasoning_effort(settings.default_codex_reasoning_effort.as_deref());
     let log = settings.logging_enabled();
@@ -225,7 +225,11 @@ pub(crate) fn resolve_rule_sources(
     Ok(RuleResolution {
         description: format!(
             "ruleset `{id}` (from {})",
-            if from_flag { "--ruleset" } else { "defaults.ruleset" }
+            if from_flag {
+                "--ruleset"
+            } else {
+                "defaults.ruleset"
+            }
         ),
         sources,
     })

@@ -9,7 +9,10 @@ const SUGGEST_ITEM: &str = r#"{"type":"object","properties":{"suggestion":{"type
 /// Suggest's attention taxonomy (the (label, description) dual use: see [`Structure`]'s `kinds`).
 const SUGGEST_KINDS: &[(&str, &str)] = &[
     ("risk", "something fragile or hazardous worth hardening"),
-    ("improvement", "working code or docs that could be clearer or simpler"),
+    (
+        "improvement",
+        "working code or docs that could be clearer or simpler",
+    ),
     ("unfinished", "something started but not yet complete"),
     ("verification", "an assumption or claim worth confirming"),
     ("awareness", "context worth knowing, with no action implied"),

@@ -71,8 +71,8 @@ pub(crate) fn results_schema(item: &str) -> String {
     let envelope = format!(
         r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}},"{NOTE_KEY}":{{"type":"string"}}}},"required":["{RESULTS_KEY}","{NOTE_KEY}"]}}"#
     );
-    let mut root: serde_json::Value =
-        serde_json::from_str(&envelope).expect("a command's assembled results schema is valid JSON");
+    let mut root: serde_json::Value = serde_json::from_str(&envelope)
+        .expect("a command's assembled results schema is valid JSON");
     close_objects(&mut root);
     root.to_string()
 }
@@ -84,7 +84,10 @@ fn close_objects(node: &mut serde_json::Value) {
     match node {
         serde_json::Value::Object(map) => {
             if map.get("type").and_then(serde_json::Value::as_str) == Some("object") {
-                map.insert("additionalProperties".to_owned(), serde_json::Value::Bool(false));
+                map.insert(
+                    "additionalProperties".to_owned(),
+                    serde_json::Value::Bool(false),
+                );
             }
             for child in map.values_mut() {
                 close_objects(child);
@@ -502,7 +505,9 @@ pub fn gather_context(
     let excluded = if includes.is_empty() {
         vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
     } else {
-        vec!["the repo's other source files (beyond those added via --include/--changed)".to_owned()]
+        vec![
+            "the repo's other source files (beyond those added via --include/--changed)".to_owned(),
+        ]
     };
 
     Ok(Context {
@@ -553,21 +558,10 @@ impl RunReport<'_> {
         } else {
             self.tools.join(",")
         };
-        // Surface a multi-run fan-out and any dropped (failed) runs: `runs=N` when all N succeed,
-        // else `runs=N (M ok, K failed)`, so a drop shows here in the report, not only on stderr.
-        let runs = if self.runs_requested > 1 {
-            if self.runs == self.runs_requested {
-                format!("  runs={}", self.runs_requested)
-            } else {
-                format!(
-                    "  runs={} ({} ok, {} failed)",
-                    self.runs_requested,
-                    self.runs,
-                    self.runs_requested - self.runs
-                )
-            }
-        } else {
-            String::new()
+        // Single-sourced fan-out + drop summary (shared with the stored-run replay).
+        let runs = match crate::log::runs_summary(self.runs, self.runs_requested) {
+            Some(s) => format!("  {s}"),
+            None => String::new(),
         };
         // The cap's worst-case exposure is over the runs *attempted* (each can spend up to it before
         // failing), so size it by the requested count, not the surviving one.
@@ -746,7 +740,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         // Disclose logging status + where real runs would record, even though a dry run logs nothing.
         match (opts.log, crate::log::path()) {
             (true, Some(path)) => {
-                human.push_str(&format!("\nlogging: on — real runs append to {}", path.display()));
+                human.push_str(&format!(
+                    "\nlogging: on — real runs append to {}",
+                    path.display()
+                ));
             }
             (false, _) => human.push_str(LOGGING_OFF_NOTE),
             (true, None) => {}
@@ -785,7 +782,9 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
                 .as_ref()
                 .and_then(|v| v.get(field))
                 .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| anyhow::anyhow!("gated on `{field}` but the result has no `{field}` array"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("gated on `{field}` but the result has no `{field}` array")
+                })?
                 .len(),
         ),
         None => None,
@@ -963,7 +962,11 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
     // Structured iff *every* run produced structured output; one prose run and the whole batch is
     // presented as prose. Collecting `Option<&Value>`s into `Option<Vec<_>>` expresses that all-or-
     // prose split in one step — no separate `all(is_some)` guard, no filter that can never filter.
-    if let Some(structured) = runs.iter().map(|r| r.structured.as_ref()).collect::<Option<Vec<_>>>() {
+    if let Some(structured) = runs
+        .iter()
+        .map(|r| r.structured.as_ref())
+        .collect::<Option<Vec<_>>>()
+    {
         let combined = union_results(structured.into_iter());
         let text =
             serde_json::to_string_pretty(&combined).expect("a serde_json::Value re-serializes");
@@ -992,9 +995,7 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
 /// in practice, since independent runs rarely emit the same prose verbatim; judging when two
 /// findings are the same *in substance* is the open semantic combine. Generic over the item shape,
 /// so it serves repeats of one command and (later) different commands.
-fn union_results<'a>(
-    structured: impl Iterator<Item = &'a serde_json::Value>,
-) -> serde_json::Value {
+fn union_results<'a>(structured: impl Iterator<Item = &'a serde_json::Value>) -> serde_json::Value {
     let mut pooled: Vec<serde_json::Value> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     for value in structured {
