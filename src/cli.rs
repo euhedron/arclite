@@ -47,6 +47,8 @@ pub enum Command {
     Init(InitArgs),
     /// Report the runs currently in flight (the active-run registry).
     Status(StatusArgs),
+    /// Open an interactive, self-refreshing terminal view of the live run registry.
+    Tui(TuiArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),
     /// Get, set, or list arclite settings (`config list` shows the keys).
@@ -77,6 +79,14 @@ pub struct DoctorArgs {}
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
+
+/// Arguments for `arc tui`.
+#[derive(Debug, Args)]
+pub struct TuiArgs {
+    /// Seconds between live refreshes of the run registry.
+    #[arg(long, value_name = "SECS", default_value_t = crate::commands::tui::DEFAULT_INTERVAL_SECS)]
+    pub interval: f64,
+}
 
 /// Arguments for `arc rules`.
 #[derive(Debug, Args)]

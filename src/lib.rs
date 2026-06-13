@@ -93,6 +93,7 @@ pub fn run() -> ExitCode {
         Command::Status(args) => {
             commands::status::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        Command::Tui(args) => commands::tui::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Rules(args) => commands::rules::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Config(args) => {
             commands::config::run(args, &cli.global).map(|()| ExitCode::SUCCESS)

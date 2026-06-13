@@ -11,6 +11,7 @@ pub mod rules;
 pub mod status;
 pub mod suggest;
 pub mod summarize;
+pub mod tui;
 pub mod usage;
 
 use std::process::ExitCode;
