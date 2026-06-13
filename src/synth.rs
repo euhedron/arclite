@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::ai;
 use crate::output::emit;
 
-/// The ceiling on `--runs`. Each run is a full, concurrent `claude` process at real per-run cost, so
+/// The ceiling on `--runs`. Each run is a full, concurrent agent-CLI process at real per-run cost, so
 /// an unbounded count would run away on both load and spend. Kept modest — generous for consensus
 /// sampling, low enough that even the max isn't wasteful at a premium model's price. Enforced in
 /// `run_synthesis`.
@@ -132,7 +132,8 @@ pub struct SynthOptions<'a> {
     pub command: &'a str,
     /// Optional directory to also write the synthesis into, as `<command>.md`.
     pub output: Option<&'a Path>,
-    /// Load the Claude CLI's ambient user/project memory instead of isolating (default: isolate).
+    /// Load the agent's ambient project memory — claude's CLAUDE.md + auto-memory, codex's AGENTS.md —
+    /// instead of isolating (default: isolate).
     pub ambient_memory: bool,
     /// JSON Schema for structured output (`--structured`), or `None` for free-form prose.
     pub schema: Option<&'a str>,
@@ -531,8 +532,9 @@ struct RunReport<'a> {
     /// skipped — surfaced here so a `--json` consumer sees the drop in the payload, not just on stderr.
     runs_requested: usize,
     tools: Vec<&'a str>,
-    /// "isolated" (default — no ambient CLAUDE.md/auto-memory) or "ambient" (loaded). Surfaced
-    /// because it shapes what the model sees: "isolated" means the context list below is authoritative.
+    /// "isolated" (default — no ambient agent memory: claude's CLAUDE.md/auto-memory, codex's AGENTS.md)
+    /// or "ambient" (loaded). Surfaced because it shapes what the model sees: "isolated" means the
+    /// context list below is authoritative.
     memory: &'a str,
     /// The hard cost cap in effect, or `None` — surfaced every run so an uncapped run says so.
     max_budget_usd: Option<f64>,
