@@ -291,11 +291,10 @@ impl Backend for ClaudeBackend {
 }
 
 /// Spawn a configured agent-CLI `cmd`, feed it `prompt` on stdin, and fold its stdout JSONL event
-/// stream line-by-line through `on_event` — called with `(the event's "type", the parsed event, the
-/// raw line)`, non-JSON lines skipped — then drain stderr and wait. Returns the exit status and
-/// captured stderr. This is the process-driving scaffold both backends share: spawn from a neutral cwd
-/// with piped stdio, write the prompt, stream events, drain, wait. The backends differ only in how they
-/// build `cmd` and what they fold out of each event, so this plumbing lives here once and can't drift.
+/// stream line-by-line through `on_event` — `(the event's "type", the parsed event, the raw line)`,
+/// non-JSON lines skipped — then return the exit status and captured stderr. The shared process-driving
+/// scaffold: the backends differ only in how they build `cmd` and what they fold from each event, so
+/// this plumbing lives here once and can't drift.
 fn drive(
     mut cmd: Command,
     prompt: &str,
@@ -378,9 +377,6 @@ fn synthesize_claude(
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     }
-    // Drive the process and fold the event stream: each `assistant` turn updates live stats, each
-    // content_block_delta's text is the continuous char signal, and the final `result` event is the
-    // payload `parse_result` understands (kept as its raw line).
     let mut result_line: Option<String> = None;
     let (status, stderr) = drive(
         cmd,
@@ -572,8 +568,6 @@ fn synthesize_codex(
         cmd.arg("--output-schema").arg(&schema_path);
     }
     // codex runs read-only with no tools here (--sandbox read-only, no MCP configured).
-    // Drive the process and fold the JSONL event stream: agent-message items + completed turns update
-    // live progress and the final usage; the structured result itself comes from the `-o` artifact below.
     let mut usage: Option<CodexUsage> = None;
     let mut failure: Option<String> = None;
     let (status, stderr) = drive(
