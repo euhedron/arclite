@@ -116,6 +116,10 @@ pub fn run(args: &TuiArgs, _global: &GlobalArgs) -> anyhow::Result<()> {
     })
     .context("failed to initialize the terminal")?;
     let result = event_loop(&mut terminal, interval);
+    // Clear the live region before restoring. Stock inline leaves the final frame in place (good for a
+    // transcript — codex/Claude do that); but a frozen *status* frame just reads as stale, so wipe it
+    // and let the shell prompt resume clean (codex likewise clears its live composer on exit).
+    let _ = terminal.clear();
     ratatui::restore(); // always restore — even if the loop errored (a panic is handled by the hook)
     result
 }
@@ -165,8 +169,7 @@ fn update(app: &mut App, msg: Msg) {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.should_quit = true;
             }
-            KeyCode::Char('r') => app.status = Snapshot::read(), // manual refresh
-            _ => {}
+            _ => {} // the view refreshes on the tick — no manual refresh key needed
         },
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
     }
@@ -229,7 +232,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot) {
         frame.render_widget(table, body);
     }
 
-    let mut hints = String::from("q quit · r refresh");
+    let mut hints = String::from("q quit");
     if snap.unreadable > 0 {
         hints.push_str(&format!(
             " · {} unreadable registry entr{}",
@@ -317,21 +320,18 @@ mod tests {
     }
 
     #[test]
-    fn quit_and_refresh_keys_update_state() {
-        let key = |c: char, m: KeyModifiers| {
-            Msg::Input(Event::Key(ratatui::crossterm::event::KeyEvent::new(
-                KeyCode::Char(c),
-                m,
-            )))
+    fn quit_keys_set_should_quit() {
+        let key = |code: KeyCode, m: KeyModifiers| {
+            Msg::Input(Event::Key(ratatui::crossterm::event::KeyEvent::new(code, m)))
         };
-        let mut app = App::new();
-        update(&mut app, key('r', KeyModifiers::NONE)); // refresh: no panic, state replaced
-        assert!(!app.should_quit);
-        update(&mut app, key('q', KeyModifiers::NONE));
-        assert!(app.should_quit);
-
-        let mut app = App::new();
-        update(&mut app, key('c', KeyModifiers::CONTROL));
-        assert!(app.should_quit);
+        for (code, mods) in [
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = App::new();
+            update(&mut app, key(code, mods));
+            assert!(app.should_quit, "{code:?} + {mods:?} should quit");
+        }
     }
 }
