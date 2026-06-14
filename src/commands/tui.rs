@@ -1,19 +1,32 @@
-//! `arc tui` — an interactive terminal view over arclite. The MVP is a self-refreshing live view of
-//! the run registry: `arc status`, but updating in place. State is re-read each tick and rendered
-//! immediately; [`render`] is a pure function of [`Snapshot`], so the view is tested headlessly with
-//! ratatui's `TestBackend` (the interactive loop itself needs a real terminal). Inline/no-alt-screen
-//! mode and result-browsing views (log, results) are open follow-ups.
+//! `arc tui` — the human-facing, inline front-end over arclite (the CLI stays the agent/automation
+//! interface). This is the foundation: an **inline** live region (stock ratatui `Viewport::Inline` —
+//! drawn in the normal terminal buffer, the shell's scrollback preserved above; NOT an alt-screen
+//! takeover, matching Claude Code / Codex), driven by a **sync** loop with no tokio.
+//!
+//! Runtime shape (gitui's model): a dedicated **input thread** (blocking `event::read`) and a **tick
+//! thread** both feed one `std::sync::mpsc<Msg>`; the main loop blocks on it, applies the message via
+//! [`update`], and redraws once. A `Tick` re-reads live state — so the view refreshes in place rather
+//! than the user re-running `arc status`. `render`/`render_status` are pure functions of state, tested
+//! headlessly with `TestBackend`; the interactive loop itself needs a real terminal.
+//!
+//! This is cut #1 (live Status). Slash-command palette, the other sections (runs/usage/rules/config),
+//! drill-in overlays, and Launch-with-live-streaming are the next cuts on this same runtime — see the
+//! `arc-tui-architecture` blueprint. The structure is kept deliberately small for one view; the
+//! `Msg`/`update`/route split formalizes when the second view lands.
+#![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
 use std::io::IsTerminal;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
-use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Paragraph, Row, Table};
+use ratatui::{Frame, TerminalOptions, Viewport};
 
 use crate::cli::{GlobalArgs, TuiArgs};
 use crate::runs::ActiveRun;
@@ -21,6 +34,35 @@ use crate::runs::ActiveRun;
 /// Default seconds between live refreshes when `--interval` is omitted. One second keeps the registry
 /// view current without busy-spinning; `--interval` overrides it (and is echoed in `--help`).
 pub const DEFAULT_INTERVAL_SECS: f64 = 1.0;
+
+/// Lines reserved for the inline live region. Tall enough for the status header, a small run table,
+/// and the footer; the shell's scrollback stays visible above it. (Dynamic height that grows with the
+/// section is a known refinement — see the blueprint's "inline-height management" note.)
+const VIEWPORT_HEIGHT: u16 = 16;
+
+/// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
+enum Msg {
+    /// A raw terminal event (key, resize, …) from the input thread.
+    Input(Event),
+    /// The refresh tick: re-read live state.
+    Tick,
+}
+
+/// All TUI state. `render` reads it and never mutates it; `update` is the only mutator. (One view today;
+/// a `route`/overlay stack joins this when the second section/palette lands.)
+struct App {
+    status: Snapshot,
+    should_quit: bool,
+}
+
+impl App {
+    fn new() -> Self {
+        Self {
+            status: Snapshot::read(),
+            should_quit: false,
+        }
+    }
+}
 
 /// What the live view shows at one instant: the in-flight runs, how many registry entries couldn't be
 /// read, the reference time for ages, and any error reading the registry — surfaced, never hidden.
@@ -53,8 +95,8 @@ impl Snapshot {
     }
 }
 
-/// The `tui` command. Owns the terminal for its duration and restores it on exit (and on panic, via
-/// the panic hook `ratatui::try_init` installs).
+/// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
+/// (and on panic, via the panic hook `ratatui::try_init_with_options` installs).
 pub fn run(args: &TuiArgs, _global: &GlobalArgs) -> anyhow::Result<()> {
     // A TUI needs an interactive terminal — fail cleanly rather than entering raw mode against a pipe
     // (which would hang or corrupt non-interactive output). This is also why `--json` has no meaning here.
@@ -62,43 +104,82 @@ pub fn run(args: &TuiArgs, _global: &GlobalArgs) -> anyhow::Result<()> {
         std::io::stdout().is_terminal() && std::io::stdin().is_terminal(),
         "`arc tui` needs an interactive terminal (stdin/stdout are not a TTY)"
     );
-    anyhow::ensure!(args.interval > 0.0, "--interval must be a positive number of seconds");
+    anyhow::ensure!(
+        args.interval > 0.0,
+        "--interval must be a positive number of seconds"
+    );
     let interval = Duration::from_secs_f64(args.interval);
 
-    let mut terminal = ratatui::try_init().context("failed to initialize the terminal")?;
+    // Inline viewport: the live region renders in the normal buffer; scrollback above is preserved.
+    let mut terminal = ratatui::try_init_with_options(TerminalOptions {
+        viewport: Viewport::Inline(VIEWPORT_HEIGHT),
+    })
+    .context("failed to initialize the terminal")?;
     let result = event_loop(&mut terminal, interval);
     ratatui::restore(); // always restore — even if the loop errored (a panic is handled by the hook)
     result
 }
 
-/// Draw the current snapshot, then wait up to `interval` for input: a key is handled at once; on
-/// timeout (no input) the snapshot is re-read. So the view refreshes every `interval`, but responds to
-/// keys immediately rather than on the next tick.
+/// Spawn the input + tick threads, then drive the draw/recv/update loop until quit. Both threads feed
+/// one `mpsc`; the loop blocks on it, so a tick (live refresh) or a keypress each wakes exactly one
+/// redraw. The threads end when the receiver drops (their `send` fails) or with the process.
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> anyhow::Result<()> {
-    let mut snapshot = Snapshot::read();
-    loop {
-        terminal.draw(|frame| render(frame, &snapshot))?;
-        if event::poll(interval)? {
-            if let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
-                    KeyCode::Char('r') => snapshot = Snapshot::read(), // manual refresh
-                    _ => {}
-                }
+    let (tx, rx) = mpsc::channel::<Msg>();
+
+    // Input thread: the sole reader of stdin. `event::read` blocks; each event becomes a `Msg`.
+    let input_tx = tx.clone();
+    thread::spawn(move || {
+        while let Ok(event) = event::read() {
+            if input_tx.send(Msg::Input(event)).is_err() {
+                break; // receiver gone — the loop exited
             }
-            // Non-key events (resize, focus, …) just fall through to a redraw next iteration.
-        } else {
-            snapshot = Snapshot::read(); // tick: nothing pressed within the interval
+        }
+    });
+    // Tick thread: drives the live refresh.
+    thread::spawn(move || {
+        loop {
+            thread::sleep(interval);
+            if tx.send(Msg::Tick).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut app = App::new();
+    while !app.should_quit {
+        terminal.draw(|frame| render(frame, &app))?;
+        match rx.recv() {
+            Ok(msg) => update(&mut app, msg),
+            Err(_) => break, // both senders dropped (shouldn't happen) — exit cleanly
         }
     }
     Ok(())
 }
 
-/// Render one frame from `snap`. Pure (state in, frame out) so it's testable with `TestBackend`.
-fn render(frame: &mut Frame, snap: &Snapshot) {
+/// The one place `App` state changes.
+fn update(app: &mut App, msg: Msg) {
+    match msg {
+        Msg::Tick => app.status = Snapshot::read(),
+        Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.should_quit = true;
+            }
+            KeyCode::Char('r') => app.status = Snapshot::read(), // manual refresh
+            _ => {}
+        },
+        Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
+    }
+}
+
+/// Render one frame from `app` — pure (state in, frame out). Dispatches to the active section's render
+/// (only Status today).
+fn render(frame: &mut Frame, app: &App) {
+    render_status(frame, &app.status);
+}
+
+/// The live run-registry view: header, a table of in-flight runs (or a message), and a footer of keys.
+fn render_status(frame: &mut Frame, snap: &Snapshot) {
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -140,7 +221,10 @@ fn render(frame: &mut Frame, snap: &Snapshot) {
             Constraint::Length(9),
         ];
         let table = Table::new(rows, widths)
-            .header(Row::new(["command", "repo", "model", "age", "turns", "tools", "chars"]).style(Style::new().bold()))
+            .header(
+                Row::new(["command", "repo", "model", "age", "turns", "tools", "chars"])
+                    .style(Style::new().bold()),
+            )
             .block(Block::bordered().title(format!("{} active run(s)", snap.active.len())));
         frame.render_widget(table, body);
     }
@@ -167,10 +251,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    /// Render a snapshot to an in-memory backend and return the screen as one string.
-    fn screen(snap: &Snapshot, width: u16, height: u16) -> String {
+    /// Render a status snapshot to an in-memory backend and return the screen as one string.
+    fn status_screen(snap: &Snapshot, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| render(frame, snap)).unwrap();
+        terminal.draw(|frame| render_status(frame, snap)).unwrap();
         terminal
             .backend()
             .buffer()
@@ -188,7 +272,7 @@ mod tests {
             now: 100,
             error: None,
         };
-        let text = screen(&snap, 60, 8);
+        let text = status_screen(&snap, 60, 8);
         assert!(text.contains("arc — live status"));
         assert!(text.contains("no active runs"));
         assert!(text.contains("q quit"));
@@ -212,7 +296,7 @@ mod tests {
             now: 100,
             error: None,
         };
-        let text = screen(&snap, 100, 8);
+        let text = status_screen(&snap, 100, 8);
         assert!(text.contains("audit"));
         assert!(text.contains("ida")); // basename of the repo path
         assert!(text.contains("10s")); // now - started_at
@@ -227,8 +311,27 @@ mod tests {
             now: 100,
             error: Some("permission denied".to_owned()),
         };
-        let text = screen(&snap, 80, 8);
+        let text = status_screen(&snap, 80, 8);
         assert!(text.contains("unreadable"));
         assert!(text.contains("permission denied"));
+    }
+
+    #[test]
+    fn quit_and_refresh_keys_update_state() {
+        let key = |c: char, m: KeyModifiers| {
+            Msg::Input(Event::Key(ratatui::crossterm::event::KeyEvent::new(
+                KeyCode::Char(c),
+                m,
+            )))
+        };
+        let mut app = App::new();
+        update(&mut app, key('r', KeyModifiers::NONE)); // refresh: no panic, state replaced
+        assert!(!app.should_quit);
+        update(&mut app, key('q', KeyModifiers::NONE));
+        assert!(app.should_quit);
+
+        let mut app = App::new();
+        update(&mut app, key('c', KeyModifiers::CONTROL));
+        assert!(app.should_quit);
     }
 }
