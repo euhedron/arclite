@@ -104,6 +104,15 @@ pub fn field(record: &serde_json::Value, key: &str) -> String {
         .to_owned()
 }
 
+/// The last path segment of a repo path — the compact way `arc log` and the TUI show *which* repo a
+/// run targeted (the full path stays in `arc status`). `rsplit` always yields at least one piece, so
+/// this is total: a path with no separator yields itself, an empty string yields `""`.
+pub fn repo_basename(repo: &str) -> &str {
+    repo.rsplit(['/', '\\'])
+        .next()
+        .expect("rsplit always yields at least one piece")
+}
+
 /// Current UNIX time in seconds.
 pub fn now_secs() -> u64 {
     SystemTime::now()

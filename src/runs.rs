@@ -138,3 +138,13 @@ pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
     }
     Ok((runs, unreadable))
 }
+
+/// Human phrasing for a count of registry entries that couldn't be read or parsed — the singular/plural
+/// wording shared by `arc status` and the TUI, so the two can't drift. The entries are surfaced (never
+/// silently dropped), so a stale or corrupt marker can't make an in-flight count quietly under-report.
+pub fn unreadable_entries(count: usize) -> String {
+    format!(
+        "{count} unreadable registry entr{}",
+        if count == 1 { "y" } else { "ies" }
+    )
+}

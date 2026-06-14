@@ -2,7 +2,7 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, LogArgs};
-use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE, field};
+use crate::log::{SECS_PER_DAY, SECS_PER_HOUR, SECS_PER_MINUTE, field, repo_basename};
 use crate::output::emit;
 
 /// The `log` command.
@@ -108,10 +108,7 @@ fn row(r: &Value, now: u64) -> String {
         .and_then(Value::as_u64)
         .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)));
     let repo_full = field(r, "repo");
-    let repo = repo_full
-        .rsplit(['/', '\\'])
-        .next()
-        .expect("rsplit always yields at least one piece");
+    let repo = repo_basename(&repo_full);
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
     format!(
         "{id} · {age} · {} · {} · {} · {}{}",

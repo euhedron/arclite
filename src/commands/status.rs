@@ -28,9 +28,8 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // Surface entries we couldn't read or parse, rather than under-reporting in-flight runs.
     if !unreadable.is_empty() {
         lines.push(format!(
-            "{} unreadable registry entr{} skipped:",
-            unreadable.len(),
-            if unreadable.len() == 1 { "y" } else { "ies" }
+            "{} skipped:",
+            crate::runs::unreadable_entries(unreadable.len())
         ));
         for path in &unreadable {
             lines.push(format!("  {}", path.display()));

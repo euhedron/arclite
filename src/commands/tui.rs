@@ -382,7 +382,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         let rows = snap.active.iter().map(|r| {
             Row::new([
                 r.command.clone(),
-                basename(&r.repo),
+                crate::log::repo_basename(&r.repo).to_owned(),
                 r.model.clone(),
                 format!("{}s", snap.now.saturating_sub(r.started_at)),
                 r.turns.to_string(),
@@ -402,9 +402,8 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         let mut title = format!("{} running", snap.active.len());
         if snap.unreadable > 0 {
             title.push_str(&format!(
-                " · {} unreadable entr{}",
-                snap.unreadable,
-                if snap.unreadable == 1 { "y" } else { "ies" }
+                " · {}",
+                crate::runs::unreadable_entries(snap.unreadable)
             ));
         }
         let table = Table::new(rows, widths)
@@ -485,11 +484,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
         width: w,
         height: h,
     }
-}
-
-/// The last path segment of a repo path — a compact cell; the full path is in `arc status`/`arc log`.
-fn basename(repo: &str) -> String {
-    repo.rsplit(['/', '\\']).next().unwrap_or(repo).to_owned()
 }
 
 #[cfg(test)]
