@@ -356,16 +356,13 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-/// The launchpad the cockpit opens on: names what arc is and points at the palette.
+/// The home view the TUI opens on — a minimal masthead. The footer already carries the live state and
+/// the key hints, so home doesn't repeat them.
 fn render_home(frame: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from("arc — cockpit").bold(),
-        Line::from(""),
-        Line::from("A launchpad for targeted audit & analysis — running alongside your agents."),
-        Line::from(""),
-        Line::from(vec!["Press  ".into(), "/".bold(), "  for commands.".into()]),
-    ];
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered()), area);
+    frame.render_widget(
+        Paragraph::new(Line::from("arc").bold()).block(Block::bordered()),
+        area,
+    );
 }
 
 /// Column widths for the live-run table, sized to each field's content: the command verb, a flexing
@@ -563,13 +560,6 @@ mod tests {
 
     fn press(code: KeyCode) -> Msg {
         Msg::Input(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
-    }
-
-    #[test]
-    fn opens_on_home_launchpad() {
-        let text = screen(&app_with(Route::Home, empty_snapshot()), 80, 12);
-        assert!(text.contains("arc — cockpit"));
-        assert!(text.contains("for commands"));
     }
 
     #[test]
