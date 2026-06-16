@@ -48,6 +48,9 @@ const VIEWPORT_HEIGHT: u16 = 16;
 /// description without dominating a narrow terminal ([`centered`] clamps it to the available width).
 const PALETTE_WIDTH: u16 = 56;
 
+/// Width of the command-name column in the palette list, so each name's description aligns.
+const PALETTE_NAME_WIDTH: usize = 10;
+
 /// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
 enum Msg {
     /// A raw terminal event (key, resize, …) from the input thread.
@@ -57,7 +60,7 @@ enum Msg {
 }
 
 /// Which section is on screen. The cockpit opens on [`Route::Home`] (a launchpad), not a section — the
-/// palette navigates between sections. (Runs/usage/rules/config join this as later cuts land them.)
+/// palette navigates between sections.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Route {
     Home,
@@ -65,9 +68,8 @@ enum Route {
 }
 
 /// A slash-palette command: navigate to a section, or quit. Listed in *presentation* order (NOT
-/// alpha-sorted — the popup preserves this order, per the codex `command_popup` convention). As real
-/// run-launching verbs land they join here, gated by what's valid in the moment; for now it's
-/// navigation. `ALL` is the single source of the command set.
+/// alpha-sorted — the popup preserves this order, per the codex `command_popup` convention). `ALL` is
+/// the single source of the command set.
 #[derive(Clone, Copy)]
 enum Command {
     Home,
@@ -354,8 +356,7 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-/// The launchpad: what the cockpit opens on. Names what arc is and points at the palette. (As verbs
-/// land this grows into quick-launch + recent runs; today it's the entry signpost.)
+/// The launchpad the cockpit opens on: names what arc is and points at the palette.
 fn render_home(frame: &mut Frame, area: Rect) {
     let lines = vec![
         Line::from("arc — cockpit").bold(),
@@ -474,7 +475,12 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let text = format!("{:<10} {}", c.name(), c.description());
+            let text = format!(
+                "{:<width$} {}",
+                c.name(),
+                c.description(),
+                width = PALETTE_NAME_WIDTH
+            );
             if i == palette.selected {
                 Line::from(format!("› {text}")).bold()
             } else {
