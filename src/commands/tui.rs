@@ -51,12 +51,18 @@ const PALETTE_WIDTH: u16 = 56;
 /// Width of the command-name column in the palette list, so each name's description aligns.
 const PALETTE_NAME_WIDTH: usize = 10;
 
+/// Width of the launch-gate modal — wider than the palette to fit the dry-run preview's parameter
+/// lines ([`centered`] clamps it to the terminal; longer lines still truncate at the border).
+const LAUNCH_WIDTH: u16 = 72;
+
 /// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
 enum Msg {
     /// A raw terminal event (key, resize, …) from the input thread.
     Input(Event),
     /// The refresh tick: re-read live state.
     Tick,
+    /// A launch's dry-run finished on a worker thread: its preview text, or an error to show.
+    LaunchPreview(Result<String, String>),
 }
 
 /// Which section is on screen. The cockpit opens on [`Route::Home`] (a launchpad), not a section — the
@@ -67,24 +73,46 @@ enum Route {
     Status,
 }
 
-/// A slash-palette command: navigate to a section, or quit. Listed in *presentation* order (NOT
-/// alpha-sorted — the popup preserves this order, per the codex `command_popup` convention). `ALL` is
-/// the single source of the command set.
+/// A `/`-palette command: launch an AI run (a verb) or navigate/quit. Listed in *presentation* order
+/// (NOT alpha-sorted — the popup preserves it, per the codex `command_popup` convention); the
+/// launchable verbs lead, since firing a run is the cockpit's primary act. `ALL` is the single source.
 #[derive(Clone, Copy)]
 enum Command {
-    Home,
+    Audit,
+    Critique,
+    Suggest,
+    Summarize,
+    Extract,
+    Evolve,
     Status,
+    Home,
     Quit,
 }
 
 impl Command {
-    const ALL: &'static [Command] = &[Command::Home, Command::Status, Command::Quit];
+    const ALL: &'static [Command] = &[
+        Command::Audit,
+        Command::Critique,
+        Command::Suggest,
+        Command::Summarize,
+        Command::Extract,
+        Command::Evolve,
+        Command::Status,
+        Command::Home,
+        Command::Quit,
+    ];
 
-    /// The typed name (what the palette prefix-matches, shown after the `/`).
+    /// The typed name the palette prefix-matches; for a verb it's also the CLI subcommand spawned.
     fn name(self) -> &'static str {
         match self {
-            Command::Home => "home",
+            Command::Audit => "audit",
+            Command::Critique => "critique",
+            Command::Suggest => "suggest",
+            Command::Summarize => "summarize",
+            Command::Extract => "extract",
+            Command::Evolve => "evolve",
             Command::Status => "status",
+            Command::Home => "home",
             Command::Quit => "quit",
         }
     }
@@ -92,18 +120,26 @@ impl Command {
     /// One-line help shown beside the name in the palette.
     fn description(self) -> &'static str {
         match self {
-            Command::Home => "the launchpad",
+            Command::Audit => "check the repo against the ruleset",
+            Command::Critique => "find quality defects",
+            Command::Suggest => "surface where attention is best spent",
+            Command::Summarize => "describe the repo",
+            Command::Extract => "mine reusable rules",
+            Command::Evolve => "propose radical change",
             Command::Status => "live view of in-flight runs",
+            Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
         }
     }
 
-    /// Apply the chosen command to the app (navigate / quit). The only place a palette selection acts.
+    /// Apply the chosen command: a verb starts a launch (dry-run → gate); home/status navigate; quit
+    /// quits. The only place a palette selection acts.
     fn apply(self, app: &mut App) {
         match self {
             Command::Home => app.route = Route::Home,
             Command::Status => app.route = Route::Status,
             Command::Quit => app.should_quit = true,
+            verb => app.start_launch(verb),
         }
     }
 }
@@ -147,18 +183,80 @@ struct App {
     route: Route,
     status: Snapshot,
     palette: Option<Palette>,
+    /// The in-flight launch (dry-run → gate), or `None`. When present it overlays everything.
+    launch: Option<Launch>,
     should_quit: bool,
+    /// A clone of the loop's `mpsc` sender, handed to launch worker threads so a dry-run reports back.
+    tx: mpsc::Sender<Msg>,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(tx: mpsc::Sender<Msg>) -> Self {
         Self {
             route: Route::Home,
             status: Snapshot::read(),
             palette: None,
+            launch: None,
             should_quit: false,
+            tx,
         }
     }
+
+    /// Begin launching a verb: show the gate as "preparing" and spawn its dry-run on a worker thread,
+    /// which reports the preview back via [`Msg::LaunchPreview`]. The dry-run spends nothing.
+    fn start_launch(&mut self, verb: Command) {
+        self.palette = None;
+        self.launch = Some(Launch {
+            verb,
+            stage: LaunchStage::Preparing,
+        });
+        let tx = self.tx.clone();
+        let name = verb.name();
+        thread::spawn(move || {
+            let _ = tx.send(Msg::LaunchPreview(dry_run_preview(name)));
+        });
+    }
+}
+
+/// An in-flight launch: which verb, and how far along. v1 ends at the gate; confirming to the real
+/// run is the next cut.
+struct Launch {
+    verb: Command,
+    stage: LaunchStage,
+}
+
+/// How far a [`Launch`] has progressed.
+enum LaunchStage {
+    /// The dry-run is running on a worker thread; awaiting its preview.
+    Preparing,
+    /// The preview is ready — the cost gate shows it for confirm/cancel.
+    Confirming { preview: String },
+    /// The dry-run failed; show why, and let the user dismiss.
+    Failed { error: String },
+}
+
+/// Run a verb's dry-run as a subprocess of this same `arc` binary and return its **preview** — the
+/// header (params + estimate) arc prints before the appended prompt — for the gate, or an error
+/// string. Zero spend (`--dry-run`); the cockpit shows arc's own output rather than re-deriving it.
+fn dry_run_preview(verb: &str) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("can't locate the arc binary: {e}"))?;
+    let output = std::process::Command::new(exe)
+        .args([verb, ".", "--dry-run"])
+        .output()
+        .map_err(|e| format!("couldn't start the dry-run: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("the dry-run failed: {}", stderr.trim()));
+    }
+    let out = String::from_utf8_lossy(&output.stdout).into_owned();
+    // arc prints the preview header, a blank line, then the full prompt — the gate wants just the
+    // header, so take everything up to that first blank line.
+    Ok(out
+        .split("\n\n")
+        .next()
+        .unwrap_or(&out)
+        .trim_end()
+        .to_owned())
 }
 
 /// What the live status reflects at one instant: the in-flight runs, how many registry entries couldn't
@@ -238,16 +336,18 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
         }
     });
     // Tick thread: drives the live refresh.
+    let tick_tx = tx.clone();
     thread::spawn(move || {
         loop {
             thread::sleep(interval);
-            if tx.send(Msg::Tick).is_err() {
+            if tick_tx.send(Msg::Tick).is_err() {
                 break;
             }
         }
     });
 
-    let mut app = App::new();
+    // The app keeps the original sender, cloned into each launch worker so its dry-run reports back.
+    let mut app = App::new(tx);
     while !app.should_quit {
         terminal.draw(|frame| render(frame, &app))?;
         // `recv` errors only when every sender has dropped; the tick thread keeps one alive for the
@@ -267,15 +367,33 @@ fn update(app: &mut App, msg: Msg) {
         Msg::Tick => app.status = Snapshot::read(),
         Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => handle_key(app, key),
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
+        Msg::LaunchPreview(result) => {
+            // Fold the dry-run's outcome into the gate — unless the launch was cancelled before it
+            // arrived (then `launch` is `None` and the preview is simply dropped).
+            if let Some(launch) = app.launch.as_mut() {
+                launch.stage = match result {
+                    Ok(preview) => LaunchStage::Confirming { preview },
+                    Err(error) => LaunchStage::Failed { error },
+                };
+            }
+        }
     }
 }
 
-/// Layered key routing: the palette overlay (when open) gets first claim on keys; otherwise the
-/// section/global bindings apply. This is the seam where sections add their own
-/// keys here as they land, always below the overlay and above the global quit.
+/// Layered key routing: the launch gate (when open) gets first claim, then the palette overlay, then
+/// the section/global bindings. This is the seam where sections add their own keys as they land,
+/// always below the overlays and above the global quit.
 fn handle_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // Ctrl-C quits from anywhere, even inside the palette — the universal escape hatch.
+    // The launch gate is the top overlay. Esc / Ctrl-C here is a HARD CANCEL of the launch (never
+    // proceed, never quit the app): a spend gate's cancel must always mean "don't spend".
+    if app.launch.is_some() {
+        if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+            app.launch = None;
+        }
+        return; // every other key is inert while the gate is up (confirm→run is the next cut)
+    }
+    // Ctrl-C quits from anywhere else — the universal escape hatch.
     if ctrl && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
@@ -354,6 +472,9 @@ fn render(frame: &mut Frame, app: &App) {
 
     if let Some(palette) = &app.palette {
         render_palette(frame, palette, frame.area());
+    }
+    if let Some(launch) = &app.launch {
+        render_launch(frame, launch, frame.area());
     }
 }
 
@@ -435,7 +556,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         format!("● {n} running")
     };
 
-    let hints = if app.palette.is_some() {
+    let hints = if app.launch.is_some() {
+        "esc cancel"
+    } else if app.palette.is_some() {
         "↑↓ select · enter run · esc close"
     } else {
         match app.route {
@@ -488,6 +611,37 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
     frame.render_widget(Paragraph::new(lines), list_area);
 }
 
+/// The launch gate: a centered modal showing the chosen verb's dry-run preview (its parameters + the
+/// token/cost estimate) to confirm or cancel before any spend. v1 ends here — cancel only; wiring
+/// confirm to the real run is the next cut.
+fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
+    let verb = launch.verb.name();
+    let (title, body) = match &launch.stage {
+        LaunchStage::Preparing => (
+            format!("launch {verb} · preparing"),
+            "estimating (dry run)…".to_owned(),
+        ),
+        LaunchStage::Confirming { preview } => {
+            (format!("launch {verb} · confirm"), preview.clone())
+        }
+        LaunchStage::Failed { error } => (format!("launch {verb} · failed"), error.clone()),
+    };
+
+    let lines: Vec<Line> = body.lines().map(Line::from).collect();
+    let height = (lines.len() as u16 + 3).min(area.height); // border (2) + body + hint line
+    let rect = centered(area, LAUNCH_WIDTH, height);
+    frame.render_widget(Clear, rect); // punch through whatever's underneath
+
+    let block = Block::bordered().title(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let [body_area, hint_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    frame.render_widget(Paragraph::new(lines), body_area);
+    frame.render_widget(Line::from("esc cancel").dim(), hint_area);
+}
+
 /// A `width`×`height` rect centered within `area` (clamped to fit). For the palette popup.
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
@@ -537,11 +691,15 @@ mod tests {
     }
 
     fn app_with(route: Route, status: Snapshot) -> App {
+        // A launch worker would send here; the tests never start one, so the receiver is dropped.
+        let (tx, _rx) = mpsc::channel();
         App {
             route,
             status,
             palette: None,
+            launch: None,
             should_quit: false,
+            tx,
         }
     }
 
