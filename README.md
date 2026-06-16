@@ -32,11 +32,11 @@ arc rules
 arc config set defaults.model <id>
 arc init <repo> --hook
 arc summarize <repo>
-arc suggest   <repo> --include src   # --include adds files/dirs to the context
-arc audit     <repo> --ruleset <id>  # --ruleset picks the rules (else the configured default)
-arc critique  <repo> --backend codex # --backend chooses the synthesis engine (claude | codex)
-arc extract   <repo> --runs 3        # --runs fans out N concurrent runs, unioned
-arc evolve    <repo> --ranked        # --ranked orders the results by significance
+arc suggest   <repo> --include src
+arc audit     <repo> --ruleset <id>
+arc critique  <repo> --backend codex
+arc extract   <repo> --runs 3
+arc evolve    <repo> --ranked
 ```
 
 Run `arc <command> --help` for what a command does and its full options — authoritative there, not restated here where the copy would rot. The AI commands share one option surface (select the rules, shape the context, choose the model/tools/backend, bound or preview the spend, control output and the **gate**). Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost.

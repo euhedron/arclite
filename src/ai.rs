@@ -194,7 +194,7 @@ pub const DEFAULT_BACKEND: &str = "claude";
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 /// The codex backend's default model — specified explicitly (not read from codex's own `config.toml`)
-/// so a codex run is self-contained. The highest tier at time of writing; update as codex advances.
+/// so a codex run is self-contained. Update as codex's lineup advances; the run reports the id used.
 const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 
 /// A synthesis backend — a headless agent CLI arclite drives. It translates a backend-neutral
