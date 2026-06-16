@@ -16,7 +16,7 @@
 //! tested headlessly with `TestBackend`; the interactive loop itself needs a real terminal. This cut
 //! lands the cockpit spine — home, the footer, the `/` palette, and status as one navigable view.
 //! Launching real commands with live streaming (and the cost-transparency guardrails that demands) is
-//! the next cut on this same runtime — see the `arc-tui-architecture` blueprint.
+//! the next cut on this same runtime.
 #![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
 use std::io::IsTerminal;
@@ -41,7 +41,7 @@ pub const DEFAULT_INTERVAL_SECS: f64 = 1.0;
 
 /// Lines reserved for the inline live region. Tall enough for a section plus the global footer; the
 /// shell's scrollback stays visible above it. (Dynamic height that grows with the section is a known
-/// refinement — see the blueprint's "inline-height management" note.)
+/// refinement.)
 const VIEWPORT_HEIGHT: u16 = 16;
 
 /// Width of the command-palette popup — wide enough for the longest command name plus its one-line
@@ -269,7 +269,7 @@ fn update(app: &mut App, msg: Msg) {
 }
 
 /// Layered key routing: the palette overlay (when open) gets first claim on keys; otherwise the
-/// section/global bindings apply. This is the seam the blueprint calls out — sections add their own
+/// section/global bindings apply. This is the seam where sections add their own
 /// keys here as they land, always below the overlay and above the global quit.
 fn handle_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -404,7 +404,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 r.command.clone(),
                 crate::log::repo_basename(&r.repo).to_owned(),
                 r.model.clone(),
-                format!("{}s", snap.now.saturating_sub(r.started_at)),
+                r.age_display(snap.now),
                 r.turns.to_string(),
                 r.tool_calls.to_string(),
                 r.output_chars.to_string(),

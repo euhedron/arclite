@@ -30,6 +30,14 @@ pub struct ActiveRun {
     pub output_chars: u64,
 }
 
+impl ActiveRun {
+    /// Seconds this run has been in flight, formatted for display (`"{n}s"`) — single-sourced so
+    /// `arc status` and the TUI's live view can't drift in how they render a run's age.
+    pub fn age_display(&self, now: u64) -> String {
+        format!("{}s", now.saturating_sub(self.started_at))
+    }
+}
+
 /// The registry directory, `~/.arc/runs/` (`None` if the home directory is unknown).
 fn dir() -> Option<PathBuf> {
     Some(crate::arc_home()?.join("runs"))
