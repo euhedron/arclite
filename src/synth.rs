@@ -954,12 +954,12 @@ fn multi_synthesize(
     }
     anyhow::ensure!(!ok.is_empty(), "all {n} runs failed");
     let succeeded = ok.len();
-    Ok((combine_runs(ok), succeeded))
+    Ok((combine_runs(ok)?, succeeded))
 }
 
 /// Combine successful runs: sum their usage, then union the structured `results` (deduped) — or, for
 /// prose commands, present each run's text in turn.
-fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
+fn combine_runs(runs: Vec<ai::Synthesis>) -> anyhow::Result<ai::Synthesis> {
     let usage = sum_usage(&runs);
     // Structured iff *every* run produced structured output; one prose run and the whole batch is
     // presented as prose. Collecting `Option<&Value>`s into `Option<Vec<_>>` expresses that all-or-
@@ -969,14 +969,14 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
         .map(|r| r.structured.as_ref())
         .collect::<Option<Vec<_>>>()
     {
-        let combined = union_results(structured.into_iter());
+        let combined = union_results(structured.into_iter())?;
         let text =
             serde_json::to_string_pretty(&combined).expect("a serde_json::Value re-serializes");
-        ai::Synthesis {
+        Ok(ai::Synthesis {
             text,
             usage,
             structured: Some(combined),
-        }
+        })
     } else {
         let text = runs
             .iter()
@@ -984,11 +984,11 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
             .map(|(i, r)| format!("— run {} —\n{}", i + 1, r.text))
             .collect::<Vec<_>>()
             .join("\n\n");
-        ai::Synthesis {
+        Ok(ai::Synthesis {
             text,
             usage,
             structured: None,
-        }
+        })
     }
 }
 
@@ -997,20 +997,33 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> ai::Synthesis {
 /// in practice, since independent runs rarely emit the same prose verbatim; judging when two
 /// findings are the same *in substance* is the open semantic combine. Generic over the item shape,
 /// so it serves repeats of one command and (later) different commands.
-fn union_results<'a>(structured: impl Iterator<Item = &'a serde_json::Value>) -> serde_json::Value {
+fn union_results<'a>(
+    structured: impl Iterator<Item = &'a serde_json::Value>,
+) -> anyhow::Result<serde_json::Value> {
     let mut pooled: Vec<serde_json::Value> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     for value in structured {
-        if let Some(items) = value.get(RESULTS_KEY).and_then(serde_json::Value::as_array) {
-            for item in items {
-                if !pooled.contains(item) {
-                    pooled.push(item.clone());
-                }
+        // Both fields are guaranteed present by the validated envelope schema ([`results_schema`]
+        // marks them required); a missing one means the CLI ignored the schema, surfaced as an error
+        // the same way the gate path treats it — never silently dropped (which would under-report).
+        let items = value
+            .get(RESULTS_KEY)
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("a run result has no `{RESULTS_KEY}` array (the CLI ignored the schema)")
+            })?;
+        for item in items {
+            if !pooled.contains(item) {
+                pooled.push(item.clone());
             }
         }
-        if let Some(note) = value.get(NOTE_KEY).and_then(serde_json::Value::as_str) {
-            notes.push(note.to_owned());
-        }
+        let note = value
+            .get(NOTE_KEY)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("a run result has no `{NOTE_KEY}` string (the CLI ignored the schema)")
+            })?;
+        notes.push(note.to_owned());
     }
     let note = if notes.len() == 1 {
         notes.remove(0)
@@ -1025,7 +1038,7 @@ fn union_results<'a>(structured: impl Iterator<Item = &'a serde_json::Value>) ->
     let mut obj = serde_json::Map::new();
     obj.insert(RESULTS_KEY.to_owned(), serde_json::Value::Array(pooled));
     obj.insert(NOTE_KEY.to_owned(), serde_json::Value::String(note));
-    serde_json::Value::Object(obj)
+    Ok(serde_json::Value::Object(obj))
 }
 
 /// Sum token usage and cost across runs; the model is the same across them, so take the first's.

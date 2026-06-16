@@ -44,6 +44,10 @@ pub const DEFAULT_INTERVAL_SECS: f64 = 1.0;
 /// refinement — see the blueprint's "inline-height management" note.)
 const VIEWPORT_HEIGHT: u16 = 16;
 
+/// Width of the command-palette popup — wide enough for the longest command name plus its one-line
+/// description without dominating a narrow terminal ([`centered`] clamps it to the available width).
+const PALETTE_WIDTH: u16 = 56;
+
 /// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
 enum Msg {
     /// A raw terminal event (key, resize, …) from the input thread.
@@ -360,6 +364,19 @@ fn render_home(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), area);
 }
 
+/// Column widths for the live-run table, sized to each field's content: the command verb, a flexing
+/// repo cell (takes the row's slack), the model id, then the compact age/turns/tools/chars counters —
+/// positionally paired with the header labels in [`render_status`].
+const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
+    Constraint::Length(10), // command
+    Constraint::Min(12),    // repo (flexes to fill the row)
+    Constraint::Length(18), // model id
+    Constraint::Length(6),  // age
+    Constraint::Length(6),  // turns
+    Constraint::Length(6),  // tool calls
+    Constraint::Length(9),  // output chars
+];
+
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
@@ -390,15 +407,6 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 r.output_chars.to_string(),
             ])
         });
-        let widths = [
-            Constraint::Length(10),
-            Constraint::Min(12),
-            Constraint::Length(18),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(9),
-        ];
         let mut title = format!("{} running", snap.active.len());
         if snap.unreadable > 0 {
             title.push_str(&format!(
@@ -406,7 +414,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 crate::runs::unreadable_entries(snap.unreadable)
             ));
         }
-        let table = Table::new(rows, widths)
+        let table = Table::new(rows, STATUS_COLUMN_WIDTHS)
             .header(
                 Row::new(["command", "repo", "model", "age", "turns", "tools", "chars"])
                     .style(Style::new().bold()),
@@ -444,7 +452,7 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
     let matches = palette.matches();
     // Height: border (2) + input line (1) + one row per match (at least one, for the empty message).
     let rows = matches.len().max(1) as u16;
-    let rect = centered(area, 56, rows + 3);
+    let rect = centered(area, PALETTE_WIDTH, rows + 3);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
     let block = Block::bordered().title("commands");
