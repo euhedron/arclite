@@ -1010,7 +1010,9 @@ fn union_results<'a>(
             .get(RESULTS_KEY)
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| {
-                anyhow::anyhow!("a run result has no `{RESULTS_KEY}` array (the CLI ignored the schema)")
+                anyhow::anyhow!(
+                    "a run result has no `{RESULTS_KEY}` array (the CLI ignored the schema)"
+                )
             })?;
         for item in items {
             if !pooled.contains(item) {
@@ -1021,7 +1023,9 @@ fn union_results<'a>(
             .get(NOTE_KEY)
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
-                anyhow::anyhow!("a run result has no `{NOTE_KEY}` string (the CLI ignored the schema)")
+                anyhow::anyhow!(
+                    "a run result has no `{NOTE_KEY}` string (the CLI ignored the schema)"
+                )
             })?;
         notes.push(note.to_owned());
     }

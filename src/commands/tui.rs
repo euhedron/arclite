@@ -343,7 +343,8 @@ fn handle_palette_key(app: &mut App, code: KeyCode) {
 /// Render one frame from `app` — pure (state in, frame out). Every view is a body + the global footer;
 /// the palette, when open, draws as an overlay on top.
 fn render(frame: &mut Frame, app: &App) {
-    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
 
     match app.route {
         Route::Home => render_home(frame, body),
@@ -381,8 +382,7 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
-    let [header, body] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let [header, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
     frame.render_widget(Line::from("live status").bold(), header);
 
@@ -567,7 +567,10 @@ mod tests {
         // The count is in the footer regardless of which section is on screen.
         for route in [Route::Home, Route::Status] {
             let text = screen(&app_with(route, one_run_snapshot()), 80, 12);
-            assert!(text.contains("1 running"), "route should show the run count in the footer");
+            assert!(
+                text.contains("1 running"),
+                "route should show the run count in the footer"
+            );
         }
         // …and reads "idle" when nothing is in flight.
         let idle = screen(&app_with(Route::Home, empty_snapshot()), 80, 12);
@@ -623,7 +626,11 @@ mod tests {
             update(&mut app, press(code));
         }
         assert!(app.palette.is_none(), "enter should close the palette");
-        assert_eq!(app.route, Route::Status, "/status should navigate to the status view");
+        assert_eq!(
+            app.route,
+            Route::Status,
+            "/status should navigate to the status view"
+        );
     }
 
     #[test]
@@ -632,7 +639,11 @@ mod tests {
         update(&mut app, press(KeyCode::Char('/')));
         update(&mut app, press(KeyCode::Esc));
         assert!(app.palette.is_none());
-        assert_eq!(app.route, Route::Status, "esc should dismiss the palette, not change the view");
+        assert_eq!(
+            app.route,
+            Route::Status,
+            "esc should dismiss the palette, not change the view"
+        );
     }
 
     #[test]

@@ -258,10 +258,8 @@ fn stored_human(v: &Value) -> String {
     if let Some(s) = crate::log::runs_summary(runs, requested) {
         meta.push_str(&format!(" · {s}"));
     }
-    let budget = crate::log::budget_display(
-        run.get("max_budget_usd").and_then(Value::as_f64),
-        requested,
-    );
+    let budget =
+        crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), requested);
     meta.push_str(&format!(
         " · memory={} · budget={budget} · {}",
         field(&run, "memory"),
