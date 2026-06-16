@@ -55,6 +55,9 @@ const PALETTE_NAME_WIDTH: usize = 10;
 /// lines ([`centered`] clamps it to the terminal; longer lines still truncate at the border).
 const LAUNCH_WIDTH: u16 = 72;
 
+/// arclite's version, shown on the home masthead (as the agent CLIs head their opening screens).
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
 enum Msg {
     /// A raw terminal event (key, resize, …) from the input thread.
@@ -188,6 +191,8 @@ struct App {
     should_quit: bool,
     /// A clone of the loop's `mpsc` sender, handed to launch worker threads so a dry-run reports back.
     tx: mpsc::Sender<Msg>,
+    /// The directory the cockpit was launched in — the repo its runs target — shown on home.
+    cwd: String,
 }
 
 impl App {
@@ -199,6 +204,9 @@ impl App {
             launch: None,
             should_quit: false,
             tx,
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| ".".to_owned()),
         }
     }
 
@@ -465,7 +473,7 @@ fn render(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
 
     match app.route {
-        Route::Home => render_home(frame, body),
+        Route::Home => render_home(frame, body, &app.cwd),
         Route::Status => render_status(frame, &app.status, body),
     }
     render_footer(frame, footer, app);
@@ -478,13 +486,16 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-/// The home view the TUI opens on — a minimal masthead. The footer already carries the live state and
-/// the key hints, so home doesn't repeat them.
-fn render_home(frame: &mut Frame, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Line::from("arc").bold()).block(Block::bordered()),
-        area,
-    );
+/// The home view the TUI opens on — a compact masthead (name + version, then the target directory),
+/// echoing how the agent CLIs head their opening screens. The footer carries the live state and key
+/// hints, so home doesn't repeat them; the space below is the open launchpad.
+fn render_home(frame: &mut Frame, area: Rect, cwd: &str) {
+    let [masthead, _] = Layout::vertical([Constraint::Length(4), Constraint::Min(0)]).areas(area);
+    let lines = vec![
+        Line::from(format!("arc {VERSION}")).bold(),
+        Line::from(cwd.to_owned()).dim(),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
 }
 
 /// Column widths for the live-run table, sized to each field's content: the command verb, a flexing
@@ -700,6 +711,7 @@ mod tests {
             launch: None,
             should_quit: false,
             tx,
+            cwd: ".".to_owned(),
         }
     }
 
