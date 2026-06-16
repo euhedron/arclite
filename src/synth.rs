@@ -912,6 +912,13 @@ fn synthesize_run(
     index: usize,
 ) -> anyhow::Result<ai::Synthesis> {
     let active = crate::runs::register(opts.command, opts.dir, model, index);
+    if active.is_none() {
+        // Live tracking is best-effort, but a failure shouldn't be silent — say so (as logging warns
+        // when its write fails) rather than leave the user wondering why `arc status` shows nothing.
+        eprintln!(
+            "arclite: this run won't appear in `arc status` (couldn't write its registry marker)"
+        );
+    }
     ai::backend(opts.backend)?.synthesize(
         &ai::Request {
             prompt,

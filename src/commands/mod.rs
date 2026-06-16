@@ -114,6 +114,18 @@ pub fn run_synthesis(
     let model = backend.resolve_model(args.model.as_deref(), backend.configured_model(&settings));
     let max_budget_usd =
         backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
+    // A configured budget cap the backend can't honor is surfaced, never silently dropped. An explicit
+    // --max-budget-usd is already rejected above; a configured default would otherwise just vanish here
+    // (e.g. codex has no native cap), leaving the user's safety lever silently inactive.
+    if args.max_budget_usd.is_none()
+        && let Some(cap) = settings.default_max_budget_usd
+        && max_budget_usd.is_none()
+    {
+        eprintln!(
+            "arclite: defaults.max_budget_usd ({}) not applied — the {backend_name} backend has no native budget cap",
+            crate::log::cost_display(cap)
+        );
+    }
     let reasoning_effort =
         backend.reasoning_effort(settings.default_codex_reasoning_effort.as_deref());
     let log = settings.logging_enabled();
