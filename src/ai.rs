@@ -441,6 +441,27 @@ fn synthesize_claude(
 /// where judgment quality matters more than latency.
 const CODEX_REASONING_EFFORT: &str = "xhigh";
 
+/// The reasoning-effort levels codex's `model_reasoning_effort` accepts. Update if codex's lineup
+/// changes; [`CODEX_REASONING_EFFORT`] (the default) must be one of these.
+const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+
+/// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
+/// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.
+pub(crate) fn validate_backend(name: &str) -> anyhow::Result<()> {
+    backend(name).map(|_| ())
+}
+
+/// Validate a configured / `config set` codex reasoning effort against [`CODEX_REASONING_EFFORTS`], so a
+/// typo is rejected at set + load time rather than only when codex rejects it mid-run.
+pub(crate) fn validate_reasoning_effort(value: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        CODEX_REASONING_EFFORTS.contains(&value),
+        "invalid codex reasoning effort `{value}` (known: {})",
+        CODEX_REASONING_EFFORTS.join(", ")
+    );
+    Ok(())
+}
+
 /// The Codex CLI backend — `codex exec` with a read-only sandbox and a JSON event stream, the second
 /// [`Backend`]. Codex reports token usage but no dollar cost, so the [`Usage`]'s `cost_usd` is `None`;
 /// `--output-schema` takes a file path (claude takes the schema inline), so the request's schema is

@@ -87,6 +87,12 @@ impl Settings {
             .parent()
             .expect("a .arc/settings.json path always has a parent");
         overlay(&mut self.default_model, raw.defaults.model);
+        // Validate a hand-edited backend on load too (`arc config set` checks it), so a typo errors at
+        // load rather than only when a run resolves the backend.
+        if let Some(b) = &raw.defaults.backend {
+            crate::ai::validate_backend(b)
+                .with_context(|| format!("invalid defaults.backend in {}", path.display()))?;
+        }
         overlay(&mut self.default_backend, raw.defaults.backend);
         overlay(&mut self.default_ruleset, raw.defaults.ruleset);
         overlay(&mut self.default_logging, raw.defaults.logging);
@@ -102,6 +108,14 @@ impl Settings {
             raw.defaults.max_budget_usd,
         );
         overlay(&mut self.default_codex_model, raw.defaults.codex_model);
+        if let Some(e) = &raw.defaults.codex_reasoning_effort {
+            crate::ai::validate_reasoning_effort(e).with_context(|| {
+                format!(
+                    "invalid defaults.codex_reasoning_effort in {}",
+                    path.display()
+                )
+            })?;
+        }
         overlay(
             &mut self.default_codex_reasoning_effort,
             raw.defaults.codex_reasoning_effort,

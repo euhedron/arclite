@@ -30,7 +30,10 @@ const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.backend",
         read: |s| s.default_backend.clone(),
-        parse: parse_string,
+        parse: |v| {
+            crate::ai::validate_backend(v)?;
+            Ok(serde_json::Value::String(v.to_owned()))
+        },
     },
     Setting {
         key: "defaults.ruleset",
@@ -63,7 +66,10 @@ const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.codex_reasoning_effort",
         read: |s| s.default_codex_reasoning_effort.clone(),
-        parse: parse_string,
+        parse: |v| {
+            crate::ai::validate_reasoning_effort(v)?;
+            Ok(serde_json::Value::String(v.to_owned()))
+        },
     },
 ];
 
