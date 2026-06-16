@@ -22,9 +22,15 @@ struct Runtime {
 struct Tools {
     cargo: Option<String>,
     git: Option<String>,
-    claude: Option<String>,
-    /// The Codex CLI — optional, only needed for the `--backend codex` synthesis backend.
-    codex: Option<String>,
+    /// Each known synthesis backend ([`crate::ai::KNOWN_BACKENDS`]) and its detected version — probed
+    /// from that one set, so a new backend is checked here automatically rather than silently missed.
+    backends: Vec<BackendTool>,
+}
+
+#[derive(Serialize)]
+struct BackendTool {
+    name: String,
+    version: Option<String>,
 }
 
 /// Where per-run records are logged and how many exist — so logging is discoverable (on by
@@ -64,8 +70,13 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         tools: Tools {
             cargo: probe("cargo"),
             git: probe("git"),
-            claude: probe("claude"),
-            codex: probe("codex"),
+            backends: crate::ai::KNOWN_BACKENDS
+                .iter()
+                .map(|&name| BackendTool {
+                    name: name.to_owned(),
+                    version: probe(name),
+                })
+                .collect(),
         },
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
@@ -78,27 +89,31 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         Ok(n) => format!("{n} runs"),
         Err(e) => format!("unreadable: {e}"),
     };
-    let human = format!(
-        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}\nclaude  {}\ncodex   {}\nlogs    {} ({})",
+    let mut human = format!(
+        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}",
         report.arclite,
         report.runtime.os,
         report.runtime.arch,
         report.cwd,
         report.tools.cargo.as_deref().unwrap_or("not found"),
         report.tools.git.as_deref().unwrap_or("not found"),
-        report.tools.claude.as_deref().unwrap_or("not found"),
-        report
-            .tools
-            .codex
-            .as_deref()
-            .unwrap_or("not found (only needed for --backend codex)"),
+    );
+    for b in &report.tools.backends {
+        let status = match &b.version {
+            Some(v) => v.clone(),
+            None if b.name == crate::ai::DEFAULT_BACKEND => "not found".to_owned(),
+            None => format!("not found (needed only for --backend {})", b.name),
+        };
+        human.push_str(&format!("\n{:<8}{status}", b.name));
+    }
+    human.push_str(&format!(
+        "\nlogs    {} ({runs_display})",
         report
             .logs
             .path
             .as_deref()
             .unwrap_or("unavailable (no home dir)"),
-        runs_display,
-    );
+    ));
 
     emit(&report, &human, global.json)
 }

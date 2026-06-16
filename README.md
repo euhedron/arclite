@@ -10,7 +10,7 @@ arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence
 
 ## Getting started
 
-**Prerequisites:** a Rust toolchain (`cargo`; Rust ≥ 1.88 — the crate's `rust-version`, for let-chains); an agent CLI on `PATH` for the AI commands — the Claude Code CLI (`claude`, the default) or the Codex CLI (`codex`, via `--backend codex`); and `git` (used by `--changed` and `arc init --hook`). `arc doctor` checks cargo, git, claude, and codex.
+**Prerequisites:** a Rust toolchain (`cargo`; Rust as new as the crate's `rust-version`, for let-chains); an agent CLI on `PATH` for the AI commands — the Claude Code CLI (`claude`, the default) or the Codex CLI (`codex`, via `--backend codex`); and `git` (used by `--changed` and `arc init --hook`). `arc doctor` checks for all of these.
 
 **Build / install:**
 

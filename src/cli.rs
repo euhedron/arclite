@@ -47,7 +47,7 @@ pub enum Command {
     Init(InitArgs),
     /// Report the runs currently in flight (the active-run registry).
     Status(StatusArgs),
-    /// Open an interactive, self-refreshing terminal view of the live run registry.
+    /// Open the interactive TUI: a `/` command palette plus a live, self-refreshing run-status view.
     Tui(TuiArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),

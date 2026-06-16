@@ -189,6 +189,11 @@ pub struct Request<'a> {
 /// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
 pub const DEFAULT_BACKEND: &str = "claude";
 
+/// The known synthesis backends, by name — the single set `doctor` probes and [`validate_backend`]
+/// checks against. Keep in sync with [`backend`]'s match arms below (each name maps there to its
+/// `Backend` impl, which a name list alone can't encode); everything else derives from this slice.
+pub(crate) const KNOWN_BACKENDS: &[&str] = &["claude", "codex"];
+
 /// The claude backend's default model. Update when a newer model supersedes it; the run reports the
 /// resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
@@ -262,7 +267,10 @@ pub fn backend(name: &str) -> anyhow::Result<Box<dyn Backend>> {
     match name {
         "claude" => Ok(Box::new(ClaudeBackend)),
         "codex" => Ok(Box::new(CodexBackend)),
-        other => bail!("unknown backend `{other}` (known: claude, codex)"),
+        other => bail!(
+            "unknown backend `{other}` (known: {})",
+            KNOWN_BACKENDS.join(", ")
+        ),
     }
 }
 
