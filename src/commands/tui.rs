@@ -248,10 +248,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
     let mut app = App::new();
     while !app.should_quit {
         terminal.draw(|frame| render(frame, &app))?;
-        match rx.recv() {
-            Ok(msg) => update(&mut app, msg),
-            Err(_) => break, // both senders dropped (shouldn't happen) — exit cleanly
-        }
+        // `recv` errors only when every sender has dropped; the tick thread keeps one alive for the
+        // whole loop, so an error here means a sender thread panicked — surface that loudly (the panic
+        // hook restores the terminal) rather than exiting as if the user quit, which would hide the bug.
+        let msg = rx
+            .recv()
+            .expect("a sender thread panicked (input/tick hold a sender for the loop's lifetime)");
+        update(&mut app, msg);
     }
     Ok(())
 }

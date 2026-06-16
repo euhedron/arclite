@@ -568,7 +568,7 @@ fn synthesize_codex(
         cmd.arg("--output-schema").arg(&schema_path);
     }
     // codex runs read-only with no tools here (--sandbox read-only, no MCP configured).
-    let mut usage: Option<CodexUsage> = None;
+    let mut usage_raw: Option<serde_json::Value> = None;
     let mut failure: Option<String> = None;
     let (status, stderr) = drive(
         cmd,
@@ -576,9 +576,10 @@ fn synthesize_codex(
         "failed to launch `codex` — is the Codex CLI installed and on PATH?",
         |kind, event, _raw| match kind {
             "turn.completed" => {
-                usage = event
-                    .get("usage")
-                    .and_then(|u| serde_json::from_value(u.clone()).ok());
+                // Capture the raw usage object; parse it after the stream so a *malformed* usage
+                // surfaces as a parse error rather than being swallowed to None and misreported as an
+                // absent event (the honest ground-truth-usage contract — cf. parse_result's loud bails).
+                usage_raw = event.get("usage").cloned();
                 if let Some(p) = progress.as_mut() {
                     p.record_turn(0); // codex tool-call accounting is coarser than claude's; turns only
                 }
@@ -611,7 +612,9 @@ fn synthesize_codex(
     if !status.success() {
         bail!("codex exited with {}: {}", status, stderr.trim());
     }
-    let usage = usage.context("codex produced no `turn.completed` usage event")?;
+    let usage = usage_raw.context("codex produced no `turn.completed` usage event")?;
+    let usage: CodexUsage = serde_json::from_value(usage)
+        .context("codex's `turn.completed` `usage` object was malformed")?;
     // The result is codex's `-o` artifact (clean + schema-valid) — its documented result channel, so
     // an absent/empty one on an otherwise-successful run is surfaced rather than papered over, the way
     // the claude path bails when its result event is missing.
