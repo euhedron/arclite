@@ -427,8 +427,8 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     }
 }
 
-/// The persistent footer — present on every view. Carries the at-a-glance active-run count (the
-/// always-visible signal Nik asked for) and the contextual key hints.
+/// The persistent footer — present on every view. Carries the at-a-glance active-run count and the
+/// contextual key hints.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let n = app.status.active.len();
     let runs = if n == 0 {

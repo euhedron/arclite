@@ -35,8 +35,7 @@ pub struct Structure {
     /// The command's kind taxonomy as (label, description) pairs, declared once. The command lists
     /// it in its own prompt (via [`kind_list`]) as the substance of what it looks for; `--kinds`
     /// reuses the labels as the suggested classification vocabulary. Empty = no taxonomy (`--kinds`
-    /// then lets the model label freely). "taxonomy" not "criteria" — one general description per
-    /// label, not a checklist of conditions.
+    /// then lets the model label freely).
     pub kinds: &'static [(&'static str, &'static str)],
 }
 
