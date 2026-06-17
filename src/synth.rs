@@ -591,11 +591,7 @@ impl RunReport<'_> {
         }
         line.push_str(&format!(
             "\nconfig: {}",
-            if self.config.is_empty() {
-                crate::settings::NO_LAYERS.to_owned()
-            } else {
-                self.config.join(", ")
-            }
+            crate::join_or(self.config, crate::settings::NO_LAYERS)
         ));
         line
     }

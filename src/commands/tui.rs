@@ -643,13 +643,12 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                 .block(Block::bordered());
             frame.render_widget(table, body);
 
-            let layers_text = if layers.is_empty() {
-                crate::settings::NO_LAYERS.to_owned()
-            } else {
-                layers.join(", ")
-            };
             frame.render_widget(
-                Line::from(format!("layers: {layers_text}")).dim(),
+                Line::from(format!(
+                    "layers: {}",
+                    crate::join_or(layers, crate::settings::NO_LAYERS)
+                ))
+                .dim(),
                 layers_line,
             );
         }

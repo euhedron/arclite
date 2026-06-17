@@ -135,11 +135,7 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
         .collect();
     lines.push(format!(
         "layers: {}",
-        if layers.is_empty() {
-            crate::settings::NO_LAYERS.to_owned()
-        } else {
-            layers.join(", ")
-        }
+        crate::join_or(&layers, crate::settings::NO_LAYERS)
     ));
     let settings = values
         .iter()

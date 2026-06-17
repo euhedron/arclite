@@ -35,13 +35,11 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             lines.push(format!("  {}", rel(s)));
         }
     }
-    lines.push(match settings.active.as_slice() {
-        [] => format!("settings: {}", crate::settings::NO_LAYERS),
-        active => format!(
-            "settings: {}",
-            active.iter().map(|p| rel(p)).collect::<Vec<_>>().join(", ")
-        ),
-    });
+    let layers: Vec<String> = settings.active.iter().map(|p| rel(p)).collect();
+    lines.push(format!(
+        "settings: {}",
+        crate::join_or(&layers, crate::settings::NO_LAYERS)
+    ));
 
     let payload = serde_json::json!({
         "selection": resolution.description.clone(),

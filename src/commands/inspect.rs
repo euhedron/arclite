@@ -143,11 +143,7 @@ pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         report.files,
         report.dirs,
         report.bytes,
-        if report.manifests.is_empty() {
-            "(none)".to_owned()
-        } else {
-            report.manifests.join(", ")
-        },
+        crate::join_or(&report.manifests, "(none)"),
         if top.is_empty() {
             "  (none)".to_owned()
         } else {

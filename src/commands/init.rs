@@ -72,18 +72,10 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     let human = format!(
         "created: {}\nskipped: {}",
-        join_or_none(&created),
-        join_or_none(&skipped)
+        crate::join_or(&created, "(none)"),
+        crate::join_or(&skipped, "(none)")
     );
     emit(&InitReport { created, skipped }, &human, global.json)
-}
-
-fn join_or_none(items: &[String]) -> String {
-    if items.is_empty() {
-        "(none)".to_owned()
-    } else {
-        items.join(", ")
-    }
 }
 
 /// Create `dir` if absent, recording which happened.

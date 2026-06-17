@@ -73,6 +73,17 @@ pub(crate) fn read_dir_optional(
     optional(std::fs::read_dir(dir))
 }
 
+/// Render `items` as a comma-joined string, or `empty` when there are none — the "one-or-more, else a
+/// placeholder" shape shared by settings-layer lines ([`settings::NO_LAYERS`]) and inspect's manifest
+/// list (`(none)`), single-sourced so the empty-vs-joined branch isn't re-written at each call site.
+pub(crate) fn join_or(items: &[String], empty: &str) -> String {
+    if items.is_empty() {
+        empty.to_owned()
+    } else {
+        items.join(", ")
+    }
+}
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
 /// `SUCCESS`, the gate's distinct block code, or `FAILURE` with the error on stderr.
 #[must_use]
