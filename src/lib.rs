@@ -112,12 +112,11 @@ pub fn run() -> ExitCode {
         Command::Log(args) => commands::log::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Usage(args) => commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Completions(args) => {
-            clap_complete::generate(
-                args.shell,
-                &mut <Cli as clap::CommandFactory>::command(),
-                "arc",
-                &mut std::io::stdout(),
-            );
+            // Take the binary name from the command itself (cli.rs's `#[command(name)]`) rather than
+            // repeating an "arc" literal here — one rename point, not several.
+            let mut command = <Cli as clap::CommandFactory>::command();
+            let bin_name = command.get_name().to_owned();
+            clap_complete::generate(args.shell, &mut command, bin_name, &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)
         }
         Command::Summarize(args) => commands::summarize::run(args, &cli.global),
