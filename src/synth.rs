@@ -217,13 +217,14 @@ fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
 }
 
 /// Expand each `--include` path (a file *or* a directory) into context text, applying the optional
-/// caller cap. Skips any file already in context — README/manifests (pre-seeded in `seen`) *and* any
-/// earlier `--include`/`--changed` file, recording each one it adds — so overlapping inputs (an
-/// explicit file also under an included dir, or a `--changed` file under one) aren't read or billed
-/// twice. Dirs are walked gitignore-aware.
+/// caller cap and dropping any file an `--exclude` pattern matches. Skips any file already in context
+/// — README/manifests (pre-seeded in `seen`) *and* any earlier `--include`/`--changed` file, recording
+/// each one it adds — so overlapping inputs (an explicit file also under an included dir, or a
+/// `--changed` file under one) aren't read or billed twice. Dirs are walked gitignore-aware.
 fn gather_includes(
     paths: &[PathBuf],
     max: Option<usize>,
+    excluder: &ignore::gitignore::Gitignore,
     seen: &mut Vec<PathBuf>,
     sources: &mut Vec<String>,
 ) -> String {
@@ -239,7 +240,15 @@ fn gather_includes(
         };
         let mut unreadable = 0usize;
         let mut duplicate = 0usize;
+        let mut excluded = 0usize;
         for file in &files {
+            if excluder
+                .matched_path_or_any_parents(file, false)
+                .is_ignore()
+            {
+                excluded += 1;
+                continue; // dropped by an --exclude pattern
+            }
             let label = file.display().to_string();
             match add_unless_seen(file, &label, max, &mut ctx, sources, seen) {
                 Added::Ok => {}
@@ -261,6 +270,12 @@ fn gather_includes(
         if duplicate > 0 {
             sources.push(format!(
                 "{duplicate} already-included file(s) under {} — skipped",
+                path.display()
+            ));
+        }
+        if excluded > 0 {
+            sources.push(format!(
+                "{excluded} file(s) under {} excluded by --exclude — skipped",
                 path.display()
             ));
         }
@@ -451,6 +466,7 @@ pub fn gather_context(
     rule_sources: &[PathBuf],
     max: Option<usize>,
     changed: bool,
+    exclude: &[String],
 ) -> anyhow::Result<Context> {
     let (report, root) = crate::commands::inspect::gather(path)?;
 
@@ -500,16 +516,37 @@ pub fn gather_context(
         });
         includes.extend(files);
     }
-    text.push_str(&gather_includes(&includes, max, &mut seen, &mut sources));
+    // Compile the --exclude patterns (gitignore-style) once, applied to the walked include/changed
+    // files in gather_includes. No patterns → matches nothing (no filtering).
+    let mut excluder = ignore::gitignore::GitignoreBuilder::new(&root);
+    for pat in exclude {
+        excluder
+            .add_line(None, pat)
+            .map_err(|e| anyhow::anyhow!("invalid --exclude pattern `{pat}`: {e}"))?;
+    }
+    let excluder = excluder
+        .build()
+        .map_err(|e| anyhow::anyhow!("compiling --exclude patterns: {e}"))?;
+    text.push_str(&gather_includes(
+        &includes,
+        max,
+        &excluder,
+        &mut seen,
+        &mut sources,
+    ));
     text.push_str(&gather_rules(rule_sources, &mut sources)?);
 
-    let excluded = if includes.is_empty() {
+    let mut excluded = if includes.is_empty() {
         vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
     } else {
         vec![
             "the repo's other source files (beyond those added via --include/--changed)".to_owned(),
         ]
     };
+    // Echo any --exclude patterns so a dropped slice is never a silent default.
+    if !exclude.is_empty() {
+        excluded.push(format!("--exclude: {}", exclude.join(", ")));
+    }
 
     Ok(Context {
         text,

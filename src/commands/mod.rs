@@ -138,6 +138,7 @@ pub fn run_synthesis(
         &resolution.sources,
         args.max_file_chars,
         args.changed,
+        &args.exclude,
     )?;
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);

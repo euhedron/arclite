@@ -230,6 +230,11 @@ pub struct SynthArgs {
     /// gitignore-aware — e.g. `--include src`. Files are read in full by default.
     #[arg(long, value_name = "PATH")]
     pub include: Vec<PathBuf>,
+    /// Drop paths from the included context — gitignore-style patterns (repeatable), matched against
+    /// the walked `--include`/`--changed` files. E.g. `--exclude "*.Designer.cs" --exclude ".claude/"`
+    /// to skip generated files and session config. Off by default; every pattern is echoed in the run.
+    #[arg(long, value_name = "PATTERN")]
+    pub exclude: Vec<String>,
     /// Optional compression: cap each included file (and the README/manifests) at N chars.
     /// Default: none — files are read in full; capping is never automatic, and any cut is
     /// surfaced in the run's sources.
