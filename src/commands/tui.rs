@@ -54,6 +54,9 @@ const PALETTE_NAME_WIDTH: usize = 10;
 /// lines ([`centered`] clamps it to the terminal; longer lines still truncate at the border).
 const LAUNCH_WIDTH: u16 = 72;
 
+/// Height of the home masthead box: border (2) + its two lines (name+version, then the directory).
+const MASTHEAD_HEIGHT: u16 = 4;
+
 /// arclite's version, shown on the home masthead (as the agent CLIs head their opening screens).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -110,12 +113,15 @@ impl Command {
     /// The typed name the palette prefix-matches; for a verb it's also the CLI subcommand spawned.
     fn name(self) -> &'static str {
         match self {
-            Command::Audit => "audit",
-            Command::Critique => "critique",
-            Command::Suggest => "suggest",
-            Command::Summarize => "summarize",
-            Command::Extract => "extract",
-            Command::Evolve => "evolve",
+            // Verb names are the CLI subcommand names — single-sourced via the cli.rs NAME_* consts
+            // (used by clap too), so a rename can't drift the spawn/palette from `--help`.
+            Command::Audit => crate::cli::NAME_AUDIT,
+            Command::Critique => crate::cli::NAME_CRITIQUE,
+            Command::Suggest => crate::cli::NAME_SUGGEST,
+            Command::Summarize => crate::cli::NAME_SUMMARIZE,
+            Command::Extract => crate::cli::NAME_EXTRACT,
+            Command::Evolve => crate::cli::NAME_EVOLVE,
+            // Views/quit are TUI-only — no CLI subcommand — so their names live here.
             Command::Status => "status",
             Command::Config => "config",
             Command::Home => "home",
@@ -546,7 +552,8 @@ fn render(frame: &mut Frame, app: &App) {
 /// echoing how the agent CLIs head their opening screens. The footer carries the live state and key
 /// hints, so home doesn't repeat them; the space below is the open launchpad.
 fn render_home(frame: &mut Frame, area: Rect, cwd: &str) {
-    let [masthead, _] = Layout::vertical([Constraint::Length(4), Constraint::Min(0)]).areas(area);
+    let [masthead, _] =
+        Layout::vertical([Constraint::Length(MASTHEAD_HEIGHT), Constraint::Min(0)]).areas(area);
     let lines = vec![
         Line::from(format!("arc {VERSION}")).bold(),
         Line::from(cwd.to_owned()).dim(),

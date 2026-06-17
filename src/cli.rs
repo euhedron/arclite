@@ -36,14 +36,21 @@ pub struct GlobalArgs {
     pub json: bool,
 }
 
-/// One-line descriptions of the synthesis verbs — single-sourced here so both clap's `--help` (the
-/// `about` on each verb subcommand below) and the TUI palette (`commands::tui`) read the same text
-/// and can't drift. Kept terse: they double as palette hints.
+/// Each synthesis verb's subcommand name + one-line description — single-sourced here so both clap
+/// (the `name`/`about` on each verb subcommand below) and the TUI palette (`commands::tui`, which
+/// spawns `arc <name>` and shows the description) read the same strings and can't drift. Descriptions
+/// are kept terse: they double as palette hints.
+pub(crate) const NAME_SUMMARIZE: &str = "summarize";
 pub(crate) const VERB_SUMMARIZE: &str = "Summarize the repository";
+pub(crate) const NAME_SUGGEST: &str = "suggest";
 pub(crate) const VERB_SUGGEST: &str = "Surface where attention is best spent";
+pub(crate) const NAME_EXTRACT: &str = "extract";
 pub(crate) const VERB_EXTRACT: &str = "Extract reusable rules from the repo";
+pub(crate) const NAME_AUDIT: &str = "audit";
 pub(crate) const VERB_AUDIT: &str = "Audit the repo for rule violations";
+pub(crate) const NAME_CRITIQUE: &str = "critique";
 pub(crate) const VERB_CRITIQUE: &str = "Review the repo for quality defects";
+pub(crate) const NAME_EVOLVE: &str = "evolve";
 pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
 
 /// The set of arclite subcommands.
@@ -70,19 +77,20 @@ pub enum Command {
     Usage(UsageArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
-    // The synthesis verbs share one description with the TUI palette via the `VERB_*` consts above
-    // (`about =` rather than a doc-comment), so the launcher and `--help` can't drift.
-    #[command(about = VERB_SUMMARIZE)]
+    // The synthesis verbs share their subcommand name + description with the TUI palette via the
+    // `NAME_*`/`VERB_*` consts above, so the launcher (which spawns `arc <name>`) and `--help` can't
+    // drift — `name`/`about` set explicitly rather than left to the variant + a doc-comment.
+    #[command(name = NAME_SUMMARIZE, about = VERB_SUMMARIZE)]
     Summarize(SynthArgs),
-    #[command(about = VERB_SUGGEST)]
+    #[command(name = NAME_SUGGEST, about = VERB_SUGGEST)]
     Suggest(SynthArgs),
-    #[command(about = VERB_EXTRACT)]
+    #[command(name = NAME_EXTRACT, about = VERB_EXTRACT)]
     Extract(SynthArgs),
-    #[command(about = VERB_AUDIT)]
+    #[command(name = NAME_AUDIT, about = VERB_AUDIT)]
     Audit(SynthArgs),
-    #[command(about = VERB_CRITIQUE)]
+    #[command(name = NAME_CRITIQUE, about = VERB_CRITIQUE)]
     Critique(SynthArgs),
-    #[command(about = VERB_EVOLVE)]
+    #[command(name = NAME_EVOLVE, about = VERB_EVOLVE)]
     Evolve(SynthArgs),
 }
 
