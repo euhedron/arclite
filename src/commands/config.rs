@@ -102,17 +102,32 @@ struct Listed {
     layers: Vec<String>,
 }
 
+/// The resolved settings as (key, value) pairs (a `None` value = unset) plus the active layers — the
+/// projection `arc config list` and the TUI's config view share, so the two can't drift apart.
+pub(crate) struct ResolvedSettings {
+    pub values: Vec<(&'static str, Option<String>)>,
+    pub layers: Vec<String>,
+}
+
+/// Load and project `repo`'s settings: every settable key's resolved value (after user-then-project
+/// layering) and the active layer paths.
+pub(crate) fn resolved(repo: &std::path::Path) -> anyhow::Result<ResolvedSettings> {
+    let s = Settings::load(repo)?;
+    Ok(ResolvedSettings {
+        values: SETTINGS.iter().map(|st| (st.key, (st.read)(&s))).collect(),
+        layers: s.active_display(),
+    })
+}
+
 /// Show every default's resolved value (after user-then-project layering) and the active layers.
 fn list(global: &GlobalArgs) -> anyhow::Result<()> {
-    let s = Settings::load(std::path::Path::new("."))?;
-    let layers = s.active_display();
-    let mut lines: Vec<String> = SETTINGS
+    let ResolvedSettings { values, layers } = resolved(std::path::Path::new("."))?;
+    let mut lines: Vec<String> = values
         .iter()
-        .map(|st| {
+        .map(|(key, value)| {
             format!(
-                "{}: {}",
-                st.key,
-                (st.read)(&s).unwrap_or_else(|| "(unset)".to_owned())
+                "{key}: {}",
+                value.clone().unwrap_or_else(|| "(unset)".to_owned())
             )
         })
         .collect();
@@ -124,9 +139,9 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
             layers.join(", ")
         }
     ));
-    let settings = SETTINGS
+    let settings = values
         .iter()
-        .map(|st| (st.key.to_owned(), serde_json::json!((st.read)(&s))))
+        .map(|(key, value)| ((*key).to_owned(), serde_json::json!(value)))
         .collect();
     emit(&Listed { settings, layers }, &lines.join("\n"), global.json)
 }

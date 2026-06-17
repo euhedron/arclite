@@ -74,10 +74,11 @@ enum Msg {
 enum Route {
     Home,
     Status,
+    Config,
 }
 
-/// A `/`-palette command: launch an AI run (a verb) or navigate/quit. Listed in *presentation* order
-/// (NOT alpha-sorted — the popup preserves it, per the codex `command_popup` convention); the
+/// A `/`-palette command: launch an AI run (a verb), open a view, or quit. Listed in *presentation*
+/// order (NOT alpha-sorted — the popup preserves it, per the codex `command_popup` convention); the
 /// launchable verbs lead, since firing a run is the cockpit's primary act. `ALL` is the single source.
 #[derive(Clone, Copy)]
 enum Command {
@@ -88,6 +89,7 @@ enum Command {
     Extract,
     Evolve,
     Status,
+    Config,
     Home,
     Quit,
 }
@@ -101,6 +103,7 @@ impl Command {
         Command::Extract,
         Command::Evolve,
         Command::Status,
+        Command::Config,
         Command::Home,
         Command::Quit,
     ];
@@ -115,6 +118,7 @@ impl Command {
             Command::Extract => "extract",
             Command::Evolve => "evolve",
             Command::Status => "status",
+            Command::Config => "config",
             Command::Home => "home",
             Command::Quit => "quit",
         }
@@ -130,17 +134,19 @@ impl Command {
             Command::Extract => "mine reusable rules",
             Command::Evolve => "propose radical change",
             Command::Status => "live view of in-flight runs",
+            Command::Config => "settings and active layers",
             Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
         }
     }
 
-    /// Apply the chosen command: a verb starts a launch (dry-run → gate); home/status navigate; quit
-    /// quits. The only place a palette selection acts.
+    /// Apply the chosen command: a verb starts a launch (dry-run → gate); status/config/home open a
+    /// view; quit quits. The only place a palette selection acts.
     fn apply(self, app: &mut App) {
         match self {
             Command::Home => app.route = Route::Home,
             Command::Status => app.route = Route::Status,
+            Command::Config => app.open_config(),
             Command::Quit => app.should_quit = true,
             verb => app.start_launch(verb),
         }
@@ -193,6 +199,8 @@ struct App {
     tx: mpsc::Sender<Msg>,
     /// The directory the cockpit was launched in — the repo its runs target — shown on home.
     cwd: String,
+    /// The settings shown by the config view, loaded when it's opened; `None` until then.
+    config: Option<ConfigView>,
 }
 
 impl App {
@@ -207,6 +215,7 @@ impl App {
             cwd: std::env::current_dir()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| ".".to_owned()),
+            config: None,
         }
     }
 
@@ -223,6 +232,26 @@ impl App {
         thread::spawn(move || {
             let _ = tx.send(Msg::LaunchPreview(dry_run_preview(name)));
         });
+    }
+
+    /// Open the config view, loading the resolved settings + active layers for the launch directory.
+    /// Re-loaded on each entry (so an external edit shows on return). Read-only for now; the same
+    /// `resolved` projection backs `arc config list`, so the two can't drift.
+    fn open_config(&mut self) {
+        self.route = Route::Config;
+        self.config = Some(
+            match crate::commands::config::resolved(std::path::Path::new(&self.cwd)) {
+                Ok(r) => ConfigView::Loaded {
+                    values: r
+                        .values
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.unwrap_or_else(|| "(unset)".to_owned())))
+                        .collect(),
+                    layers: r.layers,
+                },
+                Err(e) => ConfigView::Error(format!("{e:#}")),
+            },
+        );
     }
 }
 
@@ -241,6 +270,18 @@ enum LaunchStage {
     Confirming { preview: String },
     /// The dry-run failed; show why, and let the user dismiss.
     Failed { error: String },
+}
+
+/// The settings shown by the config view, loaded on entering it: the resolved defaults and active
+/// layers, or the error if `.arc/settings.json` couldn't be loaded.
+enum ConfigView {
+    Loaded {
+        /// (key, resolved value or "(unset)") for every settable default.
+        values: Vec<(String, String)>,
+        /// The active settings-file layers (user then project), empty if none.
+        layers: Vec<String>,
+    },
+    Error(String),
 }
 
 /// Run a verb's dry-run as a subprocess of this same `arc` binary and return its **preview** — the
@@ -475,6 +516,7 @@ fn render(frame: &mut Frame, app: &App) {
     match app.route {
         Route::Home => render_home(frame, body, &app.cwd),
         Route::Status => render_status(frame, &app.status, body),
+        Route::Config => render_config(frame, app.config.as_ref(), body),
     }
     render_footer(frame, footer, app);
 
@@ -557,6 +599,50 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     }
 }
 
+/// Column widths for the config table: the dotted setting key (the longest being
+/// `defaults.codex_reasoning_effort`), then the resolved value taking the row's slack.
+const CONFIG_COLUMN_WIDTHS: [Constraint; 2] = [Constraint::Length(32), Constraint::Min(10)];
+
+/// The config view: every resolved default (after user-then-project layering) and the active settings
+/// layers — the projection `arc config list` prints, shown here. Read-only for now; editing is the
+/// follow-up (likely arrow-key pickers, shared with the launch-config cut).
+fn render_config(frame: &mut Frame, config: Option<&ConfigView>, area: Rect) {
+    let [header, body, layers_line] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    frame.render_widget(Line::from("config").bold(), header);
+
+    match config {
+        None => frame.render_widget(Paragraph::new("loading…"), body),
+        Some(ConfigView::Error(e)) => frame.render_widget(
+            Paragraph::new(format!("settings unreadable: {e}")).block(Block::bordered()),
+            body,
+        ),
+        Some(ConfigView::Loaded { values, layers }) => {
+            let rows = values
+                .iter()
+                .map(|(key, value)| Row::new([key.clone(), value.clone()]));
+            let table = Table::new(rows, CONFIG_COLUMN_WIDTHS)
+                .header(Row::new(["setting", "value"]).style(Style::new().bold()))
+                .block(Block::bordered());
+            frame.render_widget(table, body);
+
+            let layers_text = if layers.is_empty() {
+                crate::settings::NO_LAYERS.to_owned()
+            } else {
+                layers.join(", ")
+            };
+            frame.render_widget(
+                Line::from(format!("layers: {layers_text}")).dim(),
+                layers_line,
+            );
+        }
+    }
+}
+
 /// The persistent footer — present on every view. Carries the at-a-glance active-run count and the
 /// contextual key hints.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
@@ -574,7 +660,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Status => "/ commands · esc back · q quit",
+            Route::Status | Route::Config => "/ commands · esc back · q quit",
         }
     };
 
@@ -712,6 +798,7 @@ mod tests {
             should_quit: false,
             tx,
             cwd: ".".to_owned(),
+            config: None,
         }
     }
 
