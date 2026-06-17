@@ -132,16 +132,17 @@ pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        // Read through the shared optional-read; a marker that raced away (absent), can't be read, or
-        // can't be parsed is surfaced as unreadable, never propagated — one bad marker shouldn't fail
-        // `arc status`. (read_optional owns the absent-vs-failed distinction; here both fold to one.)
-        let parsed = match crate::read_optional(&path) {
-            Ok(Some(text)) => serde_json::from_str::<ActiveRun>(&text).ok(),
-            Ok(None) | Err(_) => None,
-        };
-        match parsed {
-            Some(run) => runs.push(run),
-            None => unreadable.push(path),
+        // Read through the shared optional-read, holding the absent-vs-unreadable distinction: a
+        // marker that raced away (absent — a run finished and cleared it mid-listing) is benign and
+        // skipped, while one present-but-unreadable or unparseable is surfaced as unreadable, never
+        // propagated (one bad marker shouldn't fail `arc status`).
+        match crate::read_optional(&path) {
+            Ok(Some(text)) => match serde_json::from_str::<ActiveRun>(&text) {
+                Ok(run) => runs.push(run),
+                Err(_) => unreadable.push(path), // present but unparseable — a real problem
+            },
+            Ok(None) => {} // the marker raced away as the run finished — benign, not a failure
+            Err(_) => unreadable.push(path),
         }
     }
     Ok((runs, unreadable))
