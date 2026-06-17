@@ -12,11 +12,10 @@
 //! [`update`], and redraws once. A `Tick` re-reads live state — so views refresh in place rather than
 //! the user re-running `arc status`, and the footer's active-run count stays current on every view.
 //!
-//! State is a small route + an optional palette overlay: [`render`] is a pure function of [`App`],
-//! tested headlessly with `TestBackend`; the interactive loop itself needs a real terminal. This cut
-//! lands the cockpit spine — home, the footer, the `/` palette, and status as one navigable view.
-//! Launching real commands with live streaming (and the cost-transparency guardrails that demands) is
-//! the next cut on this same runtime.
+//! State is a route plus optional overlays (the `/` palette, the launch gate): [`render`] is a pure
+//! function of [`App`], tested headlessly with `TestBackend`; the interactive loop itself needs a real
+//! terminal. Launching a run spawns the `arc` binary as a subprocess and renders its own output — the
+//! cockpit is a second front-end over the CLI, not a reimplementation of it.
 #![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
 use std::io::IsTerminal;
@@ -127,12 +126,15 @@ impl Command {
     /// One-line help shown beside the name in the palette.
     fn description(self) -> &'static str {
         match self {
-            Command::Audit => "check the repo against the ruleset",
-            Command::Critique => "find quality defects",
-            Command::Suggest => "surface where attention is best spent",
-            Command::Summarize => "describe the repo",
-            Command::Extract => "mine reusable rules",
-            Command::Evolve => "propose radical change",
+            // The launchable verbs share their text with clap `--help` via the cli.rs `VERB_*`
+            // consts, so the palette and the CLI can't drift.
+            Command::Audit => crate::cli::VERB_AUDIT,
+            Command::Critique => crate::cli::VERB_CRITIQUE,
+            Command::Suggest => crate::cli::VERB_SUGGEST,
+            Command::Summarize => crate::cli::VERB_SUMMARIZE,
+            Command::Extract => crate::cli::VERB_EXTRACT,
+            Command::Evolve => crate::cli::VERB_EVOLVE,
+            // Views and quit are TUI-only (no CLI subcommand), so their hints live here.
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
             Command::Home => "the launchpad",
@@ -245,7 +247,12 @@ impl App {
                     values: r
                         .values
                         .into_iter()
-                        .map(|(k, v)| (k.to_owned(), v.unwrap_or_else(|| "(unset)".to_owned())))
+                        .map(|(k, v)| {
+                            (
+                                k.to_owned(),
+                                v.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
+                            )
+                        })
                         .collect(),
                     layers: r.layers,
                 },
@@ -653,8 +660,13 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         format!("● {n} running")
     };
 
-    let hints = if app.launch.is_some() {
-        "esc cancel"
+    let hints = if let Some(launch) = &app.launch {
+        // The gate's only keys are Esc / Ctrl-C; "cancel" while a launch is pending, "dismiss" for a
+        // failed dry-run (nothing in flight to cancel). The modal itself shows no hint — this is it.
+        match &launch.stage {
+            LaunchStage::Failed { .. } => "esc dismiss",
+            _ => "esc cancel",
+        }
     } else if app.palette.is_some() {
         "↑↓ select · enter run · esc close"
     } else {
@@ -725,21 +737,18 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
     };
 
     let lines: Vec<Line> = body.lines().map(Line::from).collect();
-    let height = (lines.len() as u16 + 3).min(area.height); // border (2) + body + hint line
+    let height = (lines.len() as u16 + 2).min(area.height); // border (2) + body; the footer holds the hint
     let rect = centered(area, LAUNCH_WIDTH, height);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
     let block = Block::bordered().title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
-
-    let [body_area, hint_area] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-    frame.render_widget(Paragraph::new(lines), body_area);
-    frame.render_widget(Line::from("esc cancel").dim(), hint_area);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// A `width`×`height` rect centered within `area` (clamped to fit). For the palette popup.
+/// A `width`×`height` rect centered within `area` (clamped to fit) — for the palette popup and the
+/// launch-gate modal.
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(area.width);
     let h = height.min(area.height);

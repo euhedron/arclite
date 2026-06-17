@@ -127,7 +127,9 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
         .map(|(key, value)| {
             format!(
                 "{key}: {}",
-                value.clone().unwrap_or_else(|| "(unset)".to_owned())
+                value
+                    .clone()
+                    .unwrap_or_else(|| crate::settings::UNSET.to_owned())
             )
         })
         .collect();
@@ -150,7 +152,9 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
 fn get(key: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let s = Settings::load(std::path::Path::new("."))?;
     let value = (setting(key)?.read)(&s);
-    let human = value.clone().unwrap_or_else(|| "(unset)".to_owned());
+    let human = value
+        .clone()
+        .unwrap_or_else(|| crate::settings::UNSET.to_owned());
     emit(
         &serde_json::json!({ "key": key, "value": value }),
         &human,

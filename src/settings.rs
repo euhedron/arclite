@@ -179,6 +179,10 @@ pub(crate) fn validate_budget(cap: f64) -> anyhow::Result<()> {
 /// `arc config list`, and `arc rules` (the empty-layers case had drifted across the three).
 pub(crate) const NO_LAYERS: &str = "built-in defaults (no .arc/settings.json active)";
 
+/// The display sentinel for a settable default with no configured value — shown by `arc config list`,
+/// `arc config get`, and the TUI config view, single-sourced here so the three can't drift.
+pub(crate) const UNSET: &str = "(unset)";
+
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
 /// relative to the settings file's own directory `dir` (so a repo's ruleset referencing `rules`
 /// means *its* `.arc/rules`).

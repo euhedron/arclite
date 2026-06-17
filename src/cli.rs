@@ -36,6 +36,16 @@ pub struct GlobalArgs {
     pub json: bool,
 }
 
+/// One-line descriptions of the synthesis verbs — single-sourced here so both clap's `--help` (the
+/// `about` on each verb subcommand below) and the TUI palette (`commands::tui`) read the same text
+/// and can't drift. Kept terse: they double as palette hints.
+pub(crate) const VERB_SUMMARIZE: &str = "Summarize the repository";
+pub(crate) const VERB_SUGGEST: &str = "Surface where attention is best spent";
+pub(crate) const VERB_EXTRACT: &str = "Extract reusable rules from the repo";
+pub(crate) const VERB_AUDIT: &str = "Audit the repo for rule violations";
+pub(crate) const VERB_CRITIQUE: &str = "Review the repo for quality defects";
+pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
+
 /// The set of arclite subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -60,17 +70,19 @@ pub enum Command {
     Usage(UsageArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
-    /// Synthesize a brief assessment of a repository.
+    // The synthesis verbs share one description with the TUI palette via the `VERB_*` consts above
+    // (`about =` rather than a doc-comment), so the launcher and `--help` can't drift.
+    #[command(about = VERB_SUMMARIZE)]
     Summarize(SynthArgs),
-    /// Suggest where attention is best spent in a repository.
+    #[command(about = VERB_SUGGEST)]
     Suggest(SynthArgs),
-    /// Extract reusable rules (standards, anti-patterns, principles) from a repository.
+    #[command(about = VERB_EXTRACT)]
     Extract(SynthArgs),
-    /// Audit a repository against selected rules, reporting only violations.
+    #[command(about = VERB_AUDIT)]
     Audit(SynthArgs),
-    /// Critically review a repo for quality defects.
+    #[command(about = VERB_CRITIQUE)]
     Critique(SynthArgs),
-    /// Propose radical, drastic ways a repository could evolve — overhauls and reimaginings.
+    #[command(about = VERB_EVOLVE)]
     Evolve(SynthArgs),
 }
 
