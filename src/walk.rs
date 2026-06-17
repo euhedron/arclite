@@ -1,13 +1,13 @@
-//! The one way arclite walks a repo — gitignore-aware, dotfiles included, parent/global
-//! gitignores off, never descending into `.git`. Shared so `inspect` and `synth` can't drift.
+//! The one way arclite walks a repo, shared so `inspect` and `synth` can't drift. The exact scope —
+//! what the walk includes and excludes — is stated once in [`SCOPE_NOTE`] (which callers surface) and
+//! enforced by [`configured`].
 
 use std::path::Path;
 
 use ignore::WalkBuilder;
 
-/// How the walk shapes completeness — surfaced by callers so the walk's filtering isn't a silent
+/// The one statement of the walk's scope — surfaced by callers so the filtering isn't a silent
 /// default: a scan's counts and `--include <dir>` context are this filtered view, not the whole tree.
-/// Mirrors the module-level summary so the disclosed scope matches what `configured` actually does.
 pub const SCOPE_NOTE: &str = "gitignore-aware (the repo's `.gitignore` and `.git/` excluded), but dotfiles are included and parent/global gitignores are off";
 
 /// A configured, gitignore-aware walk of `dir`.
