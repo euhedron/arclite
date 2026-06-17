@@ -29,6 +29,11 @@ const MANIFEST_EXTS: &[&str] = &["csproj", "sln", "fsproj", "vbproj"];
 /// How many top extensions the human `inspect` view lists before summarizing the rest.
 const TOP_EXTENSIONS: usize = 10;
 
+/// How many top-level directories the human `inspect` view lists before summarizing the rest — the
+/// layout an `--include` slice aims at. A touch higher than [`TOP_EXTENSIONS`]: a repo's top-level
+/// shape is the onboarding signal worth showing more of before eliding.
+const TOP_DIRS: usize = 12;
+
 #[derive(Debug, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -40,6 +45,9 @@ pub struct InspectReport {
     /// Relative paths of the manifest files actually found (root *or* nested) — what the synthesis
     /// context includes, so the scan's findings and that context can't drift apart.
     pub manifest_paths: Vec<String>,
+    /// File count per top-level directory (root-level files under "."), so the view shows the layout
+    /// an `--include` slice would target — not just which file *types* exist.
+    pub by_top_dir: BTreeMap<String, usize>,
     pub by_extension: BTreeMap<String, usize>,
     /// Entries the walk couldn't read (permission denied, I/O, …) — counted, never silently dropped.
     pub walk_errors: usize,
@@ -55,6 +63,7 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     let mut dirs = 0usize;
     let mut bytes = 0u64;
     let mut by_extension: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_top_dir: BTreeMap<String, usize> = BTreeMap::new();
     let mut manifest_types: BTreeSet<String> = BTreeSet::new();
     let mut manifest_paths: Vec<String> = Vec::new();
 
@@ -76,6 +85,7 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
                     // couldn't stat a walked file — surface it via walk_errors, don't drop its size
                     Err(_) => walk_errors += 1,
                 }
+                let rel = path.strip_prefix(&root).ok();
                 let mut is_manifest = false;
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
                     && MANIFEST_NAMES.contains(&name)
@@ -92,8 +102,20 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
                     manifest_types.insert(format!("*.{ext}"));
                     is_manifest = true;
                 }
-                if is_manifest && let Ok(rel) = path.strip_prefix(&root) {
+                if is_manifest && let Some(rel) = rel {
                     manifest_paths.push(rel.to_string_lossy().into_owned());
+                }
+                // Tally the file under its top-level directory (a root-level file under ".") so the
+                // view shows the layout an `--include` slice targets, not just the file types.
+                if let Some(rel) = rel {
+                    let mut comps = rel.components();
+                    let top = match comps.next() {
+                        Some(first) if comps.next().is_some() => {
+                            first.as_os_str().to_string_lossy().into_owned()
+                        }
+                        _ => ".".to_owned(), // a file directly at the root
+                    };
+                    *by_top_dir.entry(top).or_insert(0) += 1;
                 }
                 *by_extension.entry(ext).or_insert(0) += 1;
             }
@@ -112,43 +134,50 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
         bytes,
         manifests,
         manifest_paths,
+        by_top_dir,
         by_extension,
         walk_errors,
     };
     Ok((report, root))
 }
 
+/// Format a count-map as the inspect view's "top `n`, with the rest summarized" block — shared by the
+/// top-level-directory and extension tallies so the ranking + elision logic lives in one place.
+fn top_ranked(counts: &BTreeMap<String, usize>, n: usize) -> String {
+    let mut ranked: Vec<(&String, &usize)> = counts.iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    let mut block = ranked
+        .iter()
+        .take(n)
+        .map(|&(key, count)| format!("  {key:<14} {count}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Surface the elision so the text view doesn't silently hide entries (--json has them all).
+    match counts.len().saturating_sub(n) {
+        0 => {}
+        more => block.push_str(&format!("\n  … +{more} more (--json for all)")),
+    }
+    if block.is_empty() {
+        "  (none)".to_owned()
+    } else {
+        block
+    }
+}
+
 /// The `inspect` command.
 pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let (report, _root) = gather(&args.path)?;
 
-    let mut ranked: Vec<(&String, &usize)> = report.by_extension.iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-    let top = ranked
-        .iter()
-        .take(TOP_EXTENSIONS)
-        .map(|(ext, count)| format!("  {ext:<14} {count}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // Surface the elision so the text view doesn't silently hide extensions (--json has them all).
-    let top = match report.by_extension.len().saturating_sub(TOP_EXTENSIONS) {
-        0 => top,
-        more => format!("{top}\n  … +{more} more (--json for all)"),
-    };
-
     let mut human = format!(
-        "path       {}\ngit repo   {}\nfiles      {}\ndirs       {}\nbytes      {}\nmanifests  {}\ntop extensions:\n{}",
+        "path       {}\ngit repo   {}\nfiles      {}\ndirs       {}\nbytes      {}\nmanifests  {}\ntop directories:\n{}\ntop extensions:\n{}",
         report.path,
         report.is_git_repo,
         report.files,
         report.dirs,
         report.bytes,
         crate::join_or(&report.manifests, "(none)"),
-        if top.is_empty() {
-            "  (none)".to_owned()
-        } else {
-            top
-        },
+        top_ranked(&report.by_top_dir, TOP_DIRS),
+        top_ranked(&report.by_extension, TOP_EXTENSIONS),
     );
     // Surface the walk's gitignore filtering so the counts above aren't read as the whole tree.
     human.push_str(&format!("\nscope      {}", crate::walk::SCOPE_NOTE));
