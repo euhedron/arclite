@@ -206,7 +206,7 @@ struct App {
 }
 
 impl App {
-    fn new(tx: mpsc::Sender<Msg>) -> Self {
+    fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         Self {
             route: Route::Home,
             status: Snapshot::read(),
@@ -214,9 +214,7 @@ impl App {
             launch: None,
             should_quit: false,
             tx,
-            cwd: std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| ".".to_owned()),
+            cwd,
             config: None,
         }
     }
@@ -305,14 +303,12 @@ fn dry_run_preview(verb: &str) -> Result<String, String> {
         return Err(format!("the dry-run failed: {}", stderr.trim()));
     }
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
-    // arc prints the preview header, a blank line, then the full prompt — the gate wants just the
-    // header, so take everything up to that first blank line.
-    Ok(out
-        .split("\n\n")
-        .next()
-        .unwrap_or(&out)
-        .trim_end()
-        .to_owned())
+    // arc prints the preview header, a blank line, then the full prompt — take everything before that
+    // first blank line (or all of it, should a run ever emit no prompt section).
+    let header = out
+        .split_once("\n\n")
+        .map_or(out.as_str(), |(head, _)| head);
+    Ok(header.trim_end().to_owned())
 }
 
 /// What the live status reflects at one instant: the in-flight runs, how many registry entries couldn't
@@ -402,8 +398,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
         }
     });
 
-    // The app keeps the original sender, cloned into each launch worker so its dry-run reports back.
-    let mut app = App::new(tx);
+    // The cockpit's target directory (shown on home) — surface a genuine failure to read it rather
+    // than masking it. The app keeps the original sender, cloned into each launch worker.
+    let cwd = std::env::current_dir()
+        .context("cannot determine the working directory")?
+        .display()
+        .to_string();
+    let mut app = App::new(tx, cwd);
     while !app.should_quit {
         terminal.draw(|frame| render(frame, &app))?;
         // `recv` errors only when every sender has dropped; the tick thread keeps one alive for the
@@ -523,7 +524,13 @@ fn render(frame: &mut Frame, app: &App) {
     match app.route {
         Route::Home => render_home(frame, body, &app.cwd),
         Route::Status => render_status(frame, &app.status, body),
-        Route::Config => render_config(frame, app.config.as_ref(), body),
+        Route::Config => render_config(
+            frame,
+            app.config
+                .as_ref()
+                .expect("config is loaded when its route is active"),
+            body,
+        ),
     }
     render_footer(frame, footer, app);
 
@@ -613,7 +620,7 @@ const CONFIG_COLUMN_WIDTHS: [Constraint; 2] = [Constraint::Length(32), Constrain
 /// The config view: every resolved default (after user-then-project layering) and the active settings
 /// layers — the projection `arc config list` prints, shown here. Read-only for now; editing is the
 /// follow-up (likely arrow-key pickers, shared with the launch-config cut).
-fn render_config(frame: &mut Frame, config: Option<&ConfigView>, area: Rect) {
+fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     let [header, body, layers_line] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -623,12 +630,11 @@ fn render_config(frame: &mut Frame, config: Option<&ConfigView>, area: Rect) {
     frame.render_widget(Line::from("config").bold(), header);
 
     match config {
-        None => frame.render_widget(Paragraph::new("loading…"), body),
-        Some(ConfigView::Error(e)) => frame.render_widget(
+        ConfigView::Error(e) => frame.render_widget(
             Paragraph::new(format!("settings unreadable: {e}")).block(Block::bordered()),
             body,
         ),
-        Some(ConfigView::Loaded { values, layers }) => {
+        ConfigView::Loaded { values, layers } => {
             let rows = values
                 .iter()
                 .map(|(key, value)| Row::new([key.clone(), value.clone()]));
