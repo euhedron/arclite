@@ -92,6 +92,10 @@ fn probe(program: &str) -> ToolStatus {
     }
 }
 
+/// Width of `doctor`'s human-output label column, so the value column aligns — named (like tui's
+/// column-width constants) rather than implied by hand-spaced labels plus a matching bare literal.
+const LABEL_WIDTH: usize = 8;
+
 /// The `doctor` command.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let runs = crate::log::count();
@@ -124,15 +128,19 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         Ok(n) => format!("{n} runs"),
         Err(e) => format!("unreadable: {e}"),
     };
-    let mut human = format!(
-        "arclite {}\nos      {} / {}\ncwd     {}\ncargo   {}\ngit     {}",
-        report.arclite,
-        report.runtime.os,
-        report.runtime.arch,
-        report.cwd,
-        report.tools.cargo.display("not found"),
-        report.tools.git.display("not found"),
-    );
+    // One label column at a single-sourced width, so values align without hand-spaced labels that
+    // must be kept in sync with a bare alignment literal by eye.
+    let row = |label: &str, value: &str| format!("{label:<width$}{value}", width = LABEL_WIDTH);
+    let mut lines = vec![
+        row("arclite", report.arclite),
+        row(
+            "os",
+            &format!("{} / {}", report.runtime.os, report.runtime.arch),
+        ),
+        row("cwd", &report.cwd),
+        row("cargo", &report.tools.cargo.display("not found")),
+        row("git", &report.tools.git.display("not found")),
+    ];
     for b in &report.tools.backends {
         // A non-default backend is optional, so qualify its "not found"; a present-but-broken one
         // still surfaces as an error (via `display`), never as merely missing.
@@ -141,16 +149,20 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         } else {
             format!("not found (needed only for --backend {})", b.name)
         };
-        human.push_str(&format!("\n{:<8}{}", b.name, b.status.display(&absent)));
+        lines.push(row(&b.name, &b.status.display(&absent)));
     }
-    human.push_str(&format!(
-        "\nlogs    {} ({runs_display})",
-        report
-            .logs
-            .path
-            .as_deref()
-            .unwrap_or("unavailable (no home dir)"),
+    lines.push(row(
+        "logs",
+        &format!(
+            "{} ({runs_display})",
+            report
+                .logs
+                .path
+                .as_deref()
+                .unwrap_or("unavailable (no home dir)")
+        ),
     ));
+    let human = lines.join("\n");
 
     emit(&report, &human, global.json)
 }

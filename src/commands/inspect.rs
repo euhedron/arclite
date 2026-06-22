@@ -34,6 +34,10 @@ const TOP_EXTENSIONS: usize = 10;
 /// shape is the onboarding signal worth showing more of before eliding.
 const TOP_DIRS: usize = 12;
 
+/// Column width for the key (directory name or extension) in [`top_ranked`]'s block, so the counts
+/// align — named like the other layout constants rather than buried in the format string.
+const KEY_COLUMN_WIDTH: usize = 14;
+
 #[derive(Debug, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -149,7 +153,7 @@ fn top_ranked(counts: &BTreeMap<String, usize>, n: usize) -> String {
     let mut block = ranked
         .iter()
         .take(n)
-        .map(|&(key, count)| format!("  {key:<14} {count}"))
+        .map(|&(key, count)| format!("  {key:<width$} {count}", width = KEY_COLUMN_WIDTH))
         .collect::<Vec<_>>()
         .join("\n");
     // Surface the elision so the text view doesn't silently hide entries (--json has them all).
