@@ -19,12 +19,16 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              standards, anti-patterns, principles, and best-practices that generalize beyond this \
              one repo.\n\n\
              {ctx}\n\
-             From the context above, propose a small set of discrete, reusable rules — each with a \
-             short kebab-case id, one tight paragraph stating the principle/anti-pattern and how to \
-             recognize it, and its provenance (where in this repo it came from). Favor anti-patterns \
-             and violated principles actually evidenced in the code over generic advice. Keep each \
-             to a single paragraph (rules are included verbatim into future runs). Treat any rules \
-             already present as existing policy and don't duplicate them."
+             From the context above, propose any discrete, reusable rules the repo clearly evidences \
+             — each with a short kebab-case id, one tight paragraph stating the principle/anti-pattern \
+             and how to recognize it, and its provenance (where in this repo it came from). Favor \
+             anti-patterns and violated principles actually evidenced in the code over generic \
+             advice. Keep each to a single paragraph (rules are included verbatim into future runs). \
+             Treat any rules already present as existing policy and don't duplicate them. Propose \
+             only rules that clearly earn their place by a general principle that holds across repos \
+             — never pad the set or manufacture generic advice to reach a count. If nothing beyond \
+             existing policy is clearly warranted, return no rules and say so in the note: an empty, \
+             honestly-explained result is a valid and useful outcome, not a failure."
         )
     })
 }
