@@ -432,6 +432,7 @@ pub struct Context {
 /// as a clean "no changes" result.
 fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let output = ai::command("git")
+        .map_err(|e| format!("could not prepare git: {e:#}"))?
         .arg("-C")
         .arg(root)
         .args(["status", "--porcelain"])

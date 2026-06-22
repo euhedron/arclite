@@ -20,9 +20,9 @@ struct Runtime {
 
 #[derive(Serialize)]
 struct Tools {
-    cargo: Option<String>,
-    git: Option<String>,
-    /// Each known synthesis backend ([`crate::ai::KNOWN_BACKENDS`]) and its detected version — probed
+    cargo: ToolStatus,
+    git: ToolStatus,
+    /// Each known synthesis backend ([`crate::ai::KNOWN_BACKENDS`]) and its detected status — probed
     /// from that one set, so a new backend is checked here automatically rather than silently missed.
     backends: Vec<BackendTool>,
 }
@@ -30,7 +30,32 @@ struct Tools {
 #[derive(Serialize)]
 struct BackendTool {
     name: String,
-    version: Option<String>,
+    status: ToolStatus,
+}
+
+/// The detected state of an external tool. Three outcomes kept distinct, per the absent-vs-failed
+/// distinction: it ran and reported a version; it's genuinely not installed; or it exists but could
+/// not be run — an unreadable shim, a spawn error, or a non-zero/empty `--version` — the last never
+/// collapsed into "absent", so a broken tool is never reported as merely missing.
+#[derive(Serialize)]
+#[serde(tag = "state", content = "detail", rename_all = "snake_case")]
+enum ToolStatus {
+    Version(String),
+    Absent,
+    Failed(String),
+}
+
+impl ToolStatus {
+    /// One-line rendering, parameterized only by what "absent" should say (backends qualify it with
+    /// which `--backend` would need the tool); the version and failed cases are shared, so the absent
+    /// and failed states stay visibly distinct everywhere `doctor` prints a tool.
+    fn display(&self, absent: &str) -> String {
+        match self {
+            ToolStatus::Version(version) => version.clone(),
+            ToolStatus::Absent => absent.to_owned(),
+            ToolStatus::Failed(error) => format!("error: {error}"),
+        }
+    }
 }
 
 /// Where per-run records are logged and how many exist — so logging is discoverable (on by
@@ -44,17 +69,27 @@ struct Logs {
     error: Option<String>,
 }
 
-/// Return the trimmed first line of `<cmd> --version`, or `None` if the command
-/// is missing or exits non-zero.
-fn probe(program: &str) -> Option<String> {
-    let output = crate::ai::command(program).arg("--version").output().ok()?;
+/// Probe an external tool's `--version`, distinguishing the three outcomes the absent-vs-failed
+/// distinction demands: [`ToolStatus::Version`] when it runs and reports one, [`ToolStatus::Absent`]
+/// when it genuinely isn't installed (a `NotFound` spawn), and [`ToolStatus::Failed`] when it exists
+/// but can't be prepared, spawned, or exits non-zero — never collapsing a broken tool into "absent".
+fn probe(program: &str) -> ToolStatus {
+    let mut command = match crate::ai::command(program) {
+        Ok(command) => command,
+        Err(error) => return ToolStatus::Failed(format!("{error:#}")),
+    };
+    let output = match command.arg("--version").output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ToolStatus::Absent,
+        Err(error) => return ToolStatus::Failed(error.to_string()),
+    };
     if !output.status.success() {
-        return None;
+        return ToolStatus::Failed(format!("exited with {}", output.status));
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .map(|line| line.trim().to_owned())
+    match String::from_utf8_lossy(&output.stdout).lines().next() {
+        Some(line) => ToolStatus::Version(line.trim().to_owned()),
+        None => ToolStatus::Failed("ran but printed no version".to_owned()),
+    }
 }
 
 /// The `doctor` command.
@@ -74,7 +109,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 .iter()
                 .map(|&name| BackendTool {
                     name: name.to_owned(),
-                    version: probe(name),
+                    status: probe(name),
                 })
                 .collect(),
         },
@@ -95,16 +130,18 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         report.runtime.os,
         report.runtime.arch,
         report.cwd,
-        report.tools.cargo.as_deref().unwrap_or("not found"),
-        report.tools.git.as_deref().unwrap_or("not found"),
+        report.tools.cargo.display("not found"),
+        report.tools.git.display("not found"),
     );
     for b in &report.tools.backends {
-        let status = match &b.version {
-            Some(v) => v.clone(),
-            None if b.name == crate::ai::DEFAULT_BACKEND => "not found".to_owned(),
-            None => format!("not found (needed only for --backend {})", b.name),
+        // A non-default backend is optional, so qualify its "not found"; a present-but-broken one
+        // still surfaces as an error (via `display`), never as merely missing.
+        let absent = if b.name == crate::ai::DEFAULT_BACKEND {
+            "not found".to_owned()
+        } else {
+            format!("not found (needed only for --backend {})", b.name)
         };
-        human.push_str(&format!("\n{:<8}{status}", b.name));
+        human.push_str(&format!("\n{:<8}{}", b.name, b.status.display(&absent)));
     }
     human.push_str(&format!(
         "\nlogs    {} ({runs_display})",

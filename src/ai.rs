@@ -55,33 +55,43 @@ pub fn estimate(prompt: &str) -> Estimate {
 /// `.cmd` shim, which forwards args through batch `%*`, corrupting quote-heavy args like an inline
 /// `--json-schema` payload (Rust's `.cmd` quoting does not save them — confirmed empirically). So
 /// when `which` returns such a shim, [`shim_target`] resolves the real `.exe` it runs and we spawn
-/// that directly: no shell/batch re-parse, so std's standard argv quoting holds. Falls back to the
-/// bare name (surfacing a normal "not found" error). Shared by every external-process call arclite makes.
-pub fn command(program: &str) -> Command {
-    let exe = which::which(program)
-        .ok()
-        .map(|resolved| shim_target(&resolved).unwrap_or(resolved));
-    match exe {
+/// that directly: no shell/batch re-parse, so std's standard argv quoting holds. A program `which`
+/// can't find falls back to the bare name, so the spawn surfaces a normal "not found"; but a shim
+/// that exists yet can't be read is a genuine failure — surfaced here (hence the fallible return),
+/// never swallowed into the buggy `.cmd` fallback. Shared by every external-process call arclite makes.
+pub fn command(program: &str) -> anyhow::Result<Command> {
+    let exe = match which::which(program) {
+        Ok(resolved) => Some(shim_target(&resolved)?.unwrap_or(resolved)),
+        // Not found on PATH: fall back to the bare name so the spawn surfaces a normal "not found".
+        Err(_) => None,
+    };
+    Ok(match exe {
         Some(path) => Command::new(path),
         None => Command::new(program),
-    }
+    })
 }
 
 /// If `path` is an npm-style `.cmd` shim, return the `.exe` it actually invokes — resolving the
-/// shim's `%dp0%` (= its own directory) placeholder. `None` for non-shims or if no `.exe` resolves,
-/// so callers fall back to the original path.
-fn shim_target(path: &Path) -> Option<PathBuf> {
+/// shim's `%dp0%` (= its own directory) placeholder. `Ok(None)` for a non-`.cmd`, or a `.cmd` whose
+/// body names no resolvable `.exe` (callers fall back to the original path); `Err` if the shim
+/// exists — `which` just resolved it — but can't be read, a genuine failure never swallowed into the
+/// "not a shim" case (that read failure resurfacing as the arg-corruption bug is the whole point).
+fn shim_target(path: &Path) -> anyhow::Result<Option<PathBuf>> {
     if !path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd"))
     {
-        return None;
+        return Ok(None);
     }
-    let body = std::fs::read_to_string(path).ok()?;
-    let dir = path.parent()?;
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read the shim {}", path.display()))?;
+    let dir = path
+        .parent()
+        .with_context(|| format!("the shim {} has no parent directory", path.display()))?;
     // npm shim runs e.g. `"%dp0%\node_modules\…\claude.exe"   %*`; pull that quoted .exe out.
-    body.split('"')
+    Ok(body
+        .split('"')
         .filter(|tok| tok.to_ascii_lowercase().ends_with(".exe"))
         .find_map(|tok| {
             let rel = tok
@@ -89,7 +99,7 @@ fn shim_target(path: &Path) -> Option<PathBuf> {
                 .trim_start_matches(['\\', '/']);
             let candidate = dir.join(rel);
             candidate.is_file().then_some(candidate)
-        })
+        }))
 }
 
 // The subset of the CLI's final `result` payload we read (the last event of
@@ -346,7 +356,7 @@ fn synthesize_claude(
     req: &Request,
     mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
-    let mut cmd = command("claude");
+    let mut cmd = command("claude")?;
     // stream-json + --verbose + partial messages: stream events as the run proceeds — `assistant`
     // events at turn boundaries plus fine-grained `content_block_delta`s — so live stats update
     // continuously; the final `result` event carries the same payload `--output-format json` would.
@@ -561,7 +571,7 @@ fn synthesize_codex(
 ) -> anyhow::Result<Synthesis> {
     let work = CodexTemp::new()?;
     let out_path = work.0.join("out.txt");
-    let mut cmd = command("codex");
+    let mut cmd = command("codex")?;
     cmd.arg("exec")
         .arg("--json")
         .arg("--sandbox")

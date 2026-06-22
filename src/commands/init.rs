@@ -114,7 +114,7 @@ fn write_if_absent(
 fn activate_hooks(root: &Path) -> anyhow::Result<()> {
     // Don't clobber a core.hooksPath the user already set for something else — surface it and stop,
     // rather than silently overwriting (the scaffold is careful never to clobber files; so is this).
-    let existing = crate::ai::command("git")
+    let existing = crate::ai::command("git")?
         .current_dir(root)
         .args(["config", "--get", "core.hooksPath"])
         .output()
@@ -125,7 +125,7 @@ fn activate_hooks(root: &Path) -> anyhow::Result<()> {
         "core.hooksPath is already set to `{current}` — leaving it untouched; set it to `{HOOKS_DIR}` \
          (or unset it) yourself to activate the arclite gate"
     );
-    let ok = crate::ai::command("git")
+    let ok = crate::ai::command("git")?
         .current_dir(root)
         .args(["config", "core.hooksPath", HOOKS_DIR])
         .status()
