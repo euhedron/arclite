@@ -1,18 +1,13 @@
-pub mod audit;
 pub mod config;
-pub mod critique;
 pub mod doctor;
-pub mod evolve;
-pub mod extract;
 pub mod init;
 pub mod inspect;
 pub mod log;
 pub mod rules;
 pub mod status;
-pub mod suggest;
-pub mod summarize;
 pub mod tui;
 pub mod usage;
+pub mod verbs;
 
 use std::process::ExitCode;
 

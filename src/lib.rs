@@ -119,12 +119,12 @@ pub fn run() -> ExitCode {
             clap_complete::generate(args.shell, &mut command, bin_name, &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)
         }
-        Command::Summarize(args) => commands::summarize::run(args, &cli.global),
-        Command::Suggest(args) => commands::suggest::run(args, &cli.global),
-        Command::Extract(args) => commands::extract::run(args, &cli.global),
-        Command::Audit(args) => commands::audit::run(args, &cli.global),
-        Command::Critique(args) => commands::critique::run(args, &cli.global),
-        Command::Evolve(args) => commands::evolve::run(args, &cli.global),
+        Command::Summarize(args) => commands::verbs::SUMMARIZE.run(args, &cli.global),
+        Command::Suggest(args) => commands::verbs::SUGGEST.run(args, &cli.global),
+        Command::Extract(args) => commands::verbs::EXTRACT.run(args, &cli.global),
+        Command::Audit(args) => commands::verbs::AUDIT.run(args, &cli.global),
+        Command::Critique(args) => commands::verbs::CRITIQUE.run(args, &cli.global),
+        Command::Evolve(args) => commands::verbs::EVOLVE.run(args, &cli.global),
     };
 
     match result {
