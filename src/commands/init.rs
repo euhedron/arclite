@@ -35,7 +35,7 @@ fn starter_settings() -> String {
 const STARTER_HOOK: &str = r#"#!/bin/sh
 # arclite gate (pre-push). Edit the command(s) below to taste; skip once with `ARC_GATE=0 git push`.
 if [ "$ARC_GATE" = "0" ]; then exit 0; fi
-arc audit --fail-on-findings
+arc run audit --fail-on-findings
 "#;
 
 #[derive(Serialize)]

@@ -31,12 +31,12 @@ arc usage
 arc rules
 arc config set defaults.model <id>
 arc init <repo> --hook
-arc summarize <repo>
-arc suggest   <repo> --include src
-arc audit     <repo> --ruleset <id>
-arc critique  <repo> --backend codex
-arc extract   <repo> --runs 3
-arc evolve    <repo> --ranked
+arc run summarize <repo>
+arc run suggest   <repo> --include src
+arc run audit     <repo> --ruleset <id>
+arc run critique  <repo> --backend codex
+arc run extract   <repo> --runs 3
+arc run evolve    <repo> --ranked
 ```
 
 Run `arc <command> --help` for what a command does and its full options — authoritative there, not restated here where the copy would rot. The AI commands share one option surface (select the rules, shape the context, choose the model/tools/backend, bound or preview the spend, control output and the **gate**). Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost.
@@ -45,7 +45,7 @@ Run `arc <command> --help` for what a command does and its full options — auth
 
 **Logging** — every *real, completed* AI run appends its parameters and ground-truth tokens + cost as a one-line JSON record, and stores its full result alongside: a durable trace that outlives the terminal and the substrate for "is the spend earning its keep" metrics (`arc usage` rolls it up locally; `arc log` and `arc log <id>` browse and re-show runs without re-running them). On by default (`defaults.logging = false` turns it off); dry runs are never logged — no spend, nothing to record. `arc doctor` shows where.
 
-**Gating on push** (opt-in) — a git **pre-push hook** runs arc commands as a gate: `arc audit --fail-on-findings` exits non-zero on violations, blocking the push. arclite ships a tracked `hooks/pre-push` as a *starting point, not a canon* — read it to see the current setup, and edit it freely; a hook is configurable by definition (`arc init --hook` scaffolds a minimal one for any repo). A fresh scaffold gates against an empty starter ruleset, passing vacuously (and saying so) until rules are curated, so the hook can be wired up before the rules exist. Enable for a clone with `git config core.hooksPath hooks`; skip one push with `ARC_GATE=0 git push`; disable by unsetting `core.hooksPath`. It spends real AI tokens per push (announced, with the cost printed) — deliberately pre-*push*, not pre-commit, and opt-in, because passive per-commit AI spend is arc's failure mode.
+**Gating on push** (opt-in) — a git **pre-push hook** runs arc commands as a gate: `arc run audit --fail-on-findings` exits non-zero on violations, blocking the push. arclite ships a tracked `hooks/pre-push` as a *starting point, not a canon* — read it to see the current setup, and edit it freely; a hook is configurable by definition (`arc init --hook` scaffolds a minimal one for any repo). A fresh scaffold gates against an empty starter ruleset, passing vacuously (and saying so) until rules are curated, so the hook can be wired up before the rules exist. Enable for a clone with `git config core.hooksPath hooks`; skip one push with `ARC_GATE=0 git push`; disable by unsetting `core.hooksPath`. It spends real AI tokens per push (announced, with the cost printed) — deliberately pre-*push*, not pre-commit, and opt-in, because passive per-commit AI spend is arc's failure mode.
 
 ## Background & motivation
 
@@ -111,7 +111,7 @@ Open and unsettled — not a plan, an ordering, or a commitment; it evolves (ite
 
 - **Rules — format & lifecycle.** The rule format (a **Markdown file**; filename stem = `id`) and ruleset composition ship (see Configuration). Open: frontmatter for *selective inclusion* (`kind`, `scope`, `tags`), added only when something filters on it; rename-stability of filename-ids; whether prompts/todos share the format; and **auditing the ruleset itself for generality** — exercising arc on its own `.arc/rules` so the general-principle discipline (under **Rules as composable levers**) is self-enforced, not only watched by hand.
 - **Gating / hooks for any command (cost-visible).** The gate (`--fail-on-findings`) and the pre-push hook ship (see **Gating on push**). Still open: **Claude Code hook events** invoking `arc` (complementary to git hooks, not a replacement), whether a pre-commit variant ever earns its keep, and whether the tracked `hooks/` folder should live under `.arc/` with the rest of arclite's per-repo footprint.
-- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` surfaces what's worth attention, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules, `evolve` proposes radical change). The first five work within the current frame; `evolve` deliberately challenges it. Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb. Also open: whether the AI verbs should group under one `arc run <verb>` (one substrate, prompt-differentiated, any per-verb defaults living in settings) or stay top-level.
+- **Command-kit identity.** The commands are one shared substrate differentiated only by prompt (`suggest` surfaces what's worth attention, `critique` finds defects, `audit` checks rules, `summarize` describes, `extract` mines rules, `evolve` proposes radical change). The first five work within the current frame; `evolve` deliberately challenges it. Watch for overlap/necessity/distinctness as the kit grows; let use — not speculation — justify each verb. The verbs now group under `arc run <verb>` (landed): one prompt-differentiated substrate, kept distinct from the deterministic top-level commands, with `run` marking the step that spends AI (per-verb defaults can live in settings).
 - **Auto-context depth.** The default context includes the *detected* manifests (root or nested) + the root README. Open: search wider for docs vs. keeping a light default + explicit `--include`.
 - **Prompts as files?** Command prompts are inline in code today. Externalizing them as **Markdown** (the same substrate as rules) would make them tunable without a rebuild — do it when a prompt needs tuning without recompiling.
 - **Structured output vs. tool calls.** A command's typed result can come two ways both agent CLIs support: a final **structured-output** artifact (today's `--json-schema`/`--output-schema` → `results`+`note`), or the model **calling a tool** with structured *input* (one batch submit, or per-result calls). They're near-equivalent in expressiveness; the difference is lifecycle/protocol (one parse point + whole-report reconciliation vs. per-item events, partial salvage, side effects), not a settled quality claim. arclite uses structured output; tool use is a lever for when a concrete use-case earns it — and an open experiment is whether either channel shifts the *perceived quality* (or other aspects) of a run.

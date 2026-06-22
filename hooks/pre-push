@@ -14,9 +14,9 @@ if [ "$ARC_GATE" = "0" ]; then
 fi
 echo "arclite: critique + suggest (advisory) and audit (gate), running concurrently…" >&2
 out=$(mktemp -d) || { echo "arclite gate: could not create a temp dir" >&2; exit 1; }
-arc critique . --include src --backend codex    > "$out/critique" 2>&1 &
-arc suggest  . --include src --backend codex    > "$out/suggest"  2>&1 &
-arc audit    . --include src --fail-on-findings > "$out/audit"    2>&1 &
+arc run critique . --include src --backend codex    > "$out/critique" 2>&1 &
+arc run suggest  . --include src --backend codex    > "$out/suggest"  2>&1 &
+arc run audit    . --include src --fail-on-findings > "$out/audit"    2>&1 &
 audit_pid=$!
 wait "$audit_pid"
 status=$?

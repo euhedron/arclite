@@ -15,7 +15,7 @@ mod settings;
 mod synth;
 mod walk;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, RunVerb};
 
 /// arclite's per-scope config/data directory (`~/.arc`, `<repo>/.arc`): settings, rules, and logs.
 pub(crate) const ARC_DIR: &str = ".arc";
@@ -84,6 +84,19 @@ pub(crate) fn join_or(items: &[String], empty: &str) -> String {
     }
 }
 
+/// Abbreviate a leading home-directory prefix to `~` for *display* (e.g. `C:\Users\x\proj` → `~\proj`);
+/// paths outside home are returned unchanged. Cosmetic only — applied where a path is shown to a
+/// person (the masthead, the context sources, `doctor`, the run reports), never in error messages
+/// (which keep the exact path) nor where a value must round-trip (the stored record stays canonical).
+pub(crate) fn display_path(path: &str) -> String {
+    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_owned))
+        && let Some(rest) = path.strip_prefix(&home)
+    {
+        return format!("~{rest}");
+    }
+    path.to_owned()
+}
+
 /// Parse arguments, dispatch to the selected command, and map the result to a process exit code:
 /// `SUCCESS`, the gate's distinct block code, or `FAILURE` with the error on stderr.
 #[must_use]
@@ -119,12 +132,14 @@ pub fn run() -> ExitCode {
             clap_complete::generate(args.shell, &mut command, bin_name, &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)
         }
-        Command::Summarize(args) => commands::verbs::SUMMARIZE.run(args, &cli.global),
-        Command::Suggest(args) => commands::verbs::SUGGEST.run(args, &cli.global),
-        Command::Extract(args) => commands::verbs::EXTRACT.run(args, &cli.global),
-        Command::Audit(args) => commands::verbs::AUDIT.run(args, &cli.global),
-        Command::Critique(args) => commands::verbs::CRITIQUE.run(args, &cli.global),
-        Command::Evolve(args) => commands::verbs::EVOLVE.run(args, &cli.global),
+        Command::Run(args) => match &args.verb {
+            RunVerb::Summarize(a) => commands::verbs::SUMMARIZE.run(a, &cli.global),
+            RunVerb::Suggest(a) => commands::verbs::SUGGEST.run(a, &cli.global),
+            RunVerb::Extract(a) => commands::verbs::EXTRACT.run(a, &cli.global),
+            RunVerb::Audit(a) => commands::verbs::AUDIT.run(a, &cli.global),
+            RunVerb::Critique(a) => commands::verbs::CRITIQUE.run(a, &cli.global),
+            RunVerb::Evolve(a) => commands::verbs::EVOLVE.run(a, &cli.global),
+        },
     };
 
     match result {

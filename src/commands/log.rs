@@ -98,8 +98,9 @@ fn cost(v: &Value) -> String {
     }
 }
 
-/// One log record as a compact row — tolerant of older records that predate some fields.
-fn row(r: &Value, now: u64) -> String {
+/// One log record as a compact row — tolerant of older records that predate some fields. Shared with
+/// the TUI's `log` view, so the list reads the same in the cockpit as on the CLI.
+pub(crate) fn row(r: &Value, now: u64) -> String {
     let id = field(r, "id");
     // A missing `ts` is surfaced as "?", not shown as a bogus age computed from 0 — matching how the
     // other fields (and stored_human's absolute time) disclose an absent value rather than faking one.
@@ -166,18 +167,30 @@ fn datetime_utc(secs: u64) -> String {
     )
 }
 
-fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
-    let id = resolve_id(id)?;
-    let path = crate::log::result_path(&id).context("cannot determine the result path")?;
+/// Load a run's stored result by exact id: `Ok(Some(value))` if kept, `Ok(None)` if genuinely absent
+/// (a run predating the result store, or made with logging off), `Err` if the store can't be located
+/// or the file exists but can't be read/parsed — the absent-vs-unreadable distinction, so a corrupt
+/// result isn't read as "not kept". Shared by `show` (CLI) and the TUI's `log` detail view.
+pub(crate) fn load_stored(id: &str) -> anyhow::Result<Option<Value>> {
+    let path = crate::log::result_path(id)
+        .context("cannot determine the result path (no home directory)")?;
     let Some(text) =
         crate::read_optional(&path).with_context(|| format!("cannot read {}", path.display()))?
     else {
+        return Ok(None);
+    };
+    let stored = serde_json::from_str(&text)
+        .with_context(|| format!("invalid result file {}", path.display()))?;
+    Ok(Some(stored))
+}
+
+fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
+    let id = resolve_id(id)?;
+    let Some(stored) = load_stored(&id)? else {
         bail!(
             "no stored result for run `{id}` (runs predating the store, or made with logging off, aren't kept)"
         )
     };
-    let stored: Value = serde_json::from_str(&text)
-        .with_context(|| format!("invalid result file {}", path.display()))?;
     emit(&stored, &stored_human(&stored), global.json)
 }
 
@@ -230,9 +243,24 @@ fn resolve_id(prefix: &str) -> anyhow::Result<String> {
     }
 }
 
-/// A stored run for humans: identity, then the run's parameters, then the result body (structured
-/// if present, else text).
-fn stored_human(v: &Value) -> String {
+/// The string-array field `key` of a run record (`sources`, `tools`, …) as owned strings, or empty.
+fn record_strings(run: &Value, key: &str) -> Vec<String> {
+    run.get(key)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A stored run for humans: identity, the run's shape and ground-truth usage, the context it was given
+/// (the source list + prompt size), then the result body (structured if present, else text). Shared
+/// with the TUI's `log` detail view, so a run reads the same there. The verbatim prompt is stored in
+/// the result too (its `prompt` field) for full inspection beyond this summary.
+pub(crate) fn stored_human(v: &Value) -> String {
     let run = v.get("run").cloned().unwrap_or(Value::Null);
     let when = run
         .get("ts")
@@ -244,31 +272,71 @@ fn stored_human(v: &Value) -> String {
         when,
         field(&run, "version")
     );
+    // Identity: command, repo, the backend/model that produced it, and the gate verdict if gated.
     meta.push_str(&format!(
-        "\n{} · {} · {}",
+        "\n{} · {} · {}/{}",
         field(&run, "command"),
-        field(&run, "repo"),
+        crate::display_path(&field(&run, "repo")),
+        field(&run, "backend"),
         field(&run, "model")
-    ));
-    let runs = run.get("runs").and_then(Value::as_u64).unwrap_or(1) as usize;
-    let requested = run
-        .get("runs_requested")
-        .and_then(Value::as_u64)
-        .map_or(runs, |r| r as usize);
-    if let Some(s) = crate::log::runs_summary(runs, requested) {
-        meta.push_str(&format!(" · {s}"));
-    }
-    let budget =
-        crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), requested);
-    meta.push_str(&format!(
-        " · memory={} · budget={budget} · {}",
-        field(&run, "memory"),
-        cost(&run)
     ));
     if run.get("gate").and_then(Value::as_str).is_some() {
         let blocked = run.get("blocked").and_then(Value::as_bool) == Some(true);
         meta.push_str(&format!(" · gate: {}", crate::log::gate_label(blocked)));
     }
+    // Run shape: runs (vs. requested), memory isolation, the budget cap, codex reasoning effort.
+    let runs = run.get("runs").and_then(Value::as_u64).unwrap_or(1) as usize;
+    let requested = run
+        .get("runs_requested")
+        .and_then(Value::as_u64)
+        .map_or(runs, |r| r as usize);
+    meta.push('\n');
+    if let Some(s) = crate::log::runs_summary(runs, requested) {
+        meta.push_str(&format!("{s} · "));
+    }
+    let budget =
+        crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), requested);
+    meta.push_str(&format!(
+        "memory={} · budget={budget}",
+        field(&run, "memory")
+    ));
+    if let Some(effort) = run.get("reasoning_effort").and_then(Value::as_str) {
+        meta.push_str(&format!(" · reasoning={effort}"));
+    }
+    // Ground-truth token usage + cost (no fabricated zeros for records predating the usage field).
+    let usage = match run.get("usage") {
+        Some(u) => {
+            let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+            format!(
+                "tokens: {}",
+                crate::log::usage_display(
+                    n("input_tokens"),
+                    n("cache_creation_input_tokens"),
+                    n("cache_read_input_tokens"),
+                    n("output_tokens"),
+                    crate::log::record_cost(&run),
+                )
+            )
+        }
+        None => "cost: $?".to_owned(),
+    };
+    meta.push_str(&format!("\n{usage}"));
+    // The provided context: the source list and total prompt size (the verbatim prompt is kept in the
+    // result's `prompt` field).
+    let sources: Vec<String> = record_strings(&run, "sources")
+        .iter()
+        .map(|s| crate::display_path(s))
+        .collect();
+    let prompt_chars = run.get("prompt_chars").and_then(Value::as_u64).unwrap_or(0);
+    meta.push_str(&format!(
+        "\ncontext ({}): {} · prompt {prompt_chars} chars",
+        sources.len(),
+        crate::join_or(&sources, "(none)")
+    ));
+    meta.push_str(&format!(
+        "\ntools: {}",
+        crate::join_or(&record_strings(&run, "tools"), "none")
+    ));
     let body = crate::synth::body_display(
         v.get("structured"),
         v.get("text").and_then(Value::as_str).unwrap_or(""),

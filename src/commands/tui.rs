@@ -18,18 +18,19 @@
 //! cockpit is a second front-end over the CLI, not a reimplementation of it.
 #![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::Context;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 use ratatui::{Frame, TerminalOptions, Viewport};
+use serde_json::Value;
 
 use crate::cli::{GlobalArgs, TuiArgs};
 use crate::runs::ActiveRun;
@@ -38,10 +39,11 @@ use crate::runs::ActiveRun;
 /// view current without busy-spinning; `--interval` overrides it (and is echoed in `--help`).
 pub const DEFAULT_INTERVAL_SECS: f64 = 1.0;
 
-/// Lines reserved for the inline live region. Tall enough for a section plus the global footer; the
-/// shell's scrollback stays visible above it. (Dynamic height that grows with the section is a known
-/// refinement.)
-const VIEWPORT_HEIGHT: u16 = 16;
+/// Lines reserved for the inline live region (clamped to the terminal's height). Larger than a compact
+/// home needs, so the browse views (log, status) aren't squished; scrollback stays visible above. A
+/// viewport that grows with content isn't first-class in ratatui (it's fixed at creation), so a bigger
+/// fixed budget is the lever.
+const VIEWPORT_HEIGHT: u16 = 24;
 
 /// Width of the command-palette popup — wide enough for the longest command name plus its one-line
 /// description without dominating a narrow terminal ([`centered`] clamps it to the available width).
@@ -77,6 +79,7 @@ enum Route {
     Home,
     Status,
     Config,
+    Log,
 }
 
 /// A `/`-palette command: launch an AI run (a verb), open a view, or quit. Listed in *presentation*
@@ -92,6 +95,7 @@ enum Command {
     Evolve,
     Status,
     Config,
+    Log,
     Home,
     Quit,
 }
@@ -106,6 +110,7 @@ impl Command {
         Command::Evolve,
         Command::Status,
         Command::Config,
+        Command::Log,
         Command::Home,
         Command::Quit,
     ];
@@ -124,6 +129,7 @@ impl Command {
             // Views/quit are TUI-only — no CLI subcommand — so their names live here.
             Command::Status => "status",
             Command::Config => "config",
+            Command::Log => "log",
             Command::Home => "home",
             Command::Quit => "quit",
         }
@@ -143,6 +149,7 @@ impl Command {
             // Views and quit are TUI-only (no CLI subcommand), so their hints live here.
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
+            Command::Log => "browse completed runs and their results",
             Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
         }
@@ -155,6 +162,7 @@ impl Command {
             Command::Home => app.route = Route::Home,
             Command::Status => app.route = Route::Status,
             Command::Config => app.open_config(),
+            Command::Log => app.open_log(),
             Command::Quit => app.should_quit = true,
             verb => app.start_launch(verb),
         }
@@ -209,6 +217,8 @@ struct App {
     cwd: String,
     /// The settings shown by the config view, loaded when it's opened; `None` until then.
     config: Option<ConfigView>,
+    /// The `log` view's state (records + cursor + optional drilled-in detail), loaded when it's opened.
+    log: Option<LogView>,
 }
 
 impl App {
@@ -222,6 +232,7 @@ impl App {
             tx,
             cwd,
             config: None,
+            log: None,
         }
     }
 
@@ -237,6 +248,66 @@ impl App {
         let name = verb.name();
         thread::spawn(move || {
             let _ = tx.send(Msg::LaunchPreview(dry_run_preview(name)));
+        });
+    }
+
+    /// Confirm the previewed launch: spawn the real run (no `--dry-run`) as a background process and
+    /// close the gate. The run writes its own marker — so `status` and the footer track it live — and
+    /// logs its result for the `log` view: the cockpit's fire-and-observe model. Its output goes to
+    /// null (the durable record is the log, not the cockpit's terminal, which the TUI owns); a detached
+    /// thread reaps it, and if the cockpit exits first the run is orphaned and finishes on its own.
+    /// A no-op unless the gate is at the confirm stage (Enter while still preparing waits).
+    fn confirm_launch(&mut self) {
+        let Some(verb) = self.launch.as_ref().and_then(|l| {
+            matches!(l.stage, LaunchStage::Confirming { .. }).then_some(l.verb.name())
+        }) else {
+            return;
+        };
+        let spawned = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .args(["run", verb, "."])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        });
+        match spawned {
+            Ok(child) => {
+                thread::spawn(move || {
+                    let mut child = child;
+                    let _ = child.wait();
+                });
+                self.launch = None;
+            }
+            Err(e) => {
+                if let Some(launch) = self.launch.as_mut() {
+                    launch.stage = LaunchStage::Failed {
+                        error: format!("couldn't launch `{verb}`: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
+    /// Open the `log` view, loading the completed-run records (newest first) for browsing. Re-loaded
+    /// on each entry (so a run that finished since shows on return), mirroring `open_config`. Read-only;
+    /// the list rows and the drill-in detail reuse `arc log`'s own projections, so they can't drift.
+    fn open_log(&mut self) {
+        self.route = Route::Log;
+        let (runs, unparsed) = match crate::log::records() {
+            Ok((mut records, unparsed)) => {
+                records.reverse(); // newest first — the run log is append-only
+                (Ok(records), unparsed)
+            }
+            Err(e) => (Err(format!("{e:#}")), 0),
+        };
+        self.log = Some(LogView {
+            runs,
+            unparsed,
+            now: crate::log::now_secs(),
+            selected: 0,
+            offset: 0,
+            detail: None,
         });
     }
 
@@ -266,8 +337,8 @@ impl App {
     }
 }
 
-/// An in-flight launch: which verb, and how far along. v1 ends at the gate; confirming to the real
-/// run is the next cut.
+/// An in-flight launch: which verb, and how far along (preview → confirm → fired in the background,
+/// or failed).
 struct Launch {
     verb: Command,
     stage: LaunchStage,
@@ -295,13 +366,84 @@ enum ConfigView {
     Error(String),
 }
 
+/// Visible run rows in the `log` list — the inline body (the viewport less the global footer) less the
+/// view's header and hint lines. One source for both the scroll math and the render window, so they
+/// can't disagree on how many rows are on screen.
+const LOG_ROWS: usize = (VIEWPORT_HEIGHT - 1 - 1 - 1) as usize;
+
+/// The `log` view's state: the completed-run records (newest first) or the error reading them, the
+/// cursor + scroll offset over the list, and — when drilled in — the selected run's rendered detail.
+struct LogView {
+    runs: Result<Vec<Value>, String>,
+    /// Run-log lines that couldn't be parsed — surfaced in the hint, never silently dropped.
+    unparsed: usize,
+    /// Reference time for the rows' relative ages, captured at load.
+    now: u64,
+    selected: usize,
+    offset: usize,
+    detail: Option<LogDetail>,
+}
+
+/// One run's detail screen: its rendered body (the stored result, or a note when none is kept) and a
+/// scroll offset over it, since a result can run longer than the inline body.
+struct LogDetail {
+    body: String,
+    scroll: u16,
+}
+
+impl LogView {
+    /// Move the cursor to `i`, scrolling the window the minimum needed to keep it visible.
+    fn select(&mut self, i: usize) {
+        self.selected = i;
+        if i < self.offset {
+            self.offset = i;
+        } else if i >= self.offset + LOG_ROWS {
+            self.offset = i + 1 - LOG_ROWS;
+        }
+    }
+
+    /// Open the selected run's detail — its stored result rendered like `arc log <id>`, or a note when
+    /// the result isn't kept (predates the store / logging off) or the run carries no id.
+    fn open_detail(&mut self) {
+        let Ok(runs) = self.runs.as_ref() else { return };
+        let Some(record) = runs.get(self.selected) else {
+            return;
+        };
+        let body = match record.get("id").and_then(Value::as_str) {
+            Some(id) => match crate::commands::log::load_stored(id) {
+                Ok(Some(stored)) => crate::commands::log::stored_human(&stored),
+                Ok(None) => format!(
+                    "no stored result for `{id}` — it predates the result store, or was run with logging off"
+                ),
+                Err(e) => format!("couldn't load the stored result: {e:#}"),
+            },
+            None => {
+                "this run predates the result store (no id), so its result wasn't kept".to_owned()
+            }
+        };
+        self.detail = Some(LogDetail { body, scroll: 0 });
+    }
+
+    /// Scroll the open detail by `delta` rows. A no-op while the list (not a detail) is showing.
+    fn scroll_detail(&mut self, delta: i32) {
+        if let Some(detail) = self.detail.as_mut() {
+            // Clamp at the top only: the body wraps, so its on-screen height isn't known here — let the
+            // bottom over-scroll into blank rather than hide wrapped tail lines. A precise bottom clamp
+            // (needs the rendered line count) is a refinement for the detail-view rework.
+            detail.scroll = i32::from(detail.scroll)
+                .saturating_add(delta)
+                .clamp(0, i32::from(u16::MAX)) as u16;
+        }
+    }
+}
+
 /// Run a verb's dry-run as a subprocess of this same `arc` binary and return its **preview** — the
 /// header (params + estimate) arc prints before the appended prompt — for the gate, or an error
 /// string. Zero spend (`--dry-run`); the cockpit shows arc's own output rather than re-deriving it.
 fn dry_run_preview(verb: &str) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("can't locate the arc binary: {e}"))?;
     let output = std::process::Command::new(exe)
-        .args([verb, ".", "--dry-run"])
+        .args(["run", verb, ".", "--dry-run"])
         .output()
         .map_err(|e| format!("couldn't start the dry-run: {e}"))?;
     if !output.status.success() {
@@ -370,10 +512,22 @@ pub fn run(args: &TuiArgs, _global: &GlobalArgs) -> anyhow::Result<()> {
     })
     .context("failed to initialize the terminal")?;
     let result = event_loop(&mut terminal, interval);
-    // Clear the live region before restoring. Stock inline leaves the final frame in place (good for a
-    // transcript — codex/Claude do that); but a frozen *live* frame just reads as stale, so wipe it and
-    // let the shell prompt resume clean (codex likewise clears its live region on exit).
-    let _ = terminal.clear();
+    // ratatui's restore() resets terminal modes but does NOT reposition the cursor for an inline
+    // viewport (confirmed against ratatui-core's `Terminal` Drop) — it's left mid-region, so the shell's
+    // next prompt would overwrite the live area. Park it on the viewport's last row, then write a
+    // newline through the same backend so it lands on a fresh line *below* the region (the terminal
+    // scrolls up if needed). Legacy conhost (no `WT_SESSION`) scrolls cursor-sets inconsistently, so
+    // give it one extra newline there.
+    let bottom = terminal.get_frame().area().bottom().saturating_sub(1);
+    let _ = terminal.set_cursor_position(Position { x: 0, y: bottom });
+    let _ = terminal.show_cursor();
+    let trailing: &[u8] = if std::env::var_os("WT_SESSION").is_none() {
+        b"\r\n\r\n"
+    } else {
+        b"\r\n"
+    };
+    let _ = terminal.backend_mut().write_all(trailing);
+    let _ = terminal.backend_mut().flush();
     ratatui::restore(); // always restore — even if the loop errored (a panic is handled by the hook)
     result
 }
@@ -448,13 +602,17 @@ fn update(app: &mut App, msg: Msg) {
 /// always below the overlays and above the global quit.
 fn handle_key(app: &mut App, key: KeyEvent) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    // The launch gate is the top overlay. Esc / Ctrl-C here is a HARD CANCEL of the launch (never
-    // proceed, never quit the app): a spend gate's cancel must always mean "don't spend".
+    // The launch gate is the top overlay. Enter confirms — fires the real run, the one spend the gate
+    // exists to authorize (a no-op until the estimate is in). Esc / Ctrl-C is a HARD CANCEL / dismiss:
+    // a spend gate's cancel must always mean "don't spend".
     if app.launch.is_some() {
-        if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-            app.launch = None;
+        match key.code {
+            KeyCode::Enter => app.confirm_launch(),
+            KeyCode::Esc => app.launch = None,
+            KeyCode::Char('c') if ctrl => app.launch = None,
+            _ => {}
         }
-        return; // every other key is inert while the gate is up (confirm→run is the next cut)
+        return;
     }
     // Ctrl-C quits from anywhere else — the universal escape hatch.
     if ctrl && key.code == KeyCode::Char('c') {
@@ -468,12 +626,24 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('/') => app.palette = Some(Palette::new()),
         KeyCode::Char('q') => app.should_quit = true,
-        // Esc backs out one level: a section returns to home; home leaves the cockpit.
-        KeyCode::Esc => match app.route {
-            Route::Home => app.should_quit = true,
-            _ => app.route = Route::Home,
-        },
-        _ => {} // sections refresh on the tick — no manual refresh key needed
+        // Esc backs out one level: a section returns to home; home leaves the cockpit — but inside the
+        // log detail it returns to the list first.
+        KeyCode::Esc => {
+            if app.route == Route::Log
+                && let Some(log) = app.log.as_mut()
+                && log.detail.is_some()
+            {
+                log.detail = None;
+            } else {
+                match app.route {
+                    Route::Home => app.should_quit = true,
+                    _ => app.route = Route::Home,
+                }
+            }
+        }
+        // The log view owns a cursor (the first section to); other sections refresh on the tick.
+        _ if app.route == Route::Log => handle_log_key(app, key.code),
+        _ => {}
     }
 }
 
@@ -521,6 +691,40 @@ fn handle_palette_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Keys while the `log` view is on screen (it owns a cursor, unlike the tick-refreshed sections): move
+/// the selection or page through the list, open the highlighted run, or scroll an open detail. Esc is
+/// handled one level up (it closes an open detail, else backs out of the view).
+fn handle_log_key(app: &mut App, code: KeyCode) {
+    let Some(log) = app.log.as_mut() else { return };
+    // Detail open: arrows/page scroll the body; Home jumps to the top.
+    if log.detail.is_some() {
+        match code {
+            KeyCode::Up => log.scroll_detail(-1),
+            KeyCode::Down => log.scroll_detail(1),
+            KeyCode::PageUp => log.scroll_detail(-(LOG_ROWS as i32)),
+            KeyCode::PageDown => log.scroll_detail(LOG_ROWS as i32),
+            KeyCode::Home => log.scroll_detail(i32::MIN),
+            _ => {}
+        }
+        return;
+    }
+    // List: move the cursor (keeping it visible) or open the highlighted run.
+    let last = match &log.runs {
+        Ok(runs) if !runs.is_empty() => runs.len() - 1,
+        _ => return, // empty or unreadable — nothing to navigate
+    };
+    match code {
+        KeyCode::Up => log.select(log.selected.saturating_sub(1)),
+        KeyCode::Down => log.select((log.selected + 1).min(last)),
+        KeyCode::PageUp => log.select(log.selected.saturating_sub(LOG_ROWS)),
+        KeyCode::PageDown => log.select((log.selected + LOG_ROWS).min(last)),
+        KeyCode::Home => log.select(0),
+        KeyCode::End => log.select(last),
+        KeyCode::Enter => log.open_detail(),
+        _ => {}
+    }
+}
+
 /// Render one frame from `app` — pure (state in, frame out). Every view is a body + the global footer;
 /// the palette, when open, draws as an overlay on top.
 fn render(frame: &mut Frame, app: &App) {
@@ -535,6 +739,13 @@ fn render(frame: &mut Frame, app: &App) {
             app.config
                 .as_ref()
                 .expect("config is loaded when its route is active"),
+            body,
+        ),
+        Route::Log => render_log(
+            frame,
+            app.log
+                .as_ref()
+                .expect("the log view is loaded when its route is active"),
             body,
         ),
     }
@@ -556,7 +767,7 @@ fn render_home(frame: &mut Frame, area: Rect, cwd: &str) {
         Layout::vertical([Constraint::Length(MASTHEAD_HEIGHT), Constraint::Min(0)]).areas(area);
     let lines = vec![
         Line::from(format!("arc {VERSION}")).bold(),
-        Line::from(cwd.to_owned()).dim(),
+        Line::from(crate::display_path(cwd)).dim(),
     ];
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
 }
@@ -662,6 +873,72 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     }
 }
 
+/// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
+/// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
+/// run reads the same in the cockpit as on the CLI.
+fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
+    let [header, body, hint] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+
+    let runs = match &log.runs {
+        Ok(runs) => runs,
+        Err(e) => {
+            frame.render_widget(Line::from("log").bold(), header);
+            frame.render_widget(
+                Paragraph::new(format!("run log unreadable: {e}")).block(Block::bordered()),
+                body,
+            );
+            return;
+        }
+    };
+
+    // Drilled into one run: its rendered result, scrolled.
+    if let Some(detail) = &log.detail {
+        frame.render_widget(Line::from("log · run detail").bold(), header);
+        frame.render_widget(
+            Paragraph::new(detail.body.clone())
+                .wrap(Wrap { trim: false })
+                .scroll((detail.scroll, 0)),
+            body,
+        );
+        frame.render_widget(Line::from("↑↓ scroll · esc back").dim(), hint);
+        return;
+    }
+
+    // The list of runs.
+    frame.render_widget(Line::from("completed runs").bold(), header);
+    if runs.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no runs logged yet").block(Block::bordered()),
+            body,
+        );
+    } else {
+        let end = (log.offset + LOG_ROWS).min(runs.len());
+        let rows: Vec<Line> = runs[log.offset..end]
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let line = Line::from(crate::commands::log::row(r, log.now));
+                if log.offset + i == log.selected {
+                    line.reversed() // the cursor
+                } else {
+                    line
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(rows), body);
+    }
+    let mut hint_text = format!("{} run(s) · ↑↓ move · enter open", runs.len());
+    if log.unparsed > 0 {
+        hint_text.push_str(&format!(" · {}", crate::log::unparsed_note(log.unparsed)));
+    }
+    frame.render_widget(Line::from(hint_text).dim(), hint);
+}
+
 /// The persistent footer — present on every view. Carries the at-a-glance active-run count and the
 /// contextual key hints.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
@@ -673,18 +950,19 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let hints = if let Some(launch) = &app.launch {
-        // The gate's only keys are Esc / Ctrl-C; "cancel" while a launch is pending, "dismiss" for a
-        // failed dry-run (nothing in flight to cancel). The modal itself shows no hint — this is it.
+        // The gate's keys by stage (the modal shows no hint — this footer is it): Enter fires the run
+        // at the confirm stage; Esc cancels a pending launch or dismisses a failed preview.
         match &launch.stage {
+            LaunchStage::Preparing => "esc cancel",
+            LaunchStage::Confirming { .. } => "enter run · esc cancel",
             LaunchStage::Failed { .. } => "esc dismiss",
-            _ => "esc cancel",
         }
     } else if app.palette.is_some() {
         "↑↓ select · enter run · esc close"
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Status | Route::Config => "/ commands · esc back · q quit",
+            Route::Status | Route::Config | Route::Log => "/ commands · esc back · q quit",
         }
     };
 
@@ -733,8 +1011,8 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
 }
 
 /// The launch gate: a centered modal showing the chosen verb's dry-run preview (its parameters + the
-/// token/cost estimate) to confirm or cancel before any spend. v1 ends here — cancel only; wiring
-/// confirm to the real run is the next cut.
+/// token/cost estimate) to confirm or cancel before any spend. Enter fires the real run in the
+/// background ([`App::confirm_launch`]); Esc cancels. The footer carries the keys.
 fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
     let verb = launch.verb.name();
     let (title, body) = match &launch.stage {
@@ -788,26 +1066,6 @@ mod tests {
         }
     }
 
-    /// One in-flight run, for the status-view and footer-count tests.
-    fn one_run_snapshot() -> Snapshot {
-        Snapshot {
-            active: vec![ActiveRun {
-                pid: 42,
-                index: 0,
-                command: "audit".to_owned(),
-                repo: "/home/x/ida".to_owned(),
-                model: "claude-opus-4-8".to_owned(),
-                started_at: 90,
-                turns: 3,
-                tool_calls: 1,
-                output_chars: 1200,
-            }],
-            unreadable: 0,
-            now: 100,
-            error: None,
-        }
-    }
-
     fn app_with(route: Route, status: Snapshot) -> App {
         // A launch worker would send here; the tests never start one, so the receiver is dropped.
         let (tx, _rx) = mpsc::channel();
@@ -820,6 +1078,7 @@ mod tests {
             tx,
             cwd: ".".to_owned(),
             config: None,
+            log: None,
         }
     }
 
@@ -838,40 +1097,6 @@ mod tests {
 
     fn press(code: KeyCode) -> Msg {
         Msg::Input(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
-    }
-
-    #[test]
-    fn footer_shows_active_count_on_every_view() {
-        // The count is in the footer regardless of which section is on screen.
-        for route in [Route::Home, Route::Status] {
-            let text = screen(&app_with(route, one_run_snapshot()), 80, 12);
-            assert!(
-                text.contains("1 running"),
-                "route should show the run count in the footer"
-            );
-        }
-        // …and reads "idle" when nothing is in flight.
-        let idle = screen(&app_with(Route::Home, empty_snapshot()), 80, 12);
-        assert!(idle.contains("idle"));
-    }
-
-    #[test]
-    fn status_view_renders_the_run_table() {
-        let text = screen(&app_with(Route::Status, one_run_snapshot()), 100, 12);
-        assert!(text.contains("live status"));
-        assert!(text.contains("audit"));
-        assert!(text.contains("ida")); // basename of the repo path
-        assert!(text.contains("10s")); // now - started_at
-        assert!(text.contains("1 running"));
-    }
-
-    #[test]
-    fn status_registry_error_is_surfaced() {
-        let mut snap = empty_snapshot();
-        snap.error = Some("permission denied".to_owned());
-        let text = screen(&app_with(Route::Status, snap), 80, 12);
-        assert!(text.contains("unreadable"));
-        assert!(text.contains("permission denied"));
     }
 
     #[test]

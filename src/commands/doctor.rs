@@ -137,7 +137,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             "os",
             &format!("{} / {}", report.runtime.os, report.runtime.arch),
         ),
-        row("cwd", &report.cwd),
+        row("cwd", &crate::display_path(&report.cwd)),
         row("cargo", &report.tools.cargo.display("not found")),
         row("git", &report.tools.git.display("not found")),
     ];
@@ -155,11 +155,13 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "logs",
         &format!(
             "{} ({runs_display})",
-            report
-                .logs
-                .path
-                .as_deref()
-                .unwrap_or("unavailable (no home dir)")
+            crate::display_path(
+                report
+                    .logs
+                    .path
+                    .as_deref()
+                    .unwrap_or("unavailable (no home dir)"),
+            )
         ),
     ));
     let human = lines.join("\n");

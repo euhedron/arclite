@@ -622,7 +622,11 @@ impl RunReport<'_> {
             budget,
             if self.ranked { "  ranked" } else { "" },
             if self.kinds { "  kinds" } else { "" },
-            self.context.join(", ")
+            self.context
+                .iter()
+                .map(|s| crate::display_path(s))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         if !self.excluded.is_empty() {
             line.push_str(&format!("  excluded=[{}]", self.excluded.join(", ")));
@@ -689,10 +693,15 @@ struct RunRecord<'a> {
 }
 
 /// The full result of one run, written to `~/.arc/logs/results/<id>.json` so `arc log <id>` can
-/// re-show it without re-running: the run record (metadata) plus the synthesis content.
+/// re-show it without re-running: the run record (metadata), the verbatim prompt sent, and the
+/// synthesis content.
 #[derive(Serialize)]
 struct StoredRun<'a> {
     run: &'a RunRecord<'a>,
+    /// The full prompt sent to the model (instruction + assembled context + notes), kept verbatim so
+    /// a past run is fully inspectable/reproducible — the heavy field, which is why it lives here in
+    /// the per-run result file, not in the compact one-line `runs.jsonl` record.
+    prompt: &'a str,
     text: &'a str,
     structured: Option<&'a serde_json::Value>,
 }
@@ -900,6 +909,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             &id,
             &StoredRun {
                 run: &record,
+                prompt,
                 text: &text,
                 structured: structured.as_ref(),
             },
@@ -912,7 +922,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // off — the log location is never hidden.
     match (&logged, &id) {
         (Some(path), Some(id)) => {
-            human.push_str(&format!("\nlogged: {} · id {id}", path.display()));
+            human.push_str(&format!(
+                "\nlogged: {} · id {id}",
+                crate::display_path(&path.display().to_string())
+            ));
         }
         (None, _) if !opts.log => human.push_str(LOGGING_OFF_NOTE),
         _ => {} // logging on but the append failed — append() already warned to stderr

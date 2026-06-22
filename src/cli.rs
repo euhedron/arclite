@@ -54,7 +54,11 @@ pub(crate) const NAME_EVOLVE: &str = "evolve";
 pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
 
 /// The set of arclite subcommands.
+// Parsed once at startup and dispatched immediately — never held in a collection or a hot path — so
+// the size gap between `Run` (it carries the synthesis args) and the small deterministic variants is
+// irrelevant; boxing it would only fight clap's derive for no real gain.
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Report runtime, environment, and available tooling.
     Doctor(DoctorArgs),
@@ -77,9 +81,25 @@ pub enum Command {
     Usage(UsageArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
-    // The synthesis verbs share their subcommand name + description with the TUI palette via the
-    // `NAME_*`/`VERB_*` consts above, so the launcher (which spawns `arc <name>`) and `--help` can't
-    // drift — `name`/`about` set explicitly rather than left to the variant + a doc-comment.
+    // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
+    // substrate, kept distinct from the deterministic commands above — `run` names the step that
+    // spends AI, mirroring arclite's deterministic-until-synthesis spine.
+    /// Run an AI synthesis verb: audit, critique, suggest, summarize, extract, or evolve.
+    Run(RunArgs),
+}
+
+/// `arc run <verb>` — the AI synthesis verbs grouped under one subcommand.
+#[derive(Debug, clap::Args)]
+pub struct RunArgs {
+    #[command(subcommand)]
+    pub verb: RunVerb,
+}
+
+/// The synthesis verbs. Each shares its subcommand name + description with the TUI palette via the
+/// `NAME_*`/`VERB_*` consts above, so the launcher (which spawns `arc run <name>`) and `--help` can't
+/// drift — `name`/`about` set explicitly rather than left to the variant + a doc-comment.
+#[derive(Debug, Subcommand)]
+pub enum RunVerb {
     #[command(name = NAME_SUMMARIZE, about = VERB_SUMMARIZE)]
     Summarize(SynthArgs),
     #[command(name = NAME_SUGGEST, about = VERB_SUGGEST)]
