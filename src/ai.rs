@@ -56,9 +56,8 @@ pub fn estimate(prompt: &str) -> Estimate {
 /// `--json-schema` payload (Rust's `.cmd` quoting does not save them — confirmed empirically). So
 /// when `which` returns such a shim, [`shim_target`] resolves the real `.exe` it runs and we spawn
 /// that directly: no shell/batch re-parse, so std's standard argv quoting holds. A program `which`
-/// can't find falls back to the bare name, so the spawn surfaces a normal "not found"; but a shim
-/// that exists yet can't be read is a genuine failure — surfaced here (hence the fallible return),
-/// never swallowed into the buggy `.cmd` fallback. Shared by every external-process call arclite makes.
+/// can't find falls back to the bare name, so the spawn surfaces a normal "not found"; the fallible
+/// return propagates [`shim_target`]'s error. Shared by every external-process call arclite makes.
 pub fn command(program: &str) -> anyhow::Result<Command> {
     let exe = match which::which(program) {
         Ok(resolved) => Some(shim_target(&resolved)?.unwrap_or(resolved)),
