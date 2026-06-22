@@ -47,6 +47,11 @@ struct InitReport {
 /// The `init` command — never clobbers what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let root = super::resolve_root(&args.path)?;
+    anyhow::ensure!(
+        root.is_dir(),
+        "cannot initialize {}: not an existing directory (init sets up `.arc` in a repo that already exists, so a typo'd path doesn't scaffold a stray tree)",
+        root.display()
+    );
     let arc = root.join(crate::ARC_DIR);
     let mut created = Vec::new();
     let mut skipped = Vec::new();
