@@ -327,6 +327,15 @@ fn drive(
         let mut stdin = child.stdin.take().expect("stdin was configured as piped");
         stdin.write_all(prompt.as_bytes())?;
     } // dropping stdin closes it, signalling end-of-input
+    // Drain stderr on its own thread, concurrently with the stdout stream below: a backend that fills
+    // the stderr pipe buffer while we're still reading stdout would block writing it — and we'd never
+    // reach a post-loop read — a deadlock. Joined after the child exits.
+    let mut stderr_pipe = child.stderr.take().expect("stderr was configured as piped");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = String::new();
+        let _ = stderr_pipe.read_to_string(&mut stderr);
+        stderr
+    });
     let stdout = child.stdout.take().expect("stdout was configured as piped");
     for line in std::io::BufReader::new(stdout).lines() {
         let line = line?;
@@ -339,14 +348,8 @@ fn drive(
             .unwrap_or_default();
         on_event(kind, &event, &line);
     }
-    // stderr is small (the CLIs emit only warnings there), so reading it after stdout drains won't deadlock.
-    let mut stderr = String::new();
-    let _ = child
-        .stderr
-        .take()
-        .expect("stderr was configured as piped")
-        .read_to_string(&mut stderr);
     let status = child.wait()?;
+    let stderr = stderr_reader.join().unwrap_or_default();
     Ok((status, stderr))
 }
 
