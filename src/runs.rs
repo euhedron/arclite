@@ -93,7 +93,14 @@ impl Active {
 
 impl Drop for Active {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.marker);
+        // Best-effort cleanup, but not silent (the warn-then-proceed standard `write` uses): a failed
+        // removal leaves a stale marker that makes `arc status` over-report this run.
+        if let Err(e) = std::fs::remove_file(&self.marker) {
+            eprintln!(
+                "arclite: couldn't remove this run's registry marker {} ({e}); it may linger in `arc status`",
+                self.marker.display()
+            );
+        }
     }
 }
 

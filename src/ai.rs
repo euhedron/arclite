@@ -560,7 +560,13 @@ impl CodexTemp {
 
 impl Drop for CodexTemp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Best-effort cleanup, surfaced rather than silent: a failed removal leaks a temp directory.
+        if let Err(e) = std::fs::remove_dir_all(&self.0) {
+            eprintln!(
+                "arclite: couldn't remove the codex temp dir {} ({e}); it may be left behind",
+                self.0.display()
+            );
+        }
     }
 }
 
