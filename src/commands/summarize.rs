@@ -4,7 +4,7 @@ use crate::cli::{GlobalArgs, SynthArgs};
 
 /// The `summarize` command.
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
-    super::run_synthesis(args, global, "summarize", None, |ctx| {
+    super::run_synthesis(args, global, crate::cli::NAME_SUMMARIZE, None, |ctx| {
         format!(
             "You are assessing a code repository from the context below.\n\n\
              {ctx}\n\

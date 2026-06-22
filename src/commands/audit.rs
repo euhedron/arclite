@@ -10,18 +10,24 @@ const AUDIT_ITEM: &str = r#"{"type":"object","properties":{"rule":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(AUDIT_ITEM),
-        note: "one object per violation: `rule`, `location`, `reason`.",
+        note: "one object per violation.",
         kinds: &[], // violations already bucket by their `rule`
     };
-    super::run_synthesis(args, global, "audit", Some(structure), |ctx| {
-        format!(
-            "You are auditing a code repository strictly against the rules provided below (listed \
+    super::run_synthesis(
+        args,
+        global,
+        crate::cli::NAME_AUDIT,
+        Some(structure),
+        |ctx| {
+            format!(
+                "You are auditing a code repository strictly against the rules provided below (listed \
              under \"Rules\").\n\n\
              {ctx}\n\
              Report only concrete violations of those rules. For each: the rule id, the file/location \
              where it occurs, and a one-clause reason it violates. Do not raise general suggestions, \
              and do not mention rules that aren't violated. If no rules are present in the context, \
              there is nothing to audit against — report no violations and say so in your overall read."
-        )
-    })
+            )
+        },
+    )
 }

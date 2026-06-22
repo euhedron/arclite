@@ -26,17 +26,23 @@ const CRITIQUE_KINDS: &[(&str, &str)] = &[
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(CRITIQUE_ITEM),
-        note: "each item: `location`, `defect`.",
+        note: "one object per defect.",
         kinds: CRITIQUE_KINDS,
     };
-    super::run_synthesis(args, global, "critique", Some(structure), |ctx| {
-        format!(
-            "You are performing a rigorous critical review of a repository and its documentation to \
+    super::run_synthesis(
+        args,
+        global,
+        crate::cli::NAME_CRITIQUE,
+        Some(structure),
+        |ctx| {
+            format!(
+                "You are performing a rigorous critical review of a repository and its documentation to \
              surface quality defects of these kinds:\n{}\n\n\
              {ctx}\n\
              Report concrete findings; for each, the specific location and the problem in a clause. \
              Prefer fewer real findings over padding, and call out cross-cutting redundancy explicitly.",
-            super::kind_list(CRITIQUE_KINDS)
-        )
-    })
+                super::kind_list(CRITIQUE_KINDS)
+            )
+        },
+    )
 }

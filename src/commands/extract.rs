@@ -10,12 +10,17 @@ const EXTRACT_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"strin
 pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
     let structure = Structure {
         schema: crate::synth::results_schema(EXTRACT_ITEM),
-        note: "one object per proposed rule: `id`, `rule`, `provenance`.",
+        note: "one object per proposed rule.",
         kinds: &[], // no fixed taxonomy; --kinds lets the model label freely
     };
-    super::run_synthesis(args, global, "extract", Some(structure), |ctx| {
-        format!(
-            "You are extracting reusable engineering rules from a code repository — coding \
+    super::run_synthesis(
+        args,
+        global,
+        crate::cli::NAME_EXTRACT,
+        Some(structure),
+        |ctx| {
+            format!(
+                "You are extracting reusable engineering rules from a code repository — coding \
              standards, anti-patterns, principles, and best-practices that generalize beyond this \
              one repo.\n\n\
              {ctx}\n\
@@ -29,6 +34,7 @@ pub fn run(args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
              — never pad the set or manufacture generic advice to reach a count. If nothing beyond \
              existing policy is clearly warranted, return no rules and say so in the note: an empty, \
              honestly-explained result is a valid and useful outcome, not a failure."
-        )
-    })
+            )
+        },
+    )
 }
