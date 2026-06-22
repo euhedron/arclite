@@ -3,19 +3,20 @@
 # only what arclite runs today, and it is meant to change. Edit the commands, their models, and
 # which ones block vs. advise, freely.
 #
-# Today: `audit` blocks on findings (on the configured/default model — the gate wants its precision);
-# `critique` and `suggest` advise (non-blocking) on a capable-but-cheaper model, since their value is
-# broad signal, not a verdict. All three run concurrently; output is collected and printed in order
-# once they finish. Opt-in via `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`.
+# Today: `audit` blocks on findings on the default (Claude) model — the gate wants its precision;
+# `critique` and `suggest` advise (non-blocking) on the codex backend, since their value is broad
+# signal (not a verdict) and routing them off Claude spreads usage across subscriptions. All three run
+# concurrently; output is collected and printed in order once they finish. Opt-in via
+# `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`.
 if [ "$ARC_GATE" = "0" ]; then
     echo "arclite gate: skipped (ARC_GATE=0)" >&2
     exit 0
 fi
 echo "arclite: critique + suggest (advisory) and audit (gate), running concurrently…" >&2
 out=$(mktemp -d) || { echo "arclite gate: could not create a temp dir" >&2; exit 1; }
-arc critique . --include src --model claude-opus-4-7 > "$out/critique" 2>&1 &
-arc suggest  . --include src --model claude-opus-4-7 > "$out/suggest"  2>&1 &
-arc audit    . --include src --fail-on-findings      > "$out/audit"    2>&1 &
+arc critique . --include src --backend codex    > "$out/critique" 2>&1 &
+arc suggest  . --include src --backend codex    > "$out/suggest"  2>&1 &
+arc audit    . --include src --fail-on-findings > "$out/audit"    2>&1 &
 audit_pid=$!
 wait "$audit_pid"
 status=$?
