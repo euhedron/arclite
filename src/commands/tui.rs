@@ -14,8 +14,9 @@
 //!
 //! State is a route plus optional overlays (the `/` palette, the launch gate): [`render`] is a pure
 //! function of [`App`], tested headlessly with `TestBackend`; the interactive loop itself needs a real
-//! terminal. Launching a run spawns the `arc` binary as a subprocess and renders its own output — the
-//! cockpit is a second front-end over the CLI, not a reimplementation of it.
+//! terminal. Launching spawns the `arc` binary as a subprocess: the dry-run preview captures and
+//! renders arc's own output, and a confirmed run fires in the background (observed via `status` and
+//! the `log` view). The cockpit is a second front-end over the CLI, not a reimplementation of it.
 #![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
 use std::io::{IsTerminal, Write};
@@ -294,11 +295,8 @@ impl App {
     /// the list rows and the drill-in detail reuse `arc log`'s own projections, so they can't drift.
     fn open_log(&mut self) {
         self.route = Route::Log;
-        let (runs, unparsed) = match crate::log::records() {
-            Ok((mut records, unparsed)) => {
-                records.reverse(); // newest first — the run log is append-only
-                (Ok(records), unparsed)
-            }
+        let (runs, unparsed) = match crate::log::records_newest_first() {
+            Ok((records, unparsed)) => (Ok(records), unparsed),
             Err(e) => (Err(format!("{e:#}")), 0),
         };
         self.log = Some(LogView {

@@ -28,9 +28,8 @@ const DEFAULT_LIMIT: usize = 20;
 /// The run records (newest first) that pass the `--command`/`--repo`/`--blocked` filters, plus how
 /// many log lines didn't parse.
 fn matching_records(args: &LogArgs) -> anyhow::Result<(Vec<Value>, usize)> {
-    let (mut records, unparsed) = crate::log::records()?;
+    let (mut records, unparsed) = crate::log::records_newest_first()?;
     records.retain(|r| keep(r, args));
-    records.reverse(); // newest first (the log is append-only)
     Ok((records, unparsed))
 }
 
@@ -94,7 +93,7 @@ fn cost(v: &Value) -> String {
     if v.get("usage").is_some() {
         crate::log::cost_or_unavailable(crate::log::record_cost(v))
     } else {
-        "$?".to_owned()
+        crate::log::COST_NO_USAGE.to_owned()
     }
 }
 
@@ -318,7 +317,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
                 )
             )
         }
-        None => "cost: $?".to_owned(),
+        None => format!("cost: {}", crate::log::COST_NO_USAGE),
     };
     meta.push_str(&format!("\n{usage}"));
     // The provided context: the source list and total prompt size (the verbatim prompt is kept in the

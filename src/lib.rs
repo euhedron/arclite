@@ -91,6 +91,7 @@ pub(crate) fn join_or(items: &[String], empty: &str) -> String {
 pub(crate) fn display_path(path: &str) -> String {
     if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_owned))
         && let Some(rest) = path.strip_prefix(&home)
+        && (rest.is_empty() || rest.starts_with(['/', '\\']))
     {
         return format!("~{rest}");
     }

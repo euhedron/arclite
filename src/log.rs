@@ -37,6 +37,11 @@ pub fn cost_or_unavailable(cost_usd: Option<f64>) -> String {
     cost_usd.map_or_else(|| "tokens only (no $)".to_owned(), cost_display)
 }
 
+/// The cost shown for a record with no `usage` object at all — a genuinely-absent cost, distinct from
+/// a present-but-costless run's "tokens only (no $)". Single-sourced (like the renderers around it) so
+/// the sentinel can't drift between `arc log`'s row and its detail view.
+pub const COST_NO_USAGE: &str = "$?";
+
 /// A token+cost tally formatted for display — the single statement of the
 /// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share.
 pub fn usage_display(
@@ -164,6 +169,15 @@ pub fn records() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
             Err(_) => unparsed += 1,
         }
     }
+    Ok((records, unparsed))
+}
+
+/// Run records newest-first (the log is append-only, so the latest is last) with the unparsed-line
+/// count — the order both `arc log` and the TUI's `log` view present, single-sourced so the two can't
+/// drift on it.
+pub fn records_newest_first() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
+    let (mut records, unparsed) = records()?;
+    records.reverse();
     Ok((records, unparsed))
 }
 
