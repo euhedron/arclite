@@ -48,6 +48,10 @@ fn dir() -> Option<PathBuf> {
 pub struct Active {
     marker: PathBuf,
     run: ActiveRun,
+    /// Set once the first marker rewrite fails, so a persistent failure (the registry directory
+    /// removed mid-run, a full disk) is surfaced once rather than on every streamed update — the
+    /// failure stays visible without flooding the live output.
+    warned: bool,
 }
 
 impl Active {
@@ -66,10 +70,19 @@ impl Active {
     }
 
     /// Rewrite the marker. `register` already proved the directory writable with the same write, so a
-    /// later failure is genuinely exceptional — and it can't be allowed to abort the run it's only
-    /// observing, so it's dropped. The durable record is the completed-run log, not this marker.
-    fn write(&self) {
-        let _ = self.try_write();
+    /// later failure is genuinely exceptional; it can't abort the run it's only observing, so the run
+    /// proceeds — but the failure is surfaced (warned once, not on every streamed update), never
+    /// dropped silently, the way logging and registration warn. The durable record is the
+    /// completed-run log, not this marker.
+    fn write(&mut self) {
+        if let Err(e) = self.try_write()
+            && !self.warned
+        {
+            self.warned = true;
+            eprintln!(
+                "arclite: `arc status` progress for this run may be stale (couldn't update its registry marker: {e})"
+            );
+        }
     }
 
     fn try_write(&self) -> std::io::Result<()> {
@@ -104,6 +117,7 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
             tool_calls: 0,
             output_chars: 0,
         },
+        warned: false,
     };
     active.try_write().ok()?;
     Some(active)
