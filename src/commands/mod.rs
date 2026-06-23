@@ -156,7 +156,7 @@ pub fn run_synthesis(
         // --kinds adds a free-string `kind` to each item — not enum-locked, so the model can label
         // off the command's suggested taxonomy when none fits (the deviation is signal).
         let schema = if args.kinds {
-            synth::with_kind(&s.schema)?
+            synth::with_kind(&s.schema)
         } else {
             s.schema.clone()
         };

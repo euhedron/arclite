@@ -48,22 +48,24 @@ pub(crate) const KIND_KEY: &str = "kind";
 /// Add the `--kinds` field to a results schema: each item gains a required free-string [`KIND_KEY`].
 /// The suggested vocabulary (a command's taxonomy) lives in the prompt, *not* as a hard enum — the
 /// model may coin its own label when none fit, which is signal about the taxonomy's fit.
-pub(crate) fn with_kind(schema: &str) -> anyhow::Result<String> {
-    use anyhow::Context as _;
+pub(crate) fn with_kind(schema: &str) -> String {
+    // This schema is one the code itself built from a const item via [`results_schema`], so its shape
+    // — valid JSON, a `results.items` object carrying `properties` + `required` — is a code-held
+    // invariant; assert it rather than threading recoverable errors over a navigation that can't fail.
     let mut root: serde_json::Value =
-        serde_json::from_str(schema).context("a command's results schema parses as JSON")?;
+        serde_json::from_str(schema).expect("a command's results schema is valid JSON");
     let item = root
         .pointer_mut(&format!("/properties/{RESULTS_KEY}/items"))
-        .context("a results schema declares an items shape")?;
+        .expect("a results schema declares an items shape");
     item.pointer_mut("/properties")
         .and_then(serde_json::Value::as_object_mut)
-        .context("a results item schema has properties")?
+        .expect("a results item schema has properties")
         .insert(KIND_KEY.to_owned(), serde_json::json!({ "type": "string" }));
     item.pointer_mut("/required")
         .and_then(serde_json::Value::as_array_mut)
-        .context("a results item schema has a required list")?
+        .expect("a results item schema has a required list")
         .push(KIND_KEY.into());
-    Ok(root.to_string())
+    root.to_string()
 }
 
 /// Wrap a command's array-item schema in the shared `{ results: [ <item> ], note }` envelope, so
@@ -863,14 +865,25 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // --output: also write the result as a doc with a provenance header (a completed run only — a
     // failed run has no result body to write).
     let written = match (is_errored, opts.output) {
-        (false, Some(dir)) => Some(write_output(
-            dir,
-            opts.command,
-            &body,
-            &report.model,
-            opts.sources.len(),
-            &cost,
-        )?),
+        // --output writes an auxiliary provenance doc; a failure here must not abort the billed run
+        // before its cost is logged and the result emitted — warn and proceed (best-effort, like the
+        // run log itself), rather than discarding already-spent work.
+        (false, Some(dir)) => {
+            match write_output(
+                dir,
+                opts.command,
+                &body,
+                &report.model,
+                opts.sources.len(),
+                &cost,
+            ) {
+                Ok(path) => Some(path),
+                Err(e) => {
+                    eprintln!("arclite: --output doc not written ({e:#})");
+                    None
+                }
+            }
+        }
         _ => None,
     };
     let mut human = format!(
