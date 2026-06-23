@@ -334,7 +334,12 @@ pub(crate) fn stored_human(v: &Value) -> String {
         .iter()
         .map(|s| crate::display_path(s))
         .collect();
-    let prompt_chars = run.get("prompt_chars").and_then(Value::as_u64).unwrap_or(0);
+    // Disclose absence rather than fabricate a zero: a record predating `prompt_chars` shows "?",
+    // not "prompt 0 chars" (which would falsely claim an empty prompt) — matching `ts`/cost above.
+    let prompt_chars = run
+        .get("prompt_chars")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "?".to_owned(), |n| n.to_string());
     meta.push_str(&format!(
         "\ncontext ({}): {} · prompt {prompt_chars} chars",
         sources.len(),
