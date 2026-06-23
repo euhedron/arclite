@@ -89,11 +89,11 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                     }
                     continue;
                 };
-                let n = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-                w.input_tokens += n("input_tokens");
-                w.cache_creation_input_tokens += n("cache_creation_input_tokens");
-                w.cache_read_input_tokens += n("cache_read_input_tokens");
-                w.output_tokens += n("output_tokens");
+                let t = crate::log::usage_tokens(usage);
+                w.input_tokens += t.input;
+                w.cache_creation_input_tokens += t.cache_creation;
+                w.cache_read_input_tokens += t.cache_read;
+                w.output_tokens += t.output;
                 // Cost is summed only when present; a costless run (codex) is counted separately so the
                 // cost figure's partialness is disclosed rather than silently read as $0.
                 match crate::log::record_cost(r) {

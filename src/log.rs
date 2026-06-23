@@ -42,6 +42,32 @@ pub fn cost_or_unavailable(cost_usd: Option<f64>) -> String {
 /// the sentinel can't drift between `arc log`'s row and its detail view.
 pub const COST_NO_USAGE: &str = "$?";
 
+/// The four token counts of a record's `usage` object (0 for any absent field) — the single place
+/// that knows those JSON field names, so the `arc usage` rollup (which sums them) and the stored-run
+/// detail (which renders them) can't drift on the key set.
+pub struct TokenCounts {
+    pub input: u64,
+    pub cache_creation: u64,
+    pub cache_read: u64,
+    pub output: u64,
+}
+
+/// Read the four token counts out of a `usage` JSON object (as nested in a run record).
+pub fn usage_tokens(usage: &serde_json::Value) -> TokenCounts {
+    let n = |key: &str| {
+        usage
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    TokenCounts {
+        input: n("input_tokens"),
+        cache_creation: n("cache_creation_input_tokens"),
+        cache_read: n("cache_read_input_tokens"),
+        output: n("output_tokens"),
+    }
+}
+
 /// A token+cost tally formatted for display — the single statement of the
 /// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share.
 pub fn usage_display(

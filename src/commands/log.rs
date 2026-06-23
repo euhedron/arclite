@@ -313,14 +313,14 @@ pub(crate) fn stored_human(v: &Value) -> String {
     // Ground-truth token usage + cost (no fabricated zeros for records predating the usage field).
     let usage = match run.get("usage") {
         Some(u) => {
-            let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+            let t = crate::log::usage_tokens(u);
             format!(
                 "tokens: {}",
                 crate::log::usage_display(
-                    n("input_tokens"),
-                    n("cache_creation_input_tokens"),
-                    n("cache_read_input_tokens"),
-                    n("output_tokens"),
+                    t.input,
+                    t.cache_creation,
+                    t.cache_read,
+                    t.output,
                     crate::log::record_cost(&run),
                 )
             )
