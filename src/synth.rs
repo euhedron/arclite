@@ -1059,28 +1059,39 @@ fn multi_synthesize(
     });
 
     let mut ok = Vec::new();
+    let mut errored = Vec::new(); // ran and *spent* but reported an error
     for outcome in outcomes {
         match outcome {
             Ok(s) if s.error.is_none() => ok.push(s),
-            // A run that ran but reported an error (e.g. a tripped cap) is skipped from the union the
-            // same as an outright failure — surfaced, not silently unioned. Per-failed-run logging is
-            // the single-run path's job; the multi-run union logs once, for the combined result.
-            Ok(s) => eprintln!(
-                "arclite: a run reported an error and was skipped: {}",
-                s.error.as_deref().unwrap_or_default()
-            ),
+            // A run that ran but reported an error (e.g. a tripped cap) is excluded from the result
+            // union (like an outright failure) and surfaced — but it *spent*, so it's kept for the cost
+            // fold below rather than having its tokens silently dropped from the fan-out total.
+            Ok(s) => {
+                eprintln!(
+                    "arclite: a run reported an error and was skipped: {}",
+                    s.error.as_deref().unwrap_or_default()
+                );
+                errored.push(s);
+            }
             Err(e) => eprintln!("arclite: a run failed and was skipped: {e:#}"),
         }
     }
     anyhow::ensure!(!ok.is_empty(), "all {n} runs failed");
     let succeeded = ok.len();
-    Ok((combine_runs(ok)?, succeeded))
+    let mut combined = combine_runs(ok)?;
+    // Fold the errored-but-spent children's usage into the total — their results are excluded, their
+    // cost is not — so the reported spend is the whole fan-out's, not just the surviving runs'.
+    if !errored.is_empty() {
+        combined.usage =
+            sum_usage(std::iter::once(&combined.usage).chain(errored.iter().map(|s| &s.usage)));
+    }
+    Ok((combined, succeeded))
 }
 
 /// Combine successful runs: sum their usage, then union the structured `results` (deduped) — or, for
 /// prose commands, present each run's text in turn.
 fn combine_runs(runs: Vec<ai::Synthesis>) -> anyhow::Result<ai::Synthesis> {
-    let usage = sum_usage(&runs);
+    let usage = sum_usage(runs.iter().map(|r| &r.usage));
     // Structured iff *every* run produced structured output; one prose run and the whole batch is
     // presented as prose. Collecting `Option<&Value>`s into `Option<Vec<_>>` expresses that all-or-
     // prose split in one step — no separate `all(is_some)` guard, no filter that can never filter.
@@ -1167,15 +1178,20 @@ fn union_results<'a>(
     Ok(serde_json::Value::Object(obj))
 }
 
-/// Sum token usage and cost across runs; the model is the same across them, so take the first's.
-fn sum_usage(runs: &[ai::Synthesis]) -> ai::Usage {
-    let mut total = runs[0].usage.clone();
-    for run in &runs[1..] {
-        total.input_tokens += run.usage.input_tokens;
-        total.output_tokens += run.usage.output_tokens;
-        total.cache_creation_input_tokens += run.usage.cache_creation_input_tokens;
-        total.cache_read_input_tokens += run.usage.cache_read_input_tokens;
-        total.cost_usd = total.cost_usd.zip(run.usage.cost_usd).map(|(a, b)| a + b);
+/// Sum token usage and cost across several runs' usages; the model is the same across them, so take
+/// the first's. The caller guarantees at least one (a fan-out always keeps ≥1 surviving run).
+fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
+    let mut usages = usages;
+    let mut total = usages
+        .next()
+        .expect("sum_usage needs at least one usage")
+        .clone();
+    for u in usages {
+        total.input_tokens += u.input_tokens;
+        total.output_tokens += u.output_tokens;
+        total.cache_creation_input_tokens += u.cache_creation_input_tokens;
+        total.cache_read_input_tokens += u.cache_read_input_tokens;
+        total.cost_usd = total.cost_usd.zip(u.cost_usd).map(|(a, b)| a + b);
     }
     total
 }
