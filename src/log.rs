@@ -144,22 +144,24 @@ pub fn repo_basename(repo: &str) -> &str {
         .expect("rsplit always yields at least one piece")
 }
 
-/// Current UNIX time in seconds.
-pub fn now_secs() -> u64 {
+/// The current instant as a duration since the UNIX epoch — the one `SystemTime::now()` read the time
+/// helpers below share, so the "clock before the epoch" invariant lives in a single place.
+fn since_epoch() -> std::time::Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before the UNIX epoch")
-        .as_secs()
+}
+
+/// Current UNIX time in seconds.
+pub fn now_secs() -> u64 {
+    since_epoch().as_secs()
 }
 
 /// The current instant's sub-second nanoseconds — opaque entropy appended to a run id so two runs that
 /// share a second and a pid (a reused pid across the concurrent sessions on a shared `~/.arc`) don't
 /// collide on the result-store key and overwrite each other.
 pub fn now_subsec_nanos() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is before the UNIX epoch")
-        .subsec_nanos()
+    since_epoch().subsec_nanos()
 }
 
 /// The arclite logs directory, `~/.arc/logs` — the single source the run log and the result store

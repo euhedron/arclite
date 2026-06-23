@@ -698,10 +698,9 @@ struct RunRecord<'a> {
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
     gate: Option<&'a str>,
     blocked: bool,
-    /// An agent-reported failure (e.g. a tripped budget cap): `Some` marks a run that ran and *spent*
-    /// (its real cost is in `usage`) but did not complete — so a failed run's spend stays in the
-    /// durable trace instead of vanishing. Omitted from the JSON when absent, so existing records and
-    /// the common success case are unchanged.
+    /// The run's agent-reported failure, mirrored from [`ai::Synthesis::error`] into the durable record
+    /// (`Some` ⇒ it spent but didn't complete; the real cost is in `usage`). Omitted from the JSON when
+    /// absent, so existing records and the success case are unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
 }
@@ -831,9 +830,8 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
-    // An agent-reported failure (e.g. a tripped budget cap): the run spent — `usage` holds the real
-    // billed cost — but didn't complete, so the gate and `--output` don't apply and the body is the
-    // failure itself. It is still logged below (with its spend) and exits non-zero, never vanishing.
+    // For an errored synthesis ([`ai::Synthesis::error`]), the gate and `--output` don't apply and the
+    // body is the failure itself — but it's still logged below (with its real spend) and exits non-zero.
     let errored = synthesis.error;
     let is_errored = errored.is_some();
     let cost = crate::log::cost_or_unavailable(usage.cost_usd);
