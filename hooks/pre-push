@@ -1,30 +1,21 @@
 #!/bin/sh
 # arclite gate (pre-push). Nothing here is canonical — a hook is configurable by definition; this is
-# only what arclite runs today, and it is meant to change. Edit the commands, their models, and
-# which ones block vs. advise, freely.
+# only what arclite runs today, and it is meant to change. Edit it freely.
 #
-# Today: `audit` blocks on findings on the default (Claude) model — the gate wants its precision;
-# `critique` and `suggest` advise (non-blocking) on the codex backend, since their value is broad
-# signal (not a verdict) and routing them off Claude spreads usage across subscriptions. All three run
-# concurrently; output is collected and printed in order once they finish. Opt-in via
-# `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`.
+# Today: just the blocking gate — `arc audit` on the default (Claude) model, which exits non-zero on
+# any rule violation and blocks the push. The broad-signal advisories (`critique`/`suggest`) are run
+# ad hoc, not every push: on Claude they add cost and stall under concurrent calls (three claude runs
+# a push is the passive spend arc exists to avoid), and the codex lane that made them cheap + parallel
+# is spend-capped. Run them by hand — `arc run critique`/`suggest` — when you want broad signal, or
+# re-add them here (e.g. behind a separate-quota `--backend`) when one is available.
+# Opt-in via `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`.
 if [ "$ARC_GATE" = "0" ]; then
     echo "arclite gate: skipped (ARC_GATE=0)" >&2
     exit 0
 fi
-echo "arclite: critique + suggest (advisory) and audit (gate), running concurrently…" >&2
-out=$(mktemp -d) || { echo "arclite gate: could not create a temp dir" >&2; exit 1; }
-arc run critique . --include src --backend codex    > "$out/critique" 2>&1 &
-arc run suggest  . --include src --backend codex    > "$out/suggest"  2>&1 &
-arc run audit    . --include src --fail-on-findings > "$out/audit"    2>&1 &
-audit_pid=$!
-wait "$audit_pid"
+echo "arclite: running the audit gate…" >&2
+arc run audit . --include src --fail-on-findings
 status=$?
-wait
-echo "=== critique (advisory) ==="; cat "$out/critique"
-echo "=== suggest (advisory) ===";  cat "$out/suggest"
-echo "=== audit (gate) ===";        cat "$out/audit"
-rm -rf "$out"
 if [ "$status" -ne 0 ]; then
     echo "arclite gate: push BLOCKED (arc audit exit $status). Fix the findings above, or override with 'ARC_GATE=0 git push'." >&2
 fi
