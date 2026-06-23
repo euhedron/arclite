@@ -60,6 +60,11 @@ const LAUNCH_WIDTH: u16 = 72;
 /// Height of the home masthead box: border (2) + its two lines (name+version, then the directory).
 const MASTHEAD_HEIGHT: u16 = 4;
 
+/// Height of a single-row text line — a header, hint, footer, or input. Named so the rows a view
+/// reserves for these (and [`LOG_ROWS`]) stay single-sourced with the `Constraint::Length` splits
+/// that lay them out, rather than recurring as bare `1`s.
+const LINE: u16 = 1;
+
 /// arclite's version, shown on the home masthead (as the agent CLIs head their opening screens).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -366,7 +371,7 @@ enum ConfigView {
 /// Visible run rows in the `log` list — the inline body (the viewport less the global footer) less the
 /// view's header and hint lines. One source for both the scroll math and the render window, so they
 /// can't disagree on how many rows are on screen.
-const LOG_ROWS: usize = (VIEWPORT_HEIGHT - 1 - 1 - 1) as usize;
+const LOG_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - LINE) as usize;
 
 /// The `log` view's state: the completed-run records (newest first) or the error reading them, the
 /// cursor + scroll offset over the list, and — when drilled in — the selected run's rendered detail.
@@ -736,7 +741,7 @@ fn handle_log_key(app: &mut App, code: KeyCode) {
 /// the palette, when open, draws as an overlay on top.
 fn render(frame: &mut Frame, app: &App) {
     let [body, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+        Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(frame.area());
 
     match app.route {
         Route::Home => render_home(frame, body, &app.cwd),
@@ -795,7 +800,8 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
-    let [header, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let [header, body] =
+        Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
 
     frame.render_widget(Line::from("live status").bold(), header);
 
@@ -847,9 +853,9 @@ const CONFIG_COLUMN_WIDTHS: [Constraint; 2] = [Constraint::Length(32), Constrain
 /// follow-up (likely arrow-key pickers, shared with the launch-config cut).
 fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     let [header, body, layers_line] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(LINE),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(LINE),
     ])
     .areas(area);
     frame.render_widget(Line::from("config").bold(), header);
@@ -885,9 +891,9 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
 /// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     let [header, body, hint] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(LINE),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(LINE),
     ])
     .areas(area);
 
@@ -990,7 +996,7 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
     frame.render_widget(block, rect);
 
     let [input_area, list_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+        Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(inner);
     frame.render_widget(Line::from(format!("/{}", palette.query)), input_area);
 
     if matches.is_empty() {
