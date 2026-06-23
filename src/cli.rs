@@ -79,6 +79,9 @@ pub enum Command {
     /// Aggregate run stats from the log — runs, blocks, tokens, and cost over the past hour, day,
     /// week, and all time, plus per-command totals.
     Usage(UsageArgs),
+    /// Promote a logged run's findings into the repo's `.arc/findings/` ledger — the system writes the
+    /// entries (atomically, collision-free), so findings are curated without hand-editing `.arc`.
+    Promote(PromoteArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
@@ -195,6 +198,16 @@ pub struct LogArgs {
 
 #[derive(Debug, Args)]
 pub struct UsageArgs {}
+
+/// Arguments for `arc promote`.
+#[derive(Debug, Args)]
+pub struct PromoteArgs {
+    /// The run id — or a unique id prefix — whose findings to promote (as shown by `arc log`).
+    pub run: String,
+    /// Preview which findings would be promoted, and where, without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
 
 /// Arguments for `arc completions`.
 #[derive(Debug, Args)]

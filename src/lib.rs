@@ -132,6 +132,9 @@ pub fn run() -> ExitCode {
         }
         Command::Log(args) => commands::log::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Usage(args) => commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Promote(args) => {
+            commands::promote::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Completions(args) => {
             // Take the binary name from the command itself (cli.rs's `#[command(name)]`) rather than
             // repeating an "arc" literal here — one rename point, not several.

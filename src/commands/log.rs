@@ -200,7 +200,7 @@ fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
 /// Resolve a full run id, or a unique prefix of one, against the result store (exact match wins;
 /// an ambiguous prefix errors listing the candidates). An id with no stored entry passes through
 /// unchanged so [`show`] reports the authoritative "no stored result" error.
-fn resolve_id(prefix: &str) -> anyhow::Result<String> {
+pub(crate) fn resolve_id(prefix: &str) -> anyhow::Result<String> {
     let Some(dir) = crate::log::results_dir() else {
         return Ok(prefix.to_owned());
     };

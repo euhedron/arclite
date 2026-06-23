@@ -3,6 +3,7 @@ pub mod doctor;
 pub mod init;
 pub mod inspect;
 pub mod log;
+pub mod promote;
 pub mod rules;
 pub mod status;
 pub mod tui;
