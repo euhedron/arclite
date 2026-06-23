@@ -857,7 +857,11 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         ),
         _ => None,
     };
-    let gate_blocked = gate_findings.is_some_and(|n| n > 0);
+    // A gated fan-out (`--fail-on-findings --runs N`) that lost runs can't certify "clean" — the
+    // dropped runs' coverage is missing — so fail closed: block even when the survivors found nothing.
+    // (`runs` is the surviving count; a failed *or* errored child reduces it below `opts.runs`.)
+    let incomplete_gate = opts.gate.is_some() && runs < opts.runs;
+    let gate_blocked = gate_findings.is_some_and(|n| n > 0) || incomplete_gate;
     // --output: also write the result as a doc with a provenance header (a completed run only — a
     // failed run has no result body to write).
     let written = match (is_errored, opts.output) {
@@ -889,8 +893,17 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // Gate outcome on its own line so a blocked commit is unmistakable (real run only — the dry-run
     // path notes that gating is armed instead). Shown for pass too, so "on and clean" isn't silent.
     if let (Some(field), Some(n)) = (opts.gate, gate_findings) {
+        let incomplete = if incomplete_gate {
+            format!(
+                " · {}/{} runs failed, failing closed",
+                opts.runs - runs,
+                opts.runs
+            )
+        } else {
+            String::new()
+        };
         human.push_str(&format!(
-            "\ngate: {} — {n} `{field}`{}",
+            "\ngate: {} — {n} `{field}`{incomplete}{}",
             crate::log::gate_label(gate_blocked),
             if gate_blocked {
                 format!(" (exit {GATE_BLOCKED_EXIT})")
