@@ -110,8 +110,11 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
     let repo_full = field(r, "repo");
     let repo = repo_basename(&repo_full);
     let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
+    // A run that errored (spent but didn't complete) is flagged so failed runs stand out in the list;
+    // it's mutually exclusive with a gate verdict (a failed run never reaches the gate).
+    let errored = r.get("error").is_some();
     format!(
-        "{id} · {age} · {} · {} · {} · {}{}",
+        "{id} · {age} · {} · {} · {} · {}{}{}",
         field(r, "command"),
         repo,
         field(r, "model"),
@@ -121,6 +124,7 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
         } else {
             String::new()
         },
+        if errored { " · errored" } else { "" },
     )
 }
 
@@ -279,7 +283,11 @@ pub(crate) fn stored_human(v: &Value) -> String {
         field(&run, "backend"),
         field(&run, "model")
     ));
-    if run.get("gate").and_then(Value::as_str).is_some() {
+    // A run that errored (spent but didn't complete) reports the failure instead of a gate verdict —
+    // it never reached the gate, so showing "gate: passed" would misread.
+    if let Some(error) = run.get("error").and_then(Value::as_str) {
+        meta.push_str(&format!(" · errored: {error}"));
+    } else if run.get("gate").and_then(Value::as_str).is_some() {
         let blocked = run.get("blocked").and_then(Value::as_bool) == Some(true);
         meta.push_str(&format!(" · gate: {}", crate::log::gate_label(blocked)));
     }

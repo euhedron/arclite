@@ -13,6 +13,8 @@ struct Window {
     window: &'static str,
     runs: usize,
     blocked: usize,
+    /// Runs that errored — spent (their usage is in the token/cost sums) but didn't complete.
+    errored: usize,
     cost_usd: f64,
     input_tokens: u64,
     cache_creation_input_tokens: u64,
@@ -57,6 +59,7 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 window: label,
                 runs: 0,
                 blocked: 0,
+                errored: 0,
                 cost_usd: 0.0,
                 input_tokens: 0,
                 cache_creation_input_tokens: 0,
@@ -73,6 +76,9 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 w.runs += 1;
                 if r.get("blocked").and_then(Value::as_bool) == Some(true) {
                     w.blocked += 1;
+                }
+                if r.get("error").is_some() {
+                    w.errored += 1;
                 }
                 // Sum tokens for any record carrying a `usage` object — claude *and* codex. Codex
                 // reports tokens without a dollar cost, so keying the token sums off cost (as before)
@@ -125,10 +131,11 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .iter()
         .map(|w| {
             format!(
-                "{}: {} runs ({} blocked) · {}",
+                "{}: {} runs ({} blocked, {} errored) · {}",
                 w.window,
                 w.runs,
                 w.blocked,
+                w.errored,
                 crate::log::usage_display(
                     w.input_tokens,
                     w.cache_creation_input_tokens,

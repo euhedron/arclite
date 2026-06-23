@@ -28,6 +28,11 @@ pub struct Synthesis {
     /// Schema-validated structured output — present only when a `--json-schema` was requested
     /// (i.e. `--structured`). Read this for the typed result instead of parsing `text`.
     pub structured: Option<serde_json::Value>,
+    /// An agent-reported failure (e.g. a tripped `--max-budget-usd` cap → `error_max_budget_usd`): the
+    /// run *ran and spent* — so `usage` holds the real, billed spend — but did not complete. Carried as
+    /// a value, not an `Err`, so [`crate::synth::run`] still logs the spend instead of losing it on the
+    /// error path. `None` is a normal completion.
+    pub error: Option<String>,
 }
 
 /// A zero-cost prompt-size estimate: the prompt's char count and an approximate token count.
@@ -118,12 +123,22 @@ struct ClaudeJson {
     model_usage: std::collections::BTreeMap<String, PerModelUsage>,
     /// Present when `--json-schema` was passed: the validated, typed result.
     structured_output: Option<serde_json::Value>,
+    /// Human-readable failure detail on an error payload (e.g. "Reached maximum budget ($0.001)"),
+    /// preferred over the bare `subtype` code when present.
+    #[serde(default)]
+    errors: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct PerModelUsage {
+    #[serde(rename = "inputTokens", default)]
+    input_tokens: u64,
     #[serde(rename = "outputTokens", default)]
     output_tokens: u64,
+    #[serde(rename = "cacheCreationInputTokens", default)]
+    cache_creation_input_tokens: u64,
+    #[serde(rename = "cacheReadInputTokens", default)]
+    cache_read_input_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -137,18 +152,55 @@ struct ClaudeUsage {
 /// Parse the Claude CLI JSON payload into a [`Synthesis`]. The model reported is resolved from the
 /// payload's per-model usage — the models that actually ran — never echoed from the request, so a
 /// substitution can't mislabel the run.
-pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
+pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthesis> {
     let parsed: ClaudeJson =
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
+    // The synthesis model is the modelUsage entry that produced the output — the one with the most
+    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls). Resolved once,
+    // shared by the success and error paths; never echoed from the request, so a substitution can't
+    // mislabel the run.
+    let model = parsed
+        .model_usage
+        .iter()
+        .max_by_key(|(_, usage)| usage.output_tokens)
+        .map(|(id, _)| id.clone());
     if parsed.is_error.unwrap_or(false) {
-        // An error payload carries no `result` text (confirmed on a tripped --max-budget-usd run);
-        // its `subtype` names the failure instead.
-        let what = parsed
-            .result
-            .filter(|r| !r.is_empty())
-            .or(parsed.subtype)
-            .unwrap_or_else(|| "no detail in the payload".to_owned());
-        bail!("claude reported an error: {what}");
+        // A run that ran and *spent* but did not complete (e.g. a tripped --max-budget-usd cap). On an
+        // error payload the top-level `usage` block is zeroed (confirmed by exercise) while the real
+        // tokens are in `modelUsage` and the real cost in `total_cost_usd` — so the honest usage sums
+        // modelUsage rather than reading the zeros, and the failure is carried as a value (logged), not
+        // bailed (which would lose the spend). The model falls back to the requested one only when the
+        // payload named none (an error before any model ran).
+        let usage = Usage {
+            model: model.unwrap_or_else(|| requested_model.to_owned()),
+            input_tokens: parsed.model_usage.values().map(|m| m.input_tokens).sum(),
+            output_tokens: parsed.model_usage.values().map(|m| m.output_tokens).sum(),
+            cache_creation_input_tokens: parsed
+                .model_usage
+                .values()
+                .map(|m| m.cache_creation_input_tokens)
+                .sum(),
+            cache_read_input_tokens: parsed
+                .model_usage
+                .values()
+                .map(|m| m.cache_read_input_tokens)
+                .sum(),
+            cost_usd: parsed.total_cost_usd,
+        };
+        // Prefer the human-readable `errors` detail; fall back to the `subtype` code, then a placeholder.
+        let detail = if parsed.errors.is_empty() {
+            parsed
+                .subtype
+                .unwrap_or_else(|| "no detail in the payload".to_owned())
+        } else {
+            parsed.errors.join("; ")
+        };
+        return Ok(Synthesis {
+            text: String::new(),
+            usage,
+            structured: None,
+            error: Some(detail),
+        });
     }
     let text = parsed.result.context("claude JSON had no `result` field")?;
     // usage and cost are part of a successful response's contract; if the CLI omits them, error
@@ -157,15 +209,7 @@ pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
     let cost_usd = parsed
         .total_cost_usd
         .context("claude JSON had no `total_cost_usd` field")?;
-    // The synthesis model is the modelUsage entry that produced the output — the one with the most
-    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls). Like usage
-    // and cost, an absent modelUsage errors loudly rather than substituting a plausible label.
-    let model = parsed
-        .model_usage
-        .iter()
-        .max_by_key(|(_, usage)| usage.output_tokens)
-        .map(|(id, _)| id.clone())
-        .context("claude JSON had no `modelUsage` entries")?;
+    let model = model.context("claude JSON had no `modelUsage` entries")?;
     Ok(Synthesis {
         text,
         usage: Usage {
@@ -177,6 +221,7 @@ pub fn parse_result(json: &str) -> anyhow::Result<Synthesis> {
             cost_usd: Some(cost_usd),
         },
         structured: parsed.structured_output,
+        error: None,
     })
 }
 
@@ -447,9 +492,11 @@ fn synthesize_claude(
         (None, false) => bail!("claude exited with {}: {}", status, stderr.trim()),
         (None, true) => bail!("claude produced no `result` event"),
     };
-    let synthesis = parse_result(&result_line)?;
-    if !status.success() {
-        // The payload parsed as a success yet the process failed — surface the contradiction.
+    let synthesis = parse_result(&result_line, req.model)?;
+    // A non-zero exit whose payload parsed as an error is the expected failed-run shape — the failure
+    // is carried in `synthesis.error` (with its real usage) for logging. Only a non-zero exit that
+    // parsed as a *success* is a genuine contradiction worth bailing on.
+    if !status.success() && synthesis.error.is_none() {
         bail!("claude exited with {} despite a success result", status);
     }
     Ok(synthesis)
@@ -690,6 +737,7 @@ fn synthesize_codex(
             cost_usd: None, // codex reports tokens only — no fabricated dollar cost
         },
         structured,
+        error: None, // codex errored-run logging is a follow-up; success-only for now
     })
 }
 

@@ -24,6 +24,11 @@ const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also lo
 /// Also formatted into the `arc --help` exit-code section (see `cli::exit_codes_help`).
 pub(crate) const GATE_BLOCKED_EXIT: u8 = 2;
 
+/// Exit code for a run that *errored* — the agent reported a failure (e.g. a tripped budget cap)
+/// mid-run. Distinct from a gate block (a clean run with findings, [`GATE_BLOCKED_EXIT`]) and from
+/// success, so a hook or script can tell "the run broke" from "the run ran and found problems".
+const ERRORED_EXIT: u8 = 1;
+
 const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 
 /// The single key for every command's structured output: a `results` array. Defined once — the
@@ -652,6 +657,9 @@ struct SynthOutput<'a> {
     log: Option<String>,
     /// Schema-validated structured result, if `--structured` was used.
     structured: Option<serde_json::Value>,
+    /// An agent-reported failure (the run spent but didn't complete); absent on a normal completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 /// One line of `~/.arc/logs/runs.jsonl`: the durable, machine-readable trace of a real run — its
@@ -690,6 +698,12 @@ struct RunRecord<'a> {
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
     gate: Option<&'a str>,
     blocked: bool,
+    /// An agent-reported failure (e.g. a tripped budget cap): `Some` marks a run that ran and *spent*
+    /// (its real cost is in `usage`) but did not complete — so a failed run's spend stays in the
+    /// durable trace instead of vanishing. Omitted from the JSON when absent, so existing records and
+    /// the common success case are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 /// The full result of one run, written to `~/.arc/logs/results/<id>.json` so `arc log <id>` can
@@ -817,12 +831,21 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
+    // An agent-reported failure (e.g. a tripped budget cap): the run spent — `usage` holds the real
+    // billed cost — but didn't complete, so the gate and `--output` don't apply and the body is the
+    // failure itself. It is still logged below (with its spend) and exits non-zero, never vanishing.
+    let errored = synthesis.error;
+    let is_errored = errored.is_some();
     let cost = crate::log::cost_or_unavailable(usage.cost_usd);
-    let body = body_display(structured.as_ref(), &text);
+    let body = match &errored {
+        Some(error) => format!("error: {error}"),
+        None => body_display(structured.as_ref(), &text),
+    };
     // Count the gated findings before `structured` is moved out. The schema guarantees the field is
     // a present array; a missing one is the CLI ignoring the requested schema — an error, not a 0-pass.
-    let gate_findings = match opts.gate {
-        Some(field) => Some(
+    // A failed run has no findings to gate.
+    let gate_findings = match (is_errored, opts.gate) {
+        (false, Some(field)) => Some(
             structured
                 .as_ref()
                 .and_then(|v| v.get(field))
@@ -832,12 +855,13 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
                 })?
                 .len(),
         ),
-        None => None,
+        _ => None,
     };
     let gate_blocked = gate_findings.is_some_and(|n| n > 0);
-    // --output: also write the result as a doc with a provenance header.
-    let written = match opts.output {
-        Some(dir) => Some(write_output(
+    // --output: also write the result as a doc with a provenance header (a completed run only — a
+    // failed run has no result body to write).
+    let written = match (is_errored, opts.output) {
+        (false, Some(dir)) => Some(write_output(
             dir,
             opts.command,
             &body,
@@ -845,7 +869,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             opts.sources.len(),
             &cost,
         )?),
-        None => None,
+        _ => None,
     };
     let mut human = format!(
         "{}\n\nrun: {}\ncost: {}",
@@ -902,6 +926,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,
+            error: errored.as_deref(),
         };
         let logged = crate::log::append(&record);
         // Store the full result (best-effort) so `arc log <id>` can re-show it without re-running.
@@ -938,11 +963,14 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         output: written.map(|p| p.display().to_string()),
         log: logged.map(|p| p.display().to_string()),
         structured,
+        error: errored,
     };
     emit(&out, &human, opts.json)?;
     // The gate's verdict is the process exit code (distinct from error) so a hook enforces on status
     // alone; SUCCESS when not gating or when the findings collection is empty.
-    Ok(if gate_blocked {
+    Ok(if is_errored {
+        ExitCode::from(ERRORED_EXIT)
+    } else if gate_blocked {
         ExitCode::from(GATE_BLOCKED_EXIT)
     } else {
         ExitCode::SUCCESS
@@ -1002,7 +1030,14 @@ fn multi_synthesize(
     let mut ok = Vec::new();
     for outcome in outcomes {
         match outcome {
-            Ok(s) => ok.push(s),
+            Ok(s) if s.error.is_none() => ok.push(s),
+            // A run that ran but reported an error (e.g. a tripped cap) is skipped from the union the
+            // same as an outright failure — surfaced, not silently unioned. Per-failed-run logging is
+            // the single-run path's job; the multi-run union logs once, for the combined result.
+            Ok(s) => eprintln!(
+                "arclite: a run reported an error and was skipped: {}",
+                s.error.as_deref().unwrap_or_default()
+            ),
             Err(e) => eprintln!("arclite: a run failed and was skipped: {e:#}"),
         }
     }
@@ -1030,6 +1065,7 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> anyhow::Result<ai::Synthesis> {
             text,
             usage,
             structured: Some(combined),
+            error: None,
         })
     } else {
         let text = runs
@@ -1042,6 +1078,7 @@ fn combine_runs(runs: Vec<ai::Synthesis>) -> anyhow::Result<ai::Synthesis> {
             text,
             usage,
             structured: None,
+            error: None,
         })
     }
 }
