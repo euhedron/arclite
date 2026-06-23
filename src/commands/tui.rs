@@ -265,10 +265,8 @@ impl App {
         }) else {
             return;
         };
-        let spawned = std::env::current_exe().and_then(|exe| {
-            std::process::Command::new(exe)
-                .args(["run", verb, "."])
-                .stdin(std::process::Stdio::null())
+        let spawned = launch_command(verb).and_then(|mut cmd| {
+            cmd.stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -436,13 +434,23 @@ impl LogView {
     }
 }
 
+/// The base `arc run <verb> .` command both the dry-run preview and the confirmed launch build on —
+/// one definition so the previewed run can't drift from the real one (the gate's preview-equals-run
+/// guarantee). The caller appends `--dry-run` (preview) or null stdio (launch). Errs if the running
+/// `arc` binary can't be located.
+fn launch_command(verb: &str) -> std::io::Result<std::process::Command> {
+    let mut cmd = std::process::Command::new(std::env::current_exe()?);
+    cmd.args(["run", verb, "."]);
+    Ok(cmd)
+}
+
 /// Run a verb's dry-run as a subprocess of this same `arc` binary and return its **preview** — the
 /// header (params + estimate) arc prints before the appended prompt — for the gate, or an error
 /// string. Zero spend (`--dry-run`); the cockpit shows arc's own output rather than re-deriving it.
 fn dry_run_preview(verb: &str) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("can't locate the arc binary: {e}"))?;
-    let output = std::process::Command::new(exe)
-        .args(["run", verb, ".", "--dry-run"])
+    let output = launch_command(verb)
+        .map_err(|e| format!("can't locate the arc binary: {e}"))?
+        .arg("--dry-run")
         .output()
         .map_err(|e| format!("couldn't start the dry-run: {e}"))?;
     if !output.status.success() {
