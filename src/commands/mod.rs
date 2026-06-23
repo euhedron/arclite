@@ -172,7 +172,7 @@ pub fn run_synthesis(
     if args.ranked {
         prompt.push_str(RANKED_NOTE);
     }
-    synth::run(
+    let outcome = synth::run(
         &prompt,
         &SynthOptions {
             model: &model,
@@ -196,7 +196,25 @@ pub fn run_synthesis(
             json: global.json,
             log,
         },
-    )
+    );
+    // A backend that fails (e.g. codex hitting its workspace spend cap, or an unavailable model) is
+    // often recoverable by switching, so name the other available backends rather than leaving the
+    // user to recall them. Only on a hard error — a logged errored run (a tripped per-run budget the
+    // user set) is the user's own cap, not a backend to switch away from.
+    if outcome.is_err() {
+        let others: Vec<&str> = crate::ai::KNOWN_BACKENDS
+            .iter()
+            .copied()
+            .filter(|&b| b != backend_name.as_str())
+            .collect();
+        if let Some(first) = others.first() {
+            eprintln!(
+                "arclite: the {backend_name} backend failed — other backends available: {} (switch with --backend {first})",
+                others.join(", ")
+            );
+        }
+    }
+    outcome
 }
 
 /// What `--rules`/`--ruleset`/`defaults.ruleset` resolved to: a human description of the selection
