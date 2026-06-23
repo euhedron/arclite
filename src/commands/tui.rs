@@ -65,6 +65,10 @@ const MASTHEAD_HEIGHT: u16 = 4;
 /// that lay them out, rather than recurring as bare `1`s.
 const LINE: u16 = 1;
 
+/// Rows a bordered popup box spends on its top + bottom border — named (like [`LINE`]) so a popup's
+/// height math (border + content) doesn't recur as a bare `2`.
+const BORDER: u16 = 2;
+
 /// arclite's version, shown on the home masthead (as the agent CLIs head their opening screens).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -988,7 +992,7 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
     let matches = palette.matches();
     // Height: border (2) + input line (1) + one row per match (at least one, for the empty message).
     let rows = matches.len().max(1) as u16;
-    let rect = centered(area, PALETTE_WIDTH, rows + 3);
+    let rect = centered(area, PALETTE_WIDTH, rows + BORDER + LINE);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
     let block = Block::bordered().title("commands");
@@ -1040,7 +1044,7 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
     };
 
     let lines: Vec<Line> = body.lines().map(Line::from).collect();
-    let height = (lines.len() as u16 + 2).min(area.height); // border (2) + body; the footer holds the hint
+    let height = (lines.len() as u16 + BORDER).min(area.height); // border + body; the footer holds the hint
     let rect = centered(area, LAUNCH_WIDTH, height);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 

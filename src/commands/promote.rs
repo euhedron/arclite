@@ -129,7 +129,11 @@ fn primary_text(finding: &Value) -> &str {
         .unwrap_or("finding")
 }
 
-/// A kebab-case id stem from a finding's text: its first several alphanumeric words, lowercased.
+/// How many leading words of a finding's text form its slug id — enough to be recognizable without an
+/// unwieldy filename (a curator can rename).
+const SLUG_WORDS: usize = 8;
+
+/// A kebab-case id stem from a finding's text: its first [`SLUG_WORDS`] alphanumeric words, lowercased.
 fn slug(text: &str) -> String {
     let s = text
         .split_whitespace()
@@ -140,7 +144,7 @@ fn slug(text: &str) -> String {
                 .to_lowercase()
         })
         .filter(|w| !w.is_empty())
-        .take(8)
+        .take(SLUG_WORDS)
         .collect::<Vec<_>>()
         .join("-");
     if s.is_empty() {
