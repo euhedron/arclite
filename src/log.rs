@@ -152,6 +152,16 @@ pub fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// The current instant's sub-second nanoseconds — opaque entropy appended to a run id so two runs that
+/// share a second and a pid (a reused pid across the concurrent sessions on a shared `~/.arc`) don't
+/// collide on the result-store key and overwrite each other.
+pub fn now_subsec_nanos() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before the UNIX epoch")
+        .subsec_nanos()
+}
+
 /// The arclite logs directory, `~/.arc/logs` — the single source the run log and the result store
 /// both build on (`None` only if the home directory can't be determined).
 fn logs_dir() -> Option<PathBuf> {
@@ -250,7 +260,11 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
             .create(true)
             .append(true)
             .open(p)?;
-        writeln!(file, "{line}")
+        // One `write_all` of the record *and* its newline — a single append-positioned write the OS
+        // serializes — so two sessions logging to the shared `runs.jsonl` at once can't interleave into
+        // a corrupt line (a `writeln!`'s separate content and newline writes could). A run record is
+        // well under the atomic-write size, so this doesn't partial-write.
+        file.write_all(format!("{line}\n").as_bytes())
     })
 }
 

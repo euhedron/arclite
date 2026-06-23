@@ -667,7 +667,7 @@ struct SynthOutput<'a> {
 /// spend, no call). The full [`ai::Usage`] is nested verbatim, so token/cost fields single-source.
 #[derive(Serialize)]
 struct RunRecord<'a> {
-    /// Unique run id (`<ts>-<pid>`) — keys the full-result store at `~/.arc/logs/results/<id>.json`.
+    /// Unique run id (`<ts>-<pid>-<nanos>`) — keys the full-result store at `~/.arc/logs/results/<id>.json`.
     id: String,
     ts: u64,
     /// The arc binary's version (single-sourced from Cargo.toml at compile time), so runs stay
@@ -903,7 +903,14 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // the terminal scrollback. A logging failure warns but never fails the command.
     let (logged, id) = if opts.log {
         let ts = crate::log::now_secs();
-        let id = format!("{ts}-{}", std::process::id());
+        // `<secs>-<pid>-<nanos>`: the trailing nanos guard against a collision when two runs share a
+        // second and a pid (a reused pid across concurrent sessions on the shared `~/.arc`), which would
+        // otherwise overwrite one run's stored result with another's.
+        let id = format!(
+            "{ts}-{}-{}",
+            std::process::id(),
+            crate::log::now_subsec_nanos()
+        );
         let record = RunRecord {
             id: id.clone(),
             ts,
