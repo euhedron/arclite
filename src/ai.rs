@@ -60,14 +60,18 @@ pub fn estimate(prompt: &str) -> Estimate {
 /// `.cmd` shim, which forwards args through batch `%*`, corrupting quote-heavy args like an inline
 /// `--json-schema` payload (Rust's `.cmd` quoting does not save them — confirmed empirically). So
 /// when `which` returns such a shim, [`shim_target`] resolves the real `.exe` it runs and we spawn
-/// that directly: no shell/batch re-parse, so std's standard argv quoting holds. A program `which`
-/// can't find falls back to the bare name, so the spawn surfaces a normal "not found"; the fallible
-/// return propagates [`shim_target`]'s error. Shared by every external-process call arclite makes.
+/// that directly: no shell/batch re-parse, so std's standard argv quoting holds. A program genuinely
+/// *not on* `PATH` falls back to the bare name, so the spawn surfaces a normal "not found"; a real
+/// PATH-resolution failure (not mere absence) is surfaced rather than disguised as "not found", and
+/// the fallible return also propagates [`shim_target`]'s error. Shared by every external-process call.
 pub fn command(program: &str) -> anyhow::Result<Command> {
     let exe = match which::which(program) {
         Ok(resolved) => Some(shim_target(&resolved)?.unwrap_or(resolved)),
-        // Not found on PATH: fall back to the bare name so the spawn surfaces a normal "not found".
-        Err(_) => None,
+        // Genuinely not on PATH: fall back to the bare name so the spawn surfaces a normal "not
+        // found". Any *other* resolution failure is real — surface it rather than disguise it as
+        // "not found" at spawn (mirrors doctor's probe, which separates not-found from other errors).
+        Err(which::Error::CannotFindBinaryPath) => None,
+        Err(e) => return Err(e).context(format!("resolving `{program}` on PATH")),
     };
     Ok(match exe {
         Some(path) => Command::new(path),

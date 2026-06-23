@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, InspectArgs};
@@ -135,9 +136,16 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
     let manifests: Vec<String> = manifest_types.into_iter().collect();
     manifest_paths.sort();
 
+    // `.git` present vs. unreadable are different facts: a stat error must not collapse into
+    // "not a git repo" in the scan that feeds synthesis, so surface it instead of swallowing it.
+    let git_dir = root.join(".git");
+    let is_git_repo = git_dir
+        .try_exists()
+        .with_context(|| format!("cannot determine whether {} exists", git_dir.display()))?;
+
     let report = InspectReport {
         path: root.display().to_string(),
-        is_git_repo: root.join(".git").exists(),
+        is_git_repo,
         files,
         dirs,
         bytes,
