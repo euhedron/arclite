@@ -42,7 +42,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let command = record
         .get("command")
         .and_then(Value::as_str)
-        .unwrap_or("run")
+        .context("the stored run record has no `command`")?
         .to_owned();
     let repo = record
         .get("repo")
