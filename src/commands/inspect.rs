@@ -38,6 +38,11 @@ const TOP_DIRS: usize = 12;
 /// align — named like the other layout constants rather than buried in the format string.
 const KEY_COLUMN_WIDTH: usize = 14;
 
+/// Width of the top-level label column (`path`, `git repo`, `files`, …) in the human output, so the
+/// values align — named (like [`KEY_COLUMN_WIDTH`] and doctor's `LABEL_WIDTH`) rather than hand-spaced
+/// into the format literal.
+const LABEL_WIDTH: usize = 11;
+
 #[derive(Debug, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -172,19 +177,23 @@ fn top_ranked(counts: &BTreeMap<String, usize>, n: usize) -> String {
 pub fn run(args: &InspectArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let (report, _root) = gather(&args.path)?;
 
-    let mut human = format!(
-        "path       {}\ngit repo   {}\nfiles      {}\ndirs       {}\nbytes      {}\nmanifests  {}\ntop directories:\n{}\ntop extensions:\n{}",
-        report.path,
-        report.is_git_repo,
-        report.files,
-        report.dirs,
-        report.bytes,
-        crate::join_or(&report.manifests, "(none)"),
+    let row = |label: &str, value: &str| crate::labeled_row(label, value, LABEL_WIDTH);
+    let mut human = [
+        row("path", &report.path),
+        row("git repo", &report.is_git_repo.to_string()),
+        row("files", &report.files.to_string()),
+        row("dirs", &report.dirs.to_string()),
+        row("bytes", &report.bytes.to_string()),
+        row("manifests", &crate::join_or(&report.manifests, "(none)")),
+    ]
+    .join("\n");
+    human.push_str(&format!(
+        "\ntop directories:\n{}\ntop extensions:\n{}",
         top_ranked(&report.by_top_dir, TOP_DIRS),
         top_ranked(&report.by_extension, TOP_EXTENSIONS),
-    );
+    ));
     // Surface the walk's gitignore filtering so the counts above aren't read as the whole tree.
-    human.push_str(&format!("\nscope      {}", crate::walk::SCOPE_NOTE));
+    human.push_str(&format!("\n{}", row("scope", crate::walk::SCOPE_NOTE)));
     // Surface unreadable entries (kept out of the counts above) so the scan isn't quietly partial.
     if report.walk_errors > 0 {
         human.push_str(&format!(

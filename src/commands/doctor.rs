@@ -130,7 +130,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     };
     // One label column at a single-sourced width, so values align without hand-spaced labels that
     // must be kept in sync with a bare alignment literal by eye.
-    let row = |label: &str, value: &str| format!("{label:<width$}{value}", width = LABEL_WIDTH);
+    let row = |label: &str, value: &str| crate::labeled_row(label, value, LABEL_WIDTH);
     let mut lines = vec![
         row("arclite", report.arclite),
         row(

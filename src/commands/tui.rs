@@ -127,7 +127,8 @@ impl Command {
             Command::Summarize => crate::cli::NAME_SUMMARIZE,
             Command::Extract => crate::cli::NAME_EXTRACT,
             Command::Evolve => crate::cli::NAME_EVOLVE,
-            // Views/quit are TUI-only — no CLI subcommand — so their names live here.
+            // Views and quit open an in-process view (not an `arc run` subprocess like the verbs),
+            // and their names are defined here rather than reused from a cli NAME_* constant.
             Command::Status => "status",
             Command::Config => "config",
             Command::Log => "log",
@@ -147,7 +148,7 @@ impl Command {
             Command::Summarize => crate::cli::VERB_SUMMARIZE,
             Command::Extract => crate::cli::VERB_EXTRACT,
             Command::Evolve => crate::cli::VERB_EVOLVE,
-            // Views and quit are TUI-only (no CLI subcommand), so their hints live here.
+            // Views and quit open an in-process view (not a subprocess launch), so their hints live here.
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
             Command::Log => "browse completed runs and their results",
