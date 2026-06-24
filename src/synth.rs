@@ -464,10 +464,10 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
-/// Assemble the standard repo context shared by every synthesis command: the scan summary,
-/// README + manifest bodies, any `--include`d files/dirs (and, with `changed`, git-changed
-/// files), and rules — tracking each source (and what's excluded) for the run report. `max`
-/// is the optional caller cap; by default files are read whole. Commands differ only in the prompt.
+/// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
+/// summary + the manifests an inspect walk detects; the README; any `--include`d files/dirs (and, with
+/// `changed`, git-changed files); and rules — tracking each source (and what's excluded) for the run
+/// report. `max` is the optional caller cap; by default files are read whole. The prompt differs per command.
 pub fn gather_context(
     path: &Path,
     includes: &[PathBuf],
@@ -475,15 +475,38 @@ pub fn gather_context(
     max: Option<usize>,
     changed: bool,
     exclude: &[String],
+    scan: bool,
 ) -> anyhow::Result<Context> {
-    let (report, root) = crate::commands::inspect::gather(path)?;
+    // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
+    // (scan=false) drops both — and the walk itself — so a diff-scoped run's cost tracks the diff, not a
+    // fixed whole-repo baseline; the root still resolves directly, for --include/--changed and the README.
+    let (report, root) = if scan {
+        let (report, root) = crate::commands::inspect::gather(path)?;
+        (Some(report), root)
+    } else {
+        // No scan to validate the path, so check it here — an unreadable target surfaces, a missing or
+        // non-directory one says so (the same distinction inspect::gather makes).
+        let root = crate::commands::resolve_root(path)?;
+        anyhow::ensure!(
+            crate::try_is_dir(&root)
+                .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", root.display()))?,
+            "{} is not an existing directory",
+            root.display()
+        );
+        (None, root)
+    };
 
-    let mut text = format!(
-        "Repository scan (JSON):\n{}\n",
-        serde_json::to_string_pretty(&report)?
-    );
-    let mut sources = vec!["repository scan".to_owned()];
+    let mut text = String::new();
+    let mut sources: Vec<String> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
+
+    if let Some(report) = &report {
+        text = format!(
+            "Repository scan (JSON):\n{}\n",
+            serde_json::to_string_pretty(report)?
+        );
+        sources.push("repository scan".to_owned());
+    }
 
     add_file(
         &root.join("README.md"),
@@ -493,18 +516,20 @@ pub fn gather_context(
         &mut sources,
         &mut seen,
     );
-    // Include the manifests inspect actually detected (root *or* nested) — keeping the scan's
-    // findings and the synthesis context consistent, and making default runs substantive on real
-    // repos whose manifests live in subprojects, not at the root.
-    for rel in &report.manifest_paths {
-        add_file(
-            &root.join(rel),
-            rel,
-            max,
-            &mut text,
-            &mut sources,
-            &mut seen,
-        );
+    // The manifests come from the scan (root *or* nested) — included only when scanning, keeping the
+    // scan's findings and the context consistent and making a default run substantive on repos whose
+    // manifests live in subprojects, not at the root.
+    if let Some(report) = &report {
+        for rel in &report.manifest_paths {
+            add_file(
+                &root.join(rel),
+                rel,
+                max,
+                &mut text,
+                &mut sources,
+                &mut seen,
+            );
+        }
     }
     // Resolve --include paths against the target repo (not arclite's cwd); `~/` and absolute paths
     // stand on their own — the shared crate::resolve_path rule, same as ruleset sources.
@@ -554,6 +579,10 @@ pub fn gather_context(
     // Echo any --exclude patterns so a dropped slice is never a silent default.
     if !exclude.is_empty() {
         excluded.push(format!("--exclude: {}", exclude.join(", ")));
+    }
+    // Echo --no-scan so the skipped scan baseline is never a silent default.
+    if !scan {
+        excluded.push("the repository scan + detected manifests (--no-scan)".to_owned());
     }
 
     Ok(Context {

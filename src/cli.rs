@@ -285,6 +285,12 @@ pub struct SynthArgs {
     /// `--include`. Works with any command. Default: off.
     #[arg(long)]
     pub changed: bool,
+    /// Skip the automatic repo scan — the scan summary and the manifests it detects, plus the walk
+    /// that builds them — leaving only the README, any `--include`/`--changed` files, and the rules.
+    /// For diff-scoped runs (e.g. a pre-push gate) whose cost should track the diff, not a fixed
+    /// whole-repo baseline. Default: the scan is included. The skip is echoed in the run's excluded list.
+    #[arg(long)]
+    pub no_scan: bool,
     /// Also write the synthesis to `<DIR>/<command>.md` — a self-describing generated doc (the
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]

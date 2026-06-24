@@ -135,6 +135,7 @@ pub fn run_synthesis(
         args.max_file_chars,
         args.changed,
         &args.exclude,
+        !args.no_scan,
     )?;
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);
