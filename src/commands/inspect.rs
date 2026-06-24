@@ -66,7 +66,14 @@ pub struct InspectReport {
 /// Walk a repository/directory and collect structured facts, returning them with the resolved
 /// absolute root (so callers reuse it rather than re-resolving).
 pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
-    anyhow::ensure!(path.exists(), "cannot access {}", path.display());
+    // Distinguish absent from unreadable: exists() discards the real I/O error and reads a
+    // present-but-unreadable path as merely missing; try_exists surfaces it (as the `.git` check below).
+    anyhow::ensure!(
+        path.try_exists()
+            .with_context(|| format!("cannot access {}", path.display()))?,
+        "{} does not exist",
+        path.display()
+    );
     let root = super::resolve_root(path)?;
 
     let mut files = 0usize;
