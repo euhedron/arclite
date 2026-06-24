@@ -397,7 +397,9 @@ fn drive(
         on_event(kind, &event, &line);
     }
     let status = child.wait()?;
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let stderr = stderr_reader
+        .join()
+        .expect("the stderr reader thread panicked");
     Ok((status, stderr))
 }
 
