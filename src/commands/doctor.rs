@@ -160,8 +160,13 @@ fn gate_status() -> Gate {
         Some(p) => crate::resolve_path(root, std::path::Path::new(p)),
         None => root.join(".git").join("hooks"),
     };
+    // The binary name to detect, taken from clap (cli.rs's `#[command(name)]`) rather than a repeated
+    // "arc" literal, so a rename can't stale this detection (as the completions handler also does).
+    let bin = <crate::cli::Cli as clap::CommandFactory>::command()
+        .get_name()
+        .to_owned();
     let pre_push = match crate::read_optional(&hooks_dir.join("pre-push")) {
-        Ok(Some(body)) if body.contains("arc ") => HookStatus::InvokesArc,
+        Ok(Some(body)) if body.contains(&format!("{bin} ")) => HookStatus::InvokesArc,
         Ok(Some(_)) => HookStatus::NoArc,
         Ok(None) => HookStatus::Absent,
         Err(e) => HookStatus::Unreadable(e.to_string()),
