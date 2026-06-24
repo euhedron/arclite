@@ -10,6 +10,7 @@ struct Report {
     cwd: String,
     tools: Tools,
     logs: Logs,
+    gate: Gate,
 }
 
 #[derive(Serialize)]
@@ -92,6 +93,69 @@ fn probe(program: &str) -> ToolStatus {
     }
 }
 
+/// Run `git <args>` in the cwd, returning trimmed stdout, or `None` if git can't be run or exits
+/// non-zero (the key is unset, or this isn't a repo). A best-effort status query: git's own
+/// absence/brokenness is surfaced separately by the `git` probe above, so `None` reads as "unset /
+/// not applicable" here, not a hidden failure.
+fn git_value(args: &[&str]) -> Option<String> {
+    let output = crate::ai::command("git").ok()?.args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+/// A pre-push hook's state: present and invoking `arc` (the arc gate is wired), present without it,
+/// present but unreadable (kept distinct from absent), or no hook at all.
+#[derive(Serialize)]
+#[serde(tag = "state", content = "detail", rename_all = "snake_case")]
+enum HookStatus {
+    InvokesArc,
+    NoArc,
+    Unreadable(String),
+    Absent,
+}
+
+/// The pre-push gate's wiring in the cwd repo: where git looks for hooks, and that hook's state.
+#[derive(Serialize)]
+struct Gate {
+    /// `false` when the cwd isn't inside a git repo — then there is no gate to report.
+    in_repo: bool,
+    /// The `core.hooksPath` value if set, else `None` for git's `.git/hooks` default.
+    hooks_path: Option<String>,
+    /// The pre-push hook's state; `None` only when not in a repo.
+    pre_push: Option<HookStatus>,
+}
+
+/// Inspect the cwd repo's pre-push gate so `doctor` shows whether the arc gate is wired in — the
+/// status that otherwise takes hand-probing `core.hooksPath` and reading the hook file.
+fn gate_status() -> Gate {
+    let Some(root) = git_value(&["rev-parse", "--show-toplevel"]) else {
+        return Gate {
+            in_repo: false,
+            hooks_path: None,
+            pre_push: None,
+        };
+    };
+    let hooks_path = git_value(&["config", "--get", "core.hooksPath"]);
+    let hooks_dir = match &hooks_path {
+        Some(p) => crate::resolve_path(std::path::Path::new(&root), std::path::Path::new(p)),
+        None => std::path::Path::new(&root).join(".git").join("hooks"),
+    };
+    let pre_push = match crate::read_optional(&hooks_dir.join("pre-push")) {
+        Ok(Some(body)) if body.contains("arc ") => HookStatus::InvokesArc,
+        Ok(Some(_)) => HookStatus::NoArc,
+        Ok(None) => HookStatus::Absent,
+        Err(e) => HookStatus::Unreadable(e.to_string()),
+    };
+    Gate {
+        in_repo: true,
+        hooks_path,
+        pre_push: Some(pre_push),
+    }
+}
+
 /// Width of `doctor`'s human-output label column, so the value column aligns — named (like tui's
 /// column-width constants) rather than implied by hand-spaced labels plus a matching bare literal.
 const LABEL_WIDTH: usize = 8;
@@ -122,6 +186,7 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             runs: runs.as_ref().ok().copied(),
             error: runs.as_ref().err().map(std::string::ToString::to_string),
         },
+        gate: gate_status(),
     };
 
     let runs_display = match &runs {
@@ -164,6 +229,22 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             )
         ),
     ));
+    let gate_line = if report.gate.in_repo {
+        let where_ = report.gate.hooks_path.as_deref().map_or_else(
+            || "default .git/hooks".to_owned(),
+            |p| format!("core.hooksPath={p}"),
+        );
+        let state = match &report.gate.pre_push {
+            Some(HookStatus::InvokesArc) => "pre-push invokes arc".to_owned(),
+            Some(HookStatus::NoArc) => "pre-push present (no arc)".to_owned(),
+            Some(HookStatus::Unreadable(e)) => format!("pre-push unreadable: {e}"),
+            Some(HookStatus::Absent) | None => "no pre-push hook".to_owned(),
+        };
+        format!("{state} · {where_}")
+    } else {
+        "not a git repository".to_owned()
+    };
+    lines.push(row("gate", &gate_line));
     let human = lines.join("\n");
 
     emit(&report, &human, global.json)
