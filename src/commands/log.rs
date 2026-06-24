@@ -207,6 +207,12 @@ fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
 /// an ambiguous prefix errors listing the candidates). An id with no stored entry passes through
 /// unchanged so [`show`] reports the authoritative "no stored result" error.
 pub(crate) fn resolve_id(prefix: &str) -> anyhow::Result<String> {
+    // A run id addresses a file in the result store (`<id>.json`); reject anything that isn't a single
+    // safe path segment, so a crafted id can't escape the store via separators or `..`.
+    anyhow::ensure!(
+        !prefix.is_empty() && !prefix.contains(['/', '\\', ':']) && !prefix.contains(".."),
+        "invalid run id `{prefix}`: expected a single path segment (no separators, `..`, or `:`)"
+    );
     let Some(dir) = crate::log::results_dir() else {
         return Ok(prefix.to_owned());
     };
