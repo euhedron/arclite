@@ -187,6 +187,12 @@ pub(crate) fn load_stored(id: &str) -> anyhow::Result<Option<Value>> {
     Ok(Some(stored))
 }
 
+/// The run record inside a stored result — `Value::Null` if absent (a partial/older store), for the
+/// caller to interpret. Single-sourced so promote and the `log` detail view read it the same way.
+pub(crate) fn stored_run(stored: &Value) -> Value {
+    stored.get("run").cloned().unwrap_or(Value::Null)
+}
+
 fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let id = resolve_id(id)?;
     let Some(stored) = load_stored(&id)? else {
@@ -264,7 +270,7 @@ fn record_strings(run: &Value, key: &str) -> Vec<String> {
 /// with the TUI's `log` detail view, so a run reads the same there. The verbatim prompt is stored in
 /// the result too (its `prompt` field) for full inspection beyond this summary.
 pub(crate) fn stored_human(v: &Value) -> String {
-    let run = v.get("run").cloned().unwrap_or(Value::Null);
+    let run = stored_run(v);
     let when = run
         .get("ts")
         .and_then(Value::as_u64)

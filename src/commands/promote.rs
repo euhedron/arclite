@@ -38,7 +38,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             "no stored result for run `{run_id}` — logging was off, or it predates the result store"
         );
     };
-    let record = stored.get("run").cloned().unwrap_or(Value::Null);
+    let record = crate::commands::log::stored_run(&stored);
     let command = record
         .get("command")
         .and_then(Value::as_str)
@@ -57,7 +57,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // Findings are the structured `results`; a prose run (no `--structured`) has none to promote.
     let findings = stored
         .get("structured")
-        .and_then(|s| s.get("results"))
+        .and_then(|s| s.get(crate::synth::RESULTS_KEY))
         .and_then(Value::as_array)
         .filter(|items| !items.is_empty())
         .ok_or_else(|| {
