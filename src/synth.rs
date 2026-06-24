@@ -45,9 +45,9 @@ pub(crate) const NOTE_KEY: &str = "note";
 /// Commentary/bucketing only — the gate never reads it.
 pub(crate) const KIND_KEY: &str = "kind";
 
-/// Add the `--kinds` field to a results schema: each item gains a required free-string [`KIND_KEY`].
-/// The suggested vocabulary (a command's taxonomy) lives in the prompt, *not* as a hard enum — the
-/// model may coin its own label when none fit, which is signal about the taxonomy's fit.
+/// Add the `--kinds` field to a results schema: each item gains a required free-string [`KIND_KEY`] —
+/// free-form, *not* a hard enum, so the model isn't locked to the command's suggested taxonomy. (The
+/// prompt does the suggesting and interpreting; that rationale lives in `commands`' `kinds_note`.)
 pub(crate) fn with_kind(schema: &str) -> String {
     // This schema is one the code itself built from a const item via [`results_schema`], so its shape
     // — valid JSON, a `results.items` object carrying `properties` + `required` — is a code-held

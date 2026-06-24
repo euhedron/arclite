@@ -154,8 +154,8 @@ pub fn run_synthesis(
         prompt.push_str(NOTE_INSTRUCTION);
         // Gate on the `results` array the schemas produce — the key single-sourced in synth.
         let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);
-        // --kinds adds a free-string `kind` to each item — not enum-locked, so the model can label
-        // off the command's suggested taxonomy when none fits (the deviation is signal).
+        // --kinds adds a free-string `kind` to each item — not enum-locked (the schema side of the
+        // prompt instruction kinds_note adds below).
         let schema = if args.kinds {
             synth::with_kind(&s.schema)
         } else {
