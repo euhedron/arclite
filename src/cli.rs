@@ -291,6 +291,11 @@ pub struct SynthArgs {
     /// whole-repo baseline. Default: the scan is included. The skip is echoed in the run's excluded list.
     #[arg(long)]
     pub no_scan: bool,
+    /// Feed this repo's open findings ledger (`.arc/findings/open/`) into context, with an instruction
+    /// to surface NEW issues beyond the already-recorded ones — so a run hunts past what's known and
+    /// re-reports less. Default: off. No ledger → no effect.
+    #[arg(long)]
+    pub findings: bool,
     /// Also write the synthesis to `<DIR>/<command>.md` — a self-describing generated doc (the
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]

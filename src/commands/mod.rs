@@ -130,12 +130,15 @@ pub fn run_synthesis(
     let config = settings.active_display();
     let ctx = synth::gather_context(
         &args.path,
-        &args.include,
-        &resolution.sources,
-        args.max_file_chars,
-        args.changed,
-        &args.exclude,
-        !args.no_scan,
+        &synth::ContextSpec {
+            includes: &args.include,
+            rule_sources: &resolution.sources,
+            max: args.max_file_chars,
+            changed: args.changed,
+            exclude: &args.exclude,
+            scan: !args.no_scan,
+            findings: args.findings,
+        },
     )?;
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);

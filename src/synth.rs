@@ -341,6 +341,28 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
     ))
 }
 
+/// Render the repo's open findings ledger (`.arc/findings/open/*.md`) as a context block, so a run can
+/// hunt *beyond* what's already recorded rather than re-surfacing it. Absent/empty ledger → no block
+/// (nothing known yet). A finding is Markdown like a rule, so the rule loader/renderer applies —
+/// guarded against an absent dir, which the loader would otherwise treat as an error.
+fn gather_findings(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
+    let dir = root.join(crate::ARC_DIR).join("findings").join("open");
+    if !crate::try_is_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
+    {
+        return Ok(String::new());
+    }
+    let entries = crate::rules::load(&dir)?;
+    if entries.is_empty() {
+        return Ok(String::new());
+    }
+    sources.push(format!("findings ledger ({} open)", entries.len()));
+    Ok(format!(
+        "\nFindings already recorded in this repo's ledger (surface NEW issues beyond these; do not re-report them):\n{}\n",
+        crate::rules::render(&entries)
+    ))
+}
+
 /// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
 /// the source label. `Ok(true)` = read and appended, `Ok(false)` = absent, `Err` = present but
 /// unreadable (the [`read_file`]/[`crate::read_optional`] distinction); the caller surfaces a miss
@@ -464,19 +486,32 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
+/// What a run gathers into context — the shaping levers, grouped so adding one is a field, not a new
+/// positional argument. Built from the run's args at the call site (the CLI↔synth marshal stays there).
+pub struct ContextSpec<'a> {
+    pub includes: &'a [PathBuf],
+    pub rule_sources: &'a [PathBuf],
+    pub max: Option<usize>,
+    pub changed: bool,
+    pub exclude: &'a [String],
+    pub scan: bool,
+    pub findings: bool,
+}
+
 /// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
 /// summary + the manifests an inspect walk detects; the README; any `--include`d files/dirs (and, with
-/// `changed`, git-changed files); and rules — tracking each source (and what's excluded) for the run
+/// `changed`, git-changed files); rules; and, with `findings`, the open ledger — tracking each source (and what's excluded) for the run
 /// report. `max` is the optional caller cap; by default files are read whole. The prompt differs per command.
-pub fn gather_context(
-    path: &Path,
-    includes: &[PathBuf],
-    rule_sources: &[PathBuf],
-    max: Option<usize>,
-    changed: bool,
-    exclude: &[String],
-    scan: bool,
-) -> anyhow::Result<Context> {
+pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context> {
+    let &ContextSpec {
+        includes,
+        rule_sources,
+        max,
+        changed,
+        exclude,
+        scan,
+        findings,
+    } = spec;
     // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
     // (scan=false) drops both — and the walk itself — so a diff-scoped run's cost tracks the diff, not a
     // fixed whole-repo baseline; the root still resolves directly, for --include/--changed and the README.
@@ -568,6 +603,9 @@ pub fn gather_context(
         &mut sources,
     ));
     text.push_str(&gather_rules(rule_sources, &mut sources)?);
+    if findings {
+        text.push_str(&gather_findings(&root, &mut sources)?);
+    }
 
     let mut excluded = if includes.is_empty() {
         vec!["the repo's source files (--include <path> or --changed to add)".to_owned()]
