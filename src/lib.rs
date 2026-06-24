@@ -26,6 +26,12 @@ pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
     Some(dirs::home_dir()?.join(ARC_DIR))
 }
 
+/// A repo's open-findings ledger directory, `<repo>/.arc/findings/open` — single-sourced (like
+/// [`ARC_DIR`]) so the promote writer and the `--findings` reader share one layout and can't drift.
+pub(crate) fn findings_open_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join("findings").join("open")
+}
+
 /// The settings filename inside an `.arc` directory — single-sourced (like [`ARC_DIR`]) so a rename
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";

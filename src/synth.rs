@@ -346,7 +346,7 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
 /// (nothing known yet). A finding is Markdown like a rule, so the rule loader/renderer applies —
 /// guarded against an absent dir, which the loader would otherwise treat as an error.
 fn gather_findings(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
-    let dir = root.join(crate::ARC_DIR).join("findings").join("open");
+    let dir = crate::findings_open_dir(root);
     if !crate::try_is_dir(&dir)
         .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
     {

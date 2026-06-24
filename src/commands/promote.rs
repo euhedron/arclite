@@ -66,10 +66,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             )
         })?;
 
-    let ledger = Path::new(repo)
-        .join(crate::ARC_DIR)
-        .join("findings")
-        .join("open");
+    let ledger = crate::findings_open_dir(Path::new(repo));
 
     let mut promoted = Vec::new();
     for finding in findings {
