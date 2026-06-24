@@ -93,8 +93,8 @@ pub(crate) fn join_or(items: &[String], empty: &str) -> String {
 
 /// Abbreviate a leading home-directory prefix to `~` for *display* (e.g. `C:\Users\x\proj` → `~\proj`);
 /// paths outside home are returned unchanged. Cosmetic only — applied where a path is shown to a
-/// person (the masthead, the context sources, `doctor`, the run reports), never in error messages
-/// (which keep the exact path) nor where a value must round-trip (the stored record stays canonical).
+/// person, never in error messages (which keep the exact path) nor where a value must round-trip
+/// (the stored record stays canonical).
 pub(crate) fn display_path(path: &str) -> String {
     if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_owned))
         && let Some(rest) = path.strip_prefix(&home)
