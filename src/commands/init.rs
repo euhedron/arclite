@@ -90,7 +90,10 @@ fn ensure_dir(
     created: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    if dir.exists() {
+    if dir
+        .try_exists()
+        .with_context(|| format!("cannot access {}", dir.display()))?
+    {
         skipped.push(dir.display().to_string());
     } else {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
@@ -107,7 +110,10 @@ fn write_if_absent(
     created: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> anyhow::Result<bool> {
-    if path.exists() {
+    if path
+        .try_exists()
+        .with_context(|| format!("cannot access {}", path.display()))?
+    {
         skipped.push(path.display().to_string());
         return Ok(false);
     }
