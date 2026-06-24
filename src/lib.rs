@@ -107,7 +107,7 @@ pub(crate) fn display_path(path: &str) -> String {
 
 /// A label left-padded to `width`, then its value — the single statement of the aligned
 /// `label   value` row that `doctor` and `inspect` print, so neither hand-counts whitespace into a
-/// format literal (which a renamed label would silently misalign — the anti-pattern the audit flags).
+/// format literal.
 pub(crate) fn labeled_row(label: &str, value: &str, width: usize) -> String {
     format!("{label:<width$}{value}")
 }

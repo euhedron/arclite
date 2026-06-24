@@ -161,8 +161,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
     // The synthesis model is the modelUsage entry that produced the output — the one with the most
     // output tokens (the CLI's internal auxiliary models make comparatively tiny calls). Resolved once,
-    // shared by the success and error paths; never echoed from the request, so a substitution can't
-    // mislabel the run.
+    // shared by the success and error paths.
     let model = parsed
         .model_usage
         .iter()
