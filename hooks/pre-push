@@ -1,22 +1,38 @@
 #!/bin/sh
-# arclite gate (pre-push). Nothing here is canonical — a hook is configurable by definition; this is
+# arclite hooks (pre-push). Nothing here is canonical — a hook is configurable by definition; this is
 # only what arclite runs today, and it is meant to change. Edit it freely.
 #
-# Today: just the blocking gate — `arc audit` on the default (Claude) model, which exits non-zero on
-# any rule violation and blocks the push. The broad-signal advisories (`critique`/`suggest`) are run
-# ad hoc, not every push: on Claude they add cost and stall under concurrent calls (three claude runs
-# a push is the passive spend arc exists to avoid), and the codex lane that made them cheap + parallel
-# is spend-capped. Run them by hand — `arc run critique`/`suggest` — when you want broad signal, or
-# re-add them here (e.g. behind a separate-quota `--backend`) when one is available.
-# Opt-in via `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`.
+# Two opt-in routines (enable via `git config core.hooksPath hooks`; skip a push with `ARC_GATE=0 git push`):
+#   1. GATE (blocking) — `arc audit` on the default model exits non-zero on any rule violation and
+#      blocks the push.
+#   2. ADVISORY (non-blocking) — `arc extract` mines candidate rules from the source being pushed: a
+#      continuous routine surfacing the general principles a change embodies, to curate into the
+#      ruleset. Extracted rules are candidates, not violations, so it never blocks.
+# (The broad-signal `critique`/`suggest` advisories are run ad hoc, not every push — they add cost and,
+# on a single backend, stall under concurrent calls. Re-add one here behind a spare-quota `--backend`.)
 if [ "$ARC_GATE" = "0" ]; then
     echo "arclite gate: skipped (ARC_GATE=0)" >&2
     exit 0
 fi
+
 echo "arclite: running the audit gate…" >&2
 arc run audit . --include src --fail-on-findings
 status=$?
 if [ "$status" -ne 0 ]; then
     echo "arclite gate: push BLOCKED (arc audit exit $status). Fix the findings above, or override with 'ARC_GATE=0 git push'." >&2
+    exit "$status"
 fi
-exit "$status"
+
+# Advisory: mine candidate rules from the source changes being pushed. Scoped to the diff
+# (origin/main..HEAD — the commits ahead of the pushed-to branch; adjust the base for other workflows)
+# so the signal tracks the change and the spend stays small, and --no-scan drops the repo baseline
+# (rules come from the source, not the manifests). Never blocks — its exit is ignored.
+if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    files=$(git diff --name-only --diff-filter=d origin/main..HEAD -- src 2>/dev/null)
+    if [ -n "$files" ]; then
+        echo "arclite: mining candidate rules from the pushed diff (advisory)…" >&2
+        # shellcheck disable=SC2046  # intended word-split: one --include per changed file
+        arc run extract . --no-scan $(printf -- '--include %s ' $files) || true
+    fi
+fi
+exit 0
