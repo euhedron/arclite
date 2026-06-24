@@ -93,18 +93,19 @@ fn probe(program: &str) -> ToolStatus {
     }
 }
 
-/// Run `git <args>` in the cwd for a best-effort status value: trimmed stdout, or `None` if git can't
-/// run or exits non-zero. Used to detect the repo root (`None` → not inside a work tree); git's own
-/// absence is surfaced by the `git` probe above, so `None` reads as "not applicable", not a hidden
-/// failure. Outcomes needing the exit code distinguished (e.g. `git config --get`) use
-/// [`crate::git_config_get`].
-fn git_value(args: &[&str]) -> Option<String> {
-    let output = crate::ai::command("git").ok()?.args(args).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!value.is_empty()).then_some(value)
+/// The repo root containing the cwd: `Ok(Some(root))` inside a work tree, `Ok(None)` when git runs and
+/// reports we are not in one (its benign verdict), `Err` when git itself cannot be run — so a broken or
+/// absent git is surfaced, not collapsed into "not a repo". (`git config --get` outcomes, which need
+/// exit 1 separated from >1, use [`crate::git_config_get`].)
+fn git_repo_root() -> anyhow::Result<Option<String>> {
+    let output = crate::ai::command("git")?
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("could not run git: {e}"))?;
+    Ok(output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
 }
 
 /// A pre-push hook's state: present and invoking `arc` (the arc gate is wired), present without it,
@@ -135,13 +136,26 @@ struct Gate {
 /// Inspect the cwd repo's pre-push gate so `doctor` shows whether the arc gate is wired in — the
 /// status that otherwise takes hand-probing `core.hooksPath` and reading the hook file.
 fn gate_status() -> Gate {
-    let Some(root) = git_value(&["rev-parse", "--show-toplevel"]) else {
-        return Gate {
-            in_repo: false,
-            hooks_path: None,
-            pre_push: None,
-            error: None,
-        };
+    let root = match git_repo_root() {
+        Ok(Some(root)) => root,
+        // git ran and reported we're not in a work tree — the benign verdict.
+        Ok(None) => {
+            return Gate {
+                in_repo: false,
+                hooks_path: None,
+                pre_push: None,
+                error: None,
+            };
+        }
+        // git itself couldn't run — a real failure, surfaced rather than read as "not a repo".
+        Err(e) => {
+            return Gate {
+                in_repo: false,
+                hooks_path: None,
+                pre_push: None,
+                error: Some(format!("{e:#}")),
+            };
+        }
     };
     let root = std::path::Path::new(&root);
     // A corrupt/locked config (git exit >1) is surfaced as an error, not masked as "unset".
@@ -252,10 +266,10 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             )
         ),
     ));
-    let gate_line = if !report.gate.in_repo {
-        "not a git repository".to_owned()
-    } else if let Some(e) = &report.gate.error {
+    let gate_line = if let Some(e) = &report.gate.error {
         format!("error: {e}")
+    } else if !report.gate.in_repo {
+        "not a git repository".to_owned()
     } else {
         let where_ = report.gate.hooks_path.as_deref().map_or_else(
             || "default .git/hooks".to_owned(),
