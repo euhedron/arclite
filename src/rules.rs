@@ -57,12 +57,15 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
 /// rule of the same id. Returns the loaded rules plus any sources that resolved to neither a
 /// directory nor a `.md` file — a typo'd or absent path the caller surfaces rather than dropping
 /// silently, so a misconfigured source can't shrink the active ruleset unnoticed.
-/// (An absent `*.md` path is louder still: `rule_from_file` fails to read it and the error propagates.)
+/// (A present-but-unreadable source — or an absent `*.md` path — surfaces its I/O error, via
+/// `try_is_dir`/`rule_from_file`, rather than being miscounted as a skipped typo.)
 pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathBuf>)> {
     let mut by_id: BTreeMap<String, Rule> = BTreeMap::new();
     let mut skipped = Vec::new();
     for src in sources {
-        if src.is_dir() {
+        if crate::try_is_dir(src)
+            .with_context(|| format!("cannot access rule source {}", src.display()))?
+        {
             for rule in load(src)? {
                 by_id.insert(rule.id.clone(), rule);
             }
