@@ -48,7 +48,6 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .get("repo")
         .and_then(Value::as_str)
         .context("the stored run record has no `repo`, so its ledger can't be located")?;
-    // Distinguish absent from unreadable: an unreadable repo path must surface, not read as "gone".
     anyhow::ensure!(
         crate::try_is_dir(Path::new(repo))
             .with_context(|| format!("cannot access the run's repository ({repo})"))?,

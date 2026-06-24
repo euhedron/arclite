@@ -47,7 +47,6 @@ struct InitReport {
 /// The `init` command — never clobbers what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let root = super::resolve_root(&args.path)?;
-    // Distinguish absent from unreadable: an unreadable target must surface, not read as "not a dir".
     anyhow::ensure!(
         crate::try_is_dir(&root).with_context(|| format!("cannot access {}", root.display()))?,
         "cannot initialize {}: not an existing directory (init sets up `.arc` in a repo that already exists, so a typo'd path doesn't scaffold a stray tree)",
