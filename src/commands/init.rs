@@ -125,21 +125,7 @@ fn write_if_absent(
 fn activate_hooks(root: &Path) -> anyhow::Result<()> {
     // Don't clobber a core.hooksPath the user already set for something else — surface it and stop,
     // rather than silently overwriting (the scaffold is careful never to clobber files; so is this).
-    let existing = crate::ai::command("git")?
-        .current_dir(root)
-        .args(["config", "--get", "core.hooksPath"])
-        .output()
-        .context("could not run git to read core.hooksPath")?;
-    // `git config --get` exits 0 (found), 1 (key unset — a benign absent), or >1 (a real config
-    // failure); distinguish the unset case from a genuine error rather than reading both as "not set".
-    let current = match existing.status.code() {
-        Some(0) => String::from_utf8_lossy(&existing.stdout).trim().to_owned(),
-        Some(1) => String::new(),
-        _ => anyhow::bail!(
-            "could not read core.hooksPath: {}",
-            String::from_utf8_lossy(&existing.stderr).trim()
-        ),
-    };
+    let current = crate::git_config_get(root, "core.hooksPath")?.unwrap_or_default();
     anyhow::ensure!(
         current.is_empty() || current == HOOKS_DIR,
         "core.hooksPath is already set to `{current}` — leaving it untouched; set it to `{HOOKS_DIR}` \

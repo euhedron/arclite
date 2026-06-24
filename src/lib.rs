@@ -32,6 +32,27 @@ pub(crate) fn findings_open_dir(repo_root: &std::path::Path) -> std::path::PathB
     repo_root.join(ARC_DIR).join("findings").join("open")
 }
 
+/// `git config --get <key>` in `dir`: `Ok(Some(value))` if set, `Ok(None)` if unset (git exits 1 —
+/// benign), `Err` on a real config failure (exit >1, e.g. a corrupt or locked config) — never
+/// collapsing unset with failure. Single-sourced so `init` and `doctor` read git config the same way.
+pub(crate) fn git_config_get(dir: &std::path::Path, key: &str) -> anyhow::Result<Option<String>> {
+    let output = crate::ai::command("git")?
+        .current_dir(dir)
+        .args(["config", "--get", key])
+        .output()
+        .map_err(|e| anyhow::anyhow!("could not run git to read {key}: {e}"))?;
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => anyhow::bail!(
+            "git config --get {key} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
 /// The settings filename inside an `.arc` directory — single-sourced (like [`ARC_DIR`]) so a rename
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";

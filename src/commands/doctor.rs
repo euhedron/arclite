@@ -93,10 +93,11 @@ fn probe(program: &str) -> ToolStatus {
     }
 }
 
-/// Run `git <args>` in the cwd, returning trimmed stdout, or `None` if git can't be run or exits
-/// non-zero (the key is unset, or this isn't a repo). A best-effort status query: git's own
-/// absence/brokenness is surfaced separately by the `git` probe above, so `None` reads as "unset /
-/// not applicable" here, not a hidden failure.
+/// Run `git <args>` in the cwd for a best-effort status value: trimmed stdout, or `None` if git can't
+/// run or exits non-zero. Used to detect the repo root (`None` → not inside a work tree); git's own
+/// absence is surfaced by the `git` probe above, so `None` reads as "not applicable", not a hidden
+/// failure. Outcomes needing the exit code distinguished (e.g. `git config --get`) use
+/// [`crate::git_config_get`].
 fn git_value(args: &[&str]) -> Option<String> {
     let output = crate::ai::command("git").ok()?.args(args).output().ok()?;
     if !output.status.success() {
@@ -124,8 +125,11 @@ struct Gate {
     in_repo: bool,
     /// The `core.hooksPath` value if set, else `None` for git's `.git/hooks` default.
     hooks_path: Option<String>,
-    /// The pre-push hook's state; `None` only when not in a repo.
+    /// The pre-push hook's state; `None` only when not in a repo (or the probe errored).
     pre_push: Option<HookStatus>,
+    /// A real failure probing the gate (e.g. a corrupt git config) — surfaced, not collapsed into
+    /// "unset" / "no hook".
+    error: Option<String>,
 }
 
 /// Inspect the cwd repo's pre-push gate so `doctor` shows whether the arc gate is wired in — the
@@ -136,12 +140,25 @@ fn gate_status() -> Gate {
             in_repo: false,
             hooks_path: None,
             pre_push: None,
+            error: None,
         };
     };
-    let hooks_path = git_value(&["config", "--get", "core.hooksPath"]);
+    let root = std::path::Path::new(&root);
+    // A corrupt/locked config (git exit >1) is surfaced as an error, not masked as "unset".
+    let hooks_path = match crate::git_config_get(root, "core.hooksPath") {
+        Ok(hooks_path) => hooks_path,
+        Err(e) => {
+            return Gate {
+                in_repo: true,
+                hooks_path: None,
+                pre_push: None,
+                error: Some(format!("{e:#}")),
+            };
+        }
+    };
     let hooks_dir = match &hooks_path {
-        Some(p) => crate::resolve_path(std::path::Path::new(&root), std::path::Path::new(p)),
-        None => std::path::Path::new(&root).join(".git").join("hooks"),
+        Some(p) => crate::resolve_path(root, std::path::Path::new(p)),
+        None => root.join(".git").join("hooks"),
     };
     let pre_push = match crate::read_optional(&hooks_dir.join("pre-push")) {
         Ok(Some(body)) if body.contains("arc ") => HookStatus::InvokesArc,
@@ -153,6 +170,7 @@ fn gate_status() -> Gate {
         in_repo: true,
         hooks_path,
         pre_push: Some(pre_push),
+        error: None,
     }
 }
 
@@ -229,7 +247,11 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             )
         ),
     ));
-    let gate_line = if report.gate.in_repo {
+    let gate_line = if !report.gate.in_repo {
+        "not a git repository".to_owned()
+    } else if let Some(e) = &report.gate.error {
+        format!("error: {e}")
+    } else {
         let where_ = report.gate.hooks_path.as_deref().map_or_else(
             || "default .git/hooks".to_owned(),
             |p| format!("core.hooksPath={p}"),
@@ -241,8 +263,6 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             Some(HookStatus::Absent) | None => "no pre-push hook".to_owned(),
         };
         format!("{state} · {where_}")
-    } else {
-        "not a git repository".to_owned()
     };
     lines.push(row("gate", &gate_line));
     let human = lines.join("\n");
