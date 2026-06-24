@@ -48,21 +48,12 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .get("repo")
         .and_then(Value::as_str)
         .context("the stored run record has no `repo`, so its ledger can't be located")?;
-    // Distinguish absent from unreadable: `is_dir()`/`exists()` report a present-but-unreadable path
-    // the same as a missing one, so a permission/I-O failure must surface rather than masquerade as
-    // "no longer exists".
-    match std::fs::metadata(repo) {
-        Ok(m) => anyhow::ensure!(
-            m.is_dir(),
-            "the run's repository ({repo}) is not a directory — nothing to promote into"
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            anyhow::bail!(
-                "the run's repository ({repo}) no longer exists — nothing to promote into"
-            )
-        }
-        Err(e) => return Err(e).context(format!("cannot access the run's repository ({repo})")),
-    }
+    // Distinguish absent from unreadable: an unreadable repo path must surface, not read as "gone".
+    anyhow::ensure!(
+        crate::try_is_dir(Path::new(repo))
+            .with_context(|| format!("cannot access the run's repository ({repo})"))?,
+        "the run's repository ({repo}) no longer exists — nothing to promote into"
+    );
     // Findings are the structured `results`; a prose run (no `--structured`) has none to promote.
     let findings = stored
         .get("structured")

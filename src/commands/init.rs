@@ -47,15 +47,9 @@ struct InitReport {
 /// The `init` command — never clobbers what's already there.
 pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let root = super::resolve_root(&args.path)?;
-    // Distinguish absent from unreadable: `is_dir()` reports a present-but-unreadable path the same as
-    // a missing one, so a permission/I-O failure must surface rather than read as "not a directory".
-    let is_dir = match std::fs::metadata(&root) {
-        Ok(m) => m.is_dir(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e).context(format!("cannot access {}", root.display())),
-    };
+    // Distinguish absent from unreadable: an unreadable target must surface, not read as "not a dir".
     anyhow::ensure!(
-        is_dir,
+        crate::try_is_dir(&root).with_context(|| format!("cannot access {}", root.display()))?,
         "cannot initialize {}: not an existing directory (init sets up `.arc` in a repo that already exists, so a typo'd path doesn't scaffold a stray tree)",
         root.display()
     );

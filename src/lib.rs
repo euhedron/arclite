@@ -73,6 +73,13 @@ pub(crate) fn read_dir_optional(
     optional(std::fs::read_dir(dir))
 }
 
+/// Whether `path` is an existing directory: absent or a non-directory → `Ok(false)`, a present
+/// directory → `Ok(true)`, a permission/I-O failure → a real `Err` (via [`optional`], so an
+/// unreadable path can't masquerade as absent). The dir-aware analogue of `std::fs::try_exists`.
+pub(crate) fn try_is_dir(path: &std::path::Path) -> std::io::Result<bool> {
+    Ok(optional(std::fs::metadata(path))?.is_some_and(|m| m.is_dir()))
+}
+
 /// Render `items` as a comma-joined string, or `empty` when there are none — the "one-or-more, else a
 /// placeholder" shape shared by settings-layer lines ([`settings::NO_LAYERS`]) and inspect's manifest
 /// list (`(none)`), single-sourced so the empty-vs-joined branch isn't re-written at each call site.
