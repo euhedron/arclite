@@ -203,16 +203,24 @@ fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     emit(&stored, &stored_human(&stored), global.json)
 }
 
+/// Reject a run id that isn't a single safe path segment — it addresses a file in the result store
+/// (`<id>.json`), so separators, `..`, or a drive prefix would let a crafted id escape the store.
+/// Call this at every boundary an id crosses in from outside — CLI argv via [`resolve_id`], or a log
+/// record (a file editable outside the program) via the TUI detail view — so the downstream path
+/// joins can treat it as safe.
+pub(crate) fn ensure_safe_run_id(id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !id.is_empty() && !id.contains(['/', '\\', ':']) && !id.contains(".."),
+        "invalid run id `{id}`: expected a single path segment (no separators, `..`, or `:`)"
+    );
+    Ok(())
+}
+
 /// Resolve a full run id, or a unique prefix of one, against the result store (exact match wins;
 /// an ambiguous prefix errors listing the candidates). An id with no stored entry passes through
 /// unchanged so [`show`] reports the authoritative "no stored result" error.
 pub(crate) fn resolve_id(prefix: &str) -> anyhow::Result<String> {
-    // A run id addresses a file in the result store (`<id>.json`); reject anything that isn't a single
-    // safe path segment, so a crafted id can't escape the store via separators or `..`.
-    anyhow::ensure!(
-        !prefix.is_empty() && !prefix.contains(['/', '\\', ':']) && !prefix.contains(".."),
-        "invalid run id `{prefix}`: expected a single path segment (no separators, `..`, or `:`)"
-    );
+    ensure_safe_run_id(prefix)?;
     let Some(dir) = crate::log::results_dir() else {
         return Ok(prefix.to_owned());
     };

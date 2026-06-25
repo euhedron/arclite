@@ -462,6 +462,16 @@ impl LogView {
             return;
         };
         let body = match record.get("id").and_then(Value::as_str) {
+            None => {
+                "this run predates the result store (no id), so its result wasn't kept".to_owned()
+            }
+            // The id comes from a log record — a file editable outside the program — so validate it to
+            // a safe path segment before it reaches load_stored's path join (as `arc log <id>` does).
+            Some(id) if crate::commands::log::ensure_safe_run_id(id).is_err() => {
+                format!(
+                    "the log record's id `{id}` isn't a usable run id (expected a single path segment)"
+                )
+            }
             Some(id) => match crate::commands::log::load_stored(id) {
                 Ok(Some(stored)) => crate::commands::log::stored_human(&stored),
                 Ok(None) => format!(
@@ -469,9 +479,6 @@ impl LogView {
                 ),
                 Err(e) => format!("couldn't load the stored result: {e:#}"),
             },
-            None => {
-                "this run predates the result store (no id), so its result wasn't kept".to_owned()
-            }
         };
         self.detail = Some(LogDetail { body, scroll: 0 });
     }
