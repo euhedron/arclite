@@ -48,6 +48,9 @@ pub struct GlobalArgs {
 /// (the `name`/`about` on each verb subcommand below) and the TUI palette (`commands::tui`, which
 /// spawns `arc <name>` and shows the description) read the same strings and can't drift. Descriptions
 /// are kept terse: they double as palette hints.
+/// The `run` group's own subcommand name — shared by clap's `Run` variant, the TUI palette's `run`
+/// entry, and the launcher that spawns `arc run <verb>`, so the grouping name can't drift.
+pub(crate) const NAME_RUN: &str = "run";
 pub(crate) const NAME_SUMMARIZE: &str = "summarize";
 pub(crate) const VERB_SUMMARIZE: &str = "Summarize the repository";
 pub(crate) const NAME_SUGGEST: &str = "suggest";
@@ -96,6 +99,7 @@ pub enum Command {
     // substrate, kept distinct from the deterministic commands above — `run` names the step that
     // spends AI, mirroring arclite's deterministic-until-synthesis spine.
     /// Run an AI synthesis verb: audit, critique, suggest, summarize, extract, or evolve.
+    #[command(name = NAME_RUN)]
     Run(RunArgs),
 }
 

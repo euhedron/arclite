@@ -97,6 +97,7 @@ enum Route {
 /// launchable verbs lead, since firing a run is the cockpit's primary act. `ALL` is the single source.
 #[derive(Clone, Copy)]
 enum Command {
+    Run,
     Audit,
     Critique,
     Suggest,
@@ -111,13 +112,10 @@ enum Command {
 }
 
 impl Command {
-    const ALL: &'static [Command] = &[
-        Command::Audit,
-        Command::Critique,
-        Command::Suggest,
-        Command::Summarize,
-        Command::Extract,
-        Command::Evolve,
+    /// The top-level palette entries: the `run` group (the synthesis verbs live under it, mirroring
+    /// the CLI's `arc run <verb>`) plus the deterministic views and quit. Presentation order.
+    const TOP: &'static [Command] = &[
+        Command::Run,
         Command::Status,
         Command::Config,
         Command::Log,
@@ -125,9 +123,21 @@ impl Command {
         Command::Quit,
     ];
 
+    /// The synthesis verbs shown inside the `run` sub-menu, in presentation order.
+    const VERBS: &'static [Command] = &[
+        Command::Audit,
+        Command::Critique,
+        Command::Suggest,
+        Command::Summarize,
+        Command::Extract,
+        Command::Evolve,
+    ];
+
     /// The typed name the palette prefix-matches; for a verb it's also the CLI subcommand spawned.
     fn name(self) -> &'static str {
         match self {
+            // The run group's name is single-sourced with clap + the launcher via cli::NAME_RUN.
+            Command::Run => crate::cli::NAME_RUN,
             // Verb names are the CLI subcommand names — single-sourced via the cli.rs NAME_* consts
             // (used by clap too), so a rename can't drift the spawn/palette from `--help`.
             Command::Audit => crate::cli::NAME_AUDIT,
@@ -149,6 +159,7 @@ impl Command {
     /// One-line help shown beside the name in the palette.
     fn description(self) -> &'static str {
         match self {
+            Command::Run => "choose a synthesis verb to run",
             // The launchable verbs share their text with clap `--help` via the cli.rs `VERB_*`
             // consts, so the palette and the CLI can't drift.
             Command::Audit => crate::cli::VERB_AUDIT,
@@ -170,6 +181,11 @@ impl Command {
     /// view; quit quits. The only place a palette selection acts.
     fn apply(self, app: &mut App) {
         match self {
+            // `run` drills into the verb sub-menu in the palette handler; it never reaches apply,
+            // which acts on a leaf selection.
+            Command::Run => {
+                unreachable!("Command::Run is a palette drill-in, handled before apply")
+            }
             Command::Home => app.route = Route::Home,
             Command::Status => app.route = Route::Status,
             Command::Config => app.open_config(),
@@ -180,9 +196,29 @@ impl Command {
     }
 }
 
-/// The `/` command palette overlay: the query typed so far and the highlighted match. Open only when
-/// `App::palette` is `Some`. Prefix-match (not fuzzy) over [`Command::ALL`], preserving its order.
+/// Which level of the `/` palette is showing: the top-level commands, or the `run` sub-menu of
+/// synthesis verbs (mirroring the CLI's `arc run <verb>` grouping).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PaletteLevel {
+    Top,
+    Run,
+}
+
+impl PaletteLevel {
+    /// The commands listed at this level, in presentation order.
+    fn commands(self) -> &'static [Command] {
+        match self {
+            PaletteLevel::Top => Command::TOP,
+            PaletteLevel::Run => Command::VERBS,
+        }
+    }
+}
+
+/// The `/` command palette overlay: which level it's on, the query typed so far, and the highlighted
+/// match. Open only when `App::palette` is `Some`. Prefix-match (not fuzzy) over the current level's
+/// commands, preserving their order.
 struct Palette {
+    level: PaletteLevel,
     query: String,
     selected: usize,
 }
@@ -190,19 +226,29 @@ struct Palette {
 impl Palette {
     fn new() -> Self {
         Self {
+            level: PaletteLevel::Top,
             query: String::new(),
             selected: 0,
         }
     }
 
-    /// Commands whose name starts with the current query, in [`Command::ALL`] order. An empty query
-    /// matches everything (so bare `/` lists the full set).
+    /// Commands at the current level whose name starts with the query, in presentation order. An empty
+    /// query matches everything (so a bare level lists its full set).
     fn matches(&self) -> Vec<Command> {
-        Command::ALL
+        self.level
+            .commands()
             .iter()
             .copied()
             .filter(|c| c.name().starts_with(self.query.as_str()))
             .collect()
+    }
+
+    /// Switch to another level — drill into the `run` sub-menu, or back out to the top — resetting the
+    /// query and selection for the new list.
+    fn set_level(&mut self, level: PaletteLevel) {
+        self.level = level;
+        self.query.clear();
+        self.selected = 0;
     }
 
     /// Keep `selected` within the current match list after the query changes.
@@ -449,7 +495,7 @@ impl LogView {
 /// `arc` binary can't be located.
 fn launch_command(verb: &str) -> std::io::Result<std::process::Command> {
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
-    cmd.args(["run", verb, "."]);
+    cmd.args([crate::cli::NAME_RUN, verb, "."]);
     Ok(cmd)
 }
 
@@ -666,16 +712,36 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 /// Keys while the palette is open: edit the query, move the selection, run the choice, or dismiss.
 fn handle_palette_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc => app.palette = None,
+        KeyCode::Esc => {
+            // Esc backs out one level: from the run sub-menu to the top, else closes the palette.
+            match app.palette.as_ref().map(|p| p.level) {
+                Some(PaletteLevel::Run) => {
+                    if let Some(p) = app.palette.as_mut() {
+                        p.set_level(PaletteLevel::Top);
+                    }
+                }
+                _ => app.palette = None,
+            }
+        }
         KeyCode::Enter => {
-            // Pull the choice out first so the `app.palette` borrow ends before `apply` mutates `app`.
+            // Pull the choice out first so the `app.palette` borrow ends before mutating `app`.
             let chosen = app
                 .palette
                 .as_ref()
                 .and_then(|p| p.matches().get(p.selected).copied());
-            app.palette = None;
-            if let Some(cmd) = chosen {
-                cmd.apply(app);
+            match chosen {
+                // `run` drills into the verb sub-menu — the palette stays open at the Run level.
+                Some(Command::Run) => {
+                    if let Some(p) = app.palette.as_mut() {
+                        p.set_level(PaletteLevel::Run);
+                    }
+                }
+                // A leaf command closes the palette and acts.
+                Some(cmd) => {
+                    app.palette = None;
+                    cmd.apply(app);
+                }
+                None => {}
             }
         }
         KeyCode::Up => {
@@ -995,7 +1061,12 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
     let rect = centered(area, PALETTE_WIDTH, rows + BORDER + LINE);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
-    let block = Block::bordered().title("commands");
+    // Breadcrumb the level so the run sub-menu reads as a drill-in, not a separate palette.
+    let title = match palette.level {
+        PaletteLevel::Top => "commands",
+        PaletteLevel::Run => "commands › run",
+    };
+    let block = Block::bordered().title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
@@ -1203,5 +1274,73 @@ mod tests {
             ))),
         );
         assert!(app.should_quit, "ctrl-c is the universal escape hatch");
+    }
+
+    #[test]
+    fn palette_groups_verbs_under_a_run_submenu() {
+        let mut app = app_with(Route::Home, empty_snapshot());
+        update(&mut app, press(KeyCode::Char('/')));
+        // Top level lists the `run` group, not the verbs themselves (mirrors `arc run <verb>`).
+        let top: Vec<&str> = app
+            .palette
+            .as_ref()
+            .unwrap()
+            .matches()
+            .iter()
+            .map(|c| c.name())
+            .collect();
+        assert!(
+            top.contains(&crate::cli::NAME_RUN),
+            "the run group leads the top level"
+        );
+        assert!(
+            !top.contains(&crate::cli::NAME_CRITIQUE),
+            "verbs are grouped under run, not flattened at the top"
+        );
+        // Selecting `run` drills into the verb sub-menu without closing the palette.
+        for ch in crate::cli::NAME_RUN.chars() {
+            update(&mut app, press(KeyCode::Char(ch)));
+        }
+        update(&mut app, press(KeyCode::Enter));
+        let sub = app
+            .palette
+            .as_ref()
+            .expect("run opens the verb sub-menu rather than closing");
+        assert_eq!(sub.level, PaletteLevel::Run);
+        let verbs: Vec<&str> = sub.matches().iter().map(|c| c.name()).collect();
+        assert!(
+            verbs.contains(&crate::cli::NAME_AUDIT) && verbs.contains(&crate::cli::NAME_CRITIQUE),
+            "the run sub-menu lists the synthesis verbs"
+        );
+        assert!(
+            !verbs.contains(&crate::cli::NAME_RUN),
+            "the sub-menu is verbs only"
+        );
+    }
+
+    #[test]
+    fn palette_esc_backs_out_of_run_submenu_then_closes() {
+        let mut app = app_with(Route::Home, empty_snapshot());
+        update(&mut app, press(KeyCode::Char('/')));
+        for ch in crate::cli::NAME_RUN.chars() {
+            update(&mut app, press(KeyCode::Char(ch)));
+        }
+        update(&mut app, press(KeyCode::Enter));
+        assert_eq!(
+            app.palette.as_ref().map(|p| p.level),
+            Some(PaletteLevel::Run),
+            "selecting run enters the sub-menu"
+        );
+        update(&mut app, press(KeyCode::Esc));
+        assert_eq!(
+            app.palette.as_ref().map(|p| p.level),
+            Some(PaletteLevel::Top),
+            "esc in the sub-menu backs out to the top level"
+        );
+        update(&mut app, press(KeyCode::Esc));
+        assert!(
+            app.palette.is_none(),
+            "esc at the top level closes the palette"
+        );
     }
 }
