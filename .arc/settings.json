@@ -8,6 +8,11 @@
       "sources": [
         "rules"
       ]
+    },
+    "rule-quality": {
+      "sources": [
+        "meta-rules"
+      ]
     }
   }
 }
