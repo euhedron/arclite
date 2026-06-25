@@ -90,6 +90,7 @@ enum Route {
     Status,
     Config,
     Log,
+    Usage,
 }
 
 /// A `/`-palette command: launch an AI run (a verb), open a view, or quit. Listed in *presentation*
@@ -107,6 +108,7 @@ enum Command {
     Status,
     Config,
     Log,
+    Usage,
     Home,
     Quit,
 }
@@ -119,6 +121,7 @@ impl Command {
         Command::Status,
         Command::Config,
         Command::Log,
+        Command::Usage,
         Command::Home,
         Command::Quit,
     ];
@@ -151,6 +154,7 @@ impl Command {
             Command::Status => "status",
             Command::Config => "config",
             Command::Log => "log",
+            Command::Usage => "usage",
             Command::Home => "home",
             Command::Quit => "quit",
         }
@@ -172,6 +176,7 @@ impl Command {
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
             Command::Log => "browse completed runs and their results",
+            Command::Usage => "spend + token rollup from the run log",
             Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
         }
@@ -190,6 +195,7 @@ impl Command {
             Command::Status => app.route = Route::Status,
             Command::Config => app.open_config(),
             Command::Log => app.open_log(),
+            Command::Usage => app.open_usage(),
             Command::Quit => app.should_quit = true,
             verb => app.start_launch(verb),
         }
@@ -276,6 +282,8 @@ struct App {
     config: Option<ConfigView>,
     /// The `log` view's state (records + cursor + optional drilled-in detail), loaded when it's opened.
     log: Option<LogView>,
+    /// The usage view's rollup text (or an error message), loaded when it's opened.
+    usage: Option<Result<String, String>>,
 }
 
 impl App {
@@ -290,6 +298,7 @@ impl App {
             cwd,
             config: None,
             log: None,
+            usage: None,
         }
     }
 
@@ -385,6 +394,17 @@ impl App {
                 },
                 Err(e) => ConfigView::Error(format!("{e:#}")),
             },
+        );
+    }
+
+    /// Open the usage view, loading the run-log rollup. Re-loaded on each entry (so a run since shows),
+    /// mirroring `open_config`; the same `usage::rollup` backs `arc usage`, so the two can't drift.
+    fn open_usage(&mut self) {
+        self.route = Route::Usage;
+        self.usage = Some(
+            crate::commands::usage::rollup()
+                .map(|(_, human)| human)
+                .map_err(|e| format!("{e:#}")),
         );
     }
 }
@@ -837,6 +857,13 @@ fn render(frame: &mut Frame, app: &App) {
                 .expect("the log view is loaded when its route is active"),
             body,
         ),
+        Route::Usage => render_usage(
+            frame,
+            app.usage
+                .as_ref()
+                .expect("the usage view is loaded when its route is active"),
+            body,
+        ),
     }
     render_footer(frame, footer, app);
 
@@ -963,6 +990,24 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     }
 }
 
+/// The usage view: the run-log spend/token rollup `arc usage` prints, shown here. Re-loaded on entry
+/// (so a run since shows), and the same `usage::rollup` backs the CLI, so the two can't drift.
+fn render_usage(frame: &mut Frame, usage: &Result<String, String>, area: Rect) {
+    let [header, body] =
+        Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Line::from("usage").bold(), header);
+    let text = match usage {
+        Ok(rollup) => rollup.clone(),
+        Err(e) => format!("usage unreadable: {e}"),
+    };
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(Block::bordered())
+            .wrap(Wrap { trim: false }),
+        body,
+    );
+}
+
 /// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
 /// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
 /// run reads the same in the cockpit as on the CLI.
@@ -1052,7 +1097,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Status | Route::Config | Route::Log => "/ commands · esc back · q quit",
+            Route::Status | Route::Config | Route::Log | Route::Usage => {
+                "/ commands · esc back · q quit"
+            }
         }
     };
 
@@ -1174,6 +1221,7 @@ mod tests {
             cwd: ".".to_owned(),
             config: None,
             log: None,
+            usage: None,
         }
     }
 
@@ -1348,6 +1396,24 @@ mod tests {
         assert!(
             app.palette.is_none(),
             "esc at the top level closes the palette"
+        );
+    }
+
+    #[test]
+    fn palette_top_level_includes_usage() {
+        let mut app = app_with(Route::Home, empty_snapshot());
+        update(&mut app, press(KeyCode::Char('/')));
+        let top: Vec<&str> = app
+            .palette
+            .as_ref()
+            .unwrap()
+            .matches()
+            .iter()
+            .map(|c| c.name())
+            .collect();
+        assert!(
+            top.contains(&"usage"),
+            "the usage view is a top-level palette entry, like status/config/log"
         );
     }
 }

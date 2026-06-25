@@ -33,6 +33,13 @@ struct CommandTotal {
 /// The `usage` command: a deterministic rollup of the run log — no AI, just the recorded ground
 /// truth summed per window.
 pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    let (payload, human) = rollup()?;
+    emit(&payload, &human, global.json)
+}
+
+/// Compute the run-log rollup once, returning the structured payload (for `--json`) and the joined
+/// human-readable lines — shared by this command and the TUI usage view so the two can't drift.
+pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
     let (records, unparsed) = crate::log::records()?;
     let now = crate::log::now_secs();
     // Each window is a label plus its maximum age; `None` = all time.
@@ -183,5 +190,5 @@ pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "no_timestamp": no_timestamp,
         "unparsed": unparsed,
     });
-    emit(&payload, &lines.join("\n"), global.json)
+    Ok((payload, lines.join("\n")))
 }
