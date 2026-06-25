@@ -170,11 +170,15 @@ pub fn run() -> ExitCode {
             commands::promote::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Completions(args) => {
-            // Take the binary name from the command itself (cli.rs's `#[command(name)]`) rather than
-            // repeating an "arc" literal here — one rename point, not several.
+            // The binary name is single-sourced in `cli::binary_name`; the command itself (which
+            // `generate` needs by &mut) is built here.
             let mut command = <Cli as clap::CommandFactory>::command();
-            let bin_name = command.get_name().to_owned();
-            clap_complete::generate(args.shell, &mut command, bin_name, &mut std::io::stdout());
+            clap_complete::generate(
+                args.shell,
+                &mut command,
+                crate::cli::binary_name(),
+                &mut std::io::stdout(),
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Run(args) => match &args.verb {

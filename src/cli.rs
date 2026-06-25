@@ -28,6 +28,14 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// The binary's invoked name as clap derives it from [`Cli`]'s `#[command(name)]`, single-sourced
+/// so callers read one definition and a rename has a single home rather than scattered literals.
+pub(crate) fn binary_name() -> String {
+    <Cli as clap::CommandFactory>::command()
+        .get_name()
+        .to_owned()
+}
+
 /// Options available to every subcommand.
 #[derive(Debug, Args)]
 pub struct GlobalArgs {
