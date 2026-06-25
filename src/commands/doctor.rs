@@ -94,18 +94,32 @@ fn probe(program: &str) -> ToolStatus {
 }
 
 /// The repo root containing the cwd: `Ok(Some(root))` inside a work tree, `Ok(None)` when git runs and
-/// reports we are not in one (its benign verdict), `Err` when git itself cannot be run — so a broken or
-/// absent git is surfaced, not collapsed into "not a repo". (`git config --get` outcomes, which need
-/// exit 1 separated from >1, use [`crate::git_config_get`].)
+/// reports we are not in one (its benign verdict), `Err` when git cannot be run at all or runs but fails
+/// for any other reason — so a broken or absent git is surfaced, not collapsed into "not a repo".
+/// (`git config --get` outcomes, which need exit 1 separated from >1, use [`crate::git_config_get`].)
 fn git_repo_root() -> anyhow::Result<Option<String>> {
     let output = crate::ai::command("git")?
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .map_err(|e| anyhow::anyhow!("could not run git: {e}"))?;
-    Ok(output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+    if output.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        ));
+    }
+    // `rev-parse` exits 128 both for "not a git repository" (git's benign not-in-a-work-tree verdict)
+    // and for a genuine fault, so the message is the only discriminator: the standard not-a-repo line
+    // reads as absent; anything else is a broken git we surface rather than mask as "not a repo".
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("not a git repository") {
+        Ok(None)
+    } else {
+        Err(anyhow::anyhow!(
+            "git rev-parse --show-toplevel failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ))
+    }
 }
 
 /// A pre-push hook's state: present and invoking `arc` (the arc gate is wired), present without it,

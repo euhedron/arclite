@@ -80,7 +80,9 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         let id = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or(&stem)
+            .expect(
+                "a promoted finding's path is built as <slug>.md, so its file stem is valid UTF-8",
+            )
             .to_owned();
         promoted.push(Promoted {
             id,
