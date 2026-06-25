@@ -15,3 +15,32 @@ pipelines:
           - cargo test --locked
           - cargo clippy --all-targets --locked -- -D warnings
           - cargo fmt --check
+
+  # Release: on a version tag (`git tag v0.1.0 && git push --tags`) build the per-OS binaries and
+  # upload them to the repo's Downloads — all server-side, so the corp machine's TLS/proxy never
+  # enters the picture, and coworkers get a one-click download (later, `arc update` pulls from here).
+  #
+  # One-time setup: create a Repository Access Token (repo Settings -> Access tokens, scope
+  # `repository:write`) and add it as a SECURED Pipelines variable named DOWNLOADS_TOKEN.
+  tags:
+    'v*':
+      - step:
+          name: release - build + upload binaries to Downloads
+          script:
+            - rustc --version && cargo --version
+            - apt-get update && apt-get install -y --no-install-recommends mingw-w64 curl
+            # Linux (native)
+            - cargo build --release --locked
+            - cp target/release/arc "arc-${GITHUB_TAG}-linux-x86_64"
+            # Windows (cross-compile from Linux; modern windows-sys ships import libs, so no dlltool —
+            # the dlltool pain was the local corp-Windows MinGW, not a clean Linux cross-toolchain).
+            - rustup target add x86_64-pc-windows-gnu
+            - cargo build --release --locked --target x86_64-pc-windows-gnu
+            - cp target/x86_64-pc-windows-gnu/release/arc.exe "arc-${GITHUB_TAG}-windows-x86_64.exe"
+            # Upload both to Downloads. curl works here (Atlassian cloud, no corp proxy); a Repository
+            # Access Token authenticates as `x-token-auth`.
+            - >
+              curl -sf -u "x-token-auth:${DOWNLOADS_TOKEN}"
+              "https://api.github.com/2.0/repositories/${GITHUB_REPO_FULL_NAME}/downloads"
+              -F "files=@arc-${GITHUB_TAG}-linux-x86_64"
+              -F "files=@arc-${GITHUB_TAG}-windows-x86_64.exe"
