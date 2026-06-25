@@ -703,7 +703,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        // The log view owns a cursor (the first section to); other sections refresh on the tick.
+        // The log view is the first section to own a cursor, so it alone gets per-key navigation here.
         _ if app.route == Route::Log => handle_log_key(app, key.code),
         _ => {}
     }
@@ -848,7 +848,7 @@ fn render_home(frame: &mut Frame, area: Rect, cwd: &str) {
     let [masthead, _] =
         Layout::vertical([Constraint::Length(MASTHEAD_HEIGHT), Constraint::Min(0)]).areas(area);
     let lines = vec![
-        Line::from(format!("arc {VERSION}")).bold(),
+        Line::from(format!("{} {VERSION}", crate::cli::binary_name())).bold(),
         Line::from(crate::display_path(cwd)).dim(),
     ];
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
@@ -914,8 +914,8 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     }
 }
 
-/// Column widths for the config table: the dotted setting key (the longest being
-/// `defaults.codex_reasoning_effort`), then the resolved value taking the row's slack.
+/// Column widths for the config table: the dotted setting key (wide enough for the longest current
+/// key), then the resolved value taking the row's slack.
 const CONFIG_COLUMN_WIDTHS: [Constraint; 2] = [Constraint::Length(32), Constraint::Min(10)];
 
 /// The config view: every resolved default (after user-then-project layering) and the active settings
