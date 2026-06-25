@@ -20,6 +20,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)] // never print while the TUI owns the terminal
 
 use std::io::{IsTerminal, Write};
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -284,10 +285,14 @@ struct App {
     log: Option<LogView>,
     /// The usage view's rollup text (or an error message), loaded when it's opened.
     usage: Option<Result<String, String>>,
+    /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
+    /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
+    cwd_note: Option<String>,
 }
 
 impl App {
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
+        let cwd_note = cwd_warning(Path::new(&cwd));
         Self {
             route: Route::Home,
             status: Snapshot::read(),
@@ -299,6 +304,7 @@ impl App {
             config: None,
             log: None,
             usage: None,
+            cwd_note,
         }
     }
 
@@ -556,6 +562,9 @@ struct Snapshot {
     unreadable: usize,
     now: u64,
     error: Option<String>,
+    /// The last few completed runs from the log (newest-first, formatted), so a run that just finished
+    /// stays visible here instead of vanishing the instant its registry marker clears.
+    recent: Vec<String>,
 }
 
 impl Snapshot {
@@ -563,21 +572,56 @@ impl Snapshot {
     /// torn up the loop — a transient registry error shouldn't collapse the live view.
     fn read() -> Self {
         let now = crate::log::now_secs();
+        let recent = recent_completed();
         match crate::runs::active() {
             Ok((active, unreadable)) => Self {
                 active,
                 unreadable: unreadable.len(),
                 now,
                 error: None,
+                recent,
             },
             Err(e) => Self {
                 active: Vec::new(),
                 unreadable: 0,
                 now,
                 error: Some(format!("{e:#}")),
+                recent,
             },
         }
     }
+}
+
+/// How many recently-completed runs the status tail shows.
+const RECENT_RUNS: usize = 5;
+
+/// The last [`RECENT_RUNS`] completed runs from the log, newest-first, each `command · repo · outcome`
+/// — so a just-finished run stays visible in `status` instead of vanishing when its registry marker
+/// clears. Best-effort: a log-read error yields an empty tail (the live view isn't torn up over it).
+/// Re-read each tick; the log is small, and a tail-only read is a later optimization.
+fn recent_completed() -> Vec<String> {
+    let Ok((records, _)) = crate::log::records_newest_first() else {
+        return Vec::new();
+    };
+    records
+        .iter()
+        .take(RECENT_RUNS)
+        .map(|r| {
+            let cmd = crate::log::field(r, "command");
+            let repo = crate::log::field(r, "repo");
+            let outcome = if r.get("blocked").and_then(Value::as_bool) == Some(true) {
+                "blocked".to_owned()
+            } else if r.get("error").is_some() {
+                "errored".to_owned()
+            } else {
+                match crate::log::record_cost(r) {
+                    Some(c) => crate::log::cost_display(c),
+                    None => "tokens only".to_owned(),
+                }
+            };
+            format!("{cmd} · {} · {outcome}", crate::log::repo_basename(&repo))
+        })
+        .collect()
 }
 
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
@@ -841,7 +885,7 @@ fn render(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(frame.area());
 
     match app.route {
-        Route::Home => render_home(frame, body, &app.cwd),
+        Route::Home => render_home(frame, body, &app.cwd, app.cwd_note.as_deref()),
         Route::Status => render_status(frame, &app.status, body),
         Route::Config => render_config(
             frame,
@@ -875,16 +919,44 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-/// The home view the TUI opens on — a compact masthead (name + version, then the target directory),
-/// echoing how the agent CLIs head their opening screens. The footer carries the live state and key
+/// A warning for the home view if the launch directory is a poor place to run arc — the home folder
+/// (a run there scans the whole home tree) or outside any git repo; None for a normal repo. Computed
+/// once at startup (it does filesystem probes), so [`render`] stays a pure function of state.
+fn cwd_warning(cwd: &Path) -> Option<String> {
+    if Some(cwd) == dirs::home_dir().as_deref() {
+        return Some(
+            "home folder — a run here scans your whole home tree; cd into a repo first".to_owned(),
+        );
+    }
+    // `.try_exists()` not `.exists()`: an unreadable `.git` (a permission hiccup) is "can't tell", not
+    // "absent", so it isn't mislabeled "not a repo" (distinguish-absent-from-unreadable). Warn only when
+    // every ancestor's `.git` is confirmed missing.
+    if !cwd
+        .ancestors()
+        .any(|a| a.join(".git").try_exists().unwrap_or(true))
+    {
+        return Some(
+            "not a git repository — runs aren't scoped to a project; cd into a repo".to_owned(),
+        );
+    }
+    None
+}
+
+/// The home view the TUI opens on — a compact masthead (name + version, the target directory, and a
+/// warning when that directory is a poor place to run arc). The footer carries live state and key
 /// hints, so home doesn't repeat them; the space below is the open launchpad.
-fn render_home(frame: &mut Frame, area: Rect, cwd: &str) {
+fn render_home(frame: &mut Frame, area: Rect, cwd: &str, note: Option<&str>) {
+    // The masthead grows by a line when there's a cwd warning to show.
+    let height = MASTHEAD_HEIGHT + if note.is_some() { LINE } else { 0 };
     let [masthead, _] =
-        Layout::vertical([Constraint::Length(MASTHEAD_HEIGHT), Constraint::Min(0)]).areas(area);
-    let lines = vec![
+        Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
+    let mut lines = vec![
         Line::from(format!("{} {VERSION}", crate::cli::binary_name())).bold(),
         Line::from(crate::display_path(cwd)).dim(),
     ];
+    if let Some(w) = note {
+        lines.push(Line::from(w).yellow());
+    }
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
 }
 
@@ -904,20 +976,30 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
-    let [header, body] =
-        Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
+    // header, the in-flight table (flexes), then a short recently-completed tail when there is one.
+    let recent_h = if snap.recent.is_empty() {
+        0
+    } else {
+        snap.recent.len() as u16 + BORDER
+    };
+    let [header, active_area, recent_area] = Layout::vertical([
+        Constraint::Length(LINE),
+        Constraint::Min(0),
+        Constraint::Length(recent_h),
+    ])
+    .areas(area);
 
     frame.render_widget(Line::from("live status").bold(), header);
 
     if let Some(err) = &snap.error {
         frame.render_widget(
             Paragraph::new(format!("run registry unreadable: {err}")).block(Block::bordered()),
-            body,
+            active_area,
         );
     } else if snap.active.is_empty() {
         frame.render_widget(
             Paragraph::new("no runs in flight").block(Block::bordered()),
-            body,
+            active_area,
         );
     } else {
         let rows = snap.active.iter().map(|r| {
@@ -944,7 +1026,19 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                     .style(Style::new().bold()),
             )
             .block(Block::bordered().title(title));
-        frame.render_widget(table, body);
+        frame.render_widget(table, active_area);
+    }
+
+    if !snap.recent.is_empty() {
+        let lines: Vec<Line> = snap
+            .recent
+            .iter()
+            .map(|l| Line::from(l.as_str()).dim())
+            .collect();
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::bordered().title("recently completed")),
+            recent_area,
+        );
     }
 }
 
@@ -1205,6 +1299,7 @@ mod tests {
             unreadable: 0,
             now: 100,
             error: None,
+            recent: Vec::new(),
         }
     }
 
@@ -1222,6 +1317,7 @@ mod tests {
             config: None,
             log: None,
             usage: None,
+            cwd_note: None,
         }
     }
 

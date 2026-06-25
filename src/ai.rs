@@ -96,7 +96,7 @@ fn shim_target(path: &Path) -> anyhow::Result<Option<PathBuf>> {
         .with_context(|| format!("cannot read the shim {}", path.display()))?;
     let dir = path
         .parent()
-        .with_context(|| format!("the shim {} has no parent directory", path.display()))?;
+        .expect("a which-resolved shim path always has a parent directory");
     // npm shim runs e.g. `"%dp0%\node_modules\…\claude.exe"   %*`; pull that quoted .exe out.
     Ok(body
         .split('"')
