@@ -11,9 +11,10 @@ use crate::settings::Settings;
 /// starter ruleset's source, which must agree or the scaffolded default silently resolves to nothing.
 const RULES_DIR: &str = "rules";
 
-/// The tracked hooks directory — one name for the directory the scaffold writes and the
-/// `core.hooksPath` value that activates it, so a rename can't rot one against the other.
-const HOOKS_DIR: &str = "hooks";
+/// The hooks subdirectory inside `.arc` — the directory the scaffold writes; the `core.hooksPath`
+/// value that activates it is derived as `<ARC_DIR>/<this>` in [`activate_hooks`], so the scaffolded
+/// directory and the activation can't drift.
+const HOOKS_SUBDIR: &str = "hooks";
 
 /// The scaffolded ruleset's name — referenced twice in the starter settings (as the configured
 /// default and as the ruleset's key), which must agree or the default resolves to nothing.
@@ -65,7 +66,7 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     )?;
 
     if args.hook {
-        let hooks = root.join(HOOKS_DIR);
+        let hooks = arc.join(HOOKS_SUBDIR);
         std::fs::create_dir_all(&hooks)
             .with_context(|| format!("cannot create {}", hooks.display()))?;
         let hook = hooks.join("pre-push");
@@ -121,19 +122,22 @@ fn write_if_absent(
     Ok(true)
 }
 
-/// Point git at the committed `hooks/` directory so the pre-push gate runs — the opt-in activation.
+/// Point git at the committed `.arc/hooks` directory so the pre-push gate runs — the opt-in activation.
 fn activate_hooks(root: &Path) -> anyhow::Result<()> {
+    // git wants core.hooksPath as a forward-slash relative path; derive it from ARC_DIR + the subdir so
+    // it tracks the directory the scaffold actually wrote.
+    let hooks_path = format!("{}/{HOOKS_SUBDIR}", crate::ARC_DIR);
     // Don't clobber a core.hooksPath the user already set for something else — surface it and stop,
     // rather than silently overwriting (the scaffold is careful never to clobber files; so is this).
     let current = crate::git_config_get(root, "core.hooksPath")?.unwrap_or_default();
     anyhow::ensure!(
-        current.is_empty() || current == HOOKS_DIR,
-        "core.hooksPath is already set to `{current}` — leaving it untouched; set it to `{HOOKS_DIR}` \
+        current.is_empty() || current == hooks_path,
+        "core.hooksPath is already set to `{current}` — leaving it untouched; set it to `{hooks_path}` \
          (or unset it) yourself to activate the arclite gate"
     );
     let ok = crate::ai::command("git")?
         .current_dir(root)
-        .args(["config", "core.hooksPath", HOOKS_DIR])
+        .args(["config", "core.hooksPath", hooks_path.as_str()])
         .status()
         .context("could not run git to set core.hooksPath")?
         .success();
