@@ -288,11 +288,15 @@ struct App {
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
+    /// The launch dir, home-abbreviated for the masthead — precomputed in `new` (display_path probes
+    /// the home dir) so render stays a pure function of state.
+    cwd_display: String,
 }
 
 impl App {
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         let cwd_note = cwd_warning(Path::new(&cwd));
+        let cwd_display = crate::display_path(&cwd);
         Self {
             route: Route::Home,
             status: Snapshot::read(),
@@ -305,6 +309,7 @@ impl App {
             log: None,
             usage: None,
             cwd_note,
+            cwd_display,
         }
     }
 
@@ -882,7 +887,7 @@ fn render(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(frame.area());
 
     match app.route {
-        Route::Home => render_home(frame, body, &app.cwd, app.cwd_note.as_deref()),
+        Route::Home => render_home(frame, body, &app.cwd_display, app.cwd_note.as_deref()),
         Route::Status => render_status(frame, &app.status, body),
         Route::Config => render_config(
             frame,
@@ -942,14 +947,14 @@ fn cwd_warning(cwd: &Path) -> Option<String> {
 /// The home view the TUI opens on — a compact masthead (name + version, the target directory, and a
 /// warning when that directory is a poor place to run arc). The footer carries live state and key
 /// hints, so home doesn't repeat them; the space below is the open launchpad.
-fn render_home(frame: &mut Frame, area: Rect, cwd: &str, note: Option<&str>) {
+fn render_home(frame: &mut Frame, area: Rect, cwd_display: &str, note: Option<&str>) {
     // The masthead grows by a line when there's a cwd warning to show.
     let height = MASTHEAD_HEIGHT + if note.is_some() { LINE } else { 0 };
     let [masthead, _] =
         Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
     let mut lines = vec![
         Line::from(format!("{} {VERSION}", crate::cli::binary_name())).bold(),
-        Line::from(crate::display_path(cwd)).dim(),
+        Line::from(cwd_display).dim(),
     ];
     if let Some(w) = note {
         lines.push(Line::from(w).yellow());
@@ -1435,6 +1440,7 @@ mod tests {
             log: None,
             usage: None,
             cwd_note: None,
+            cwd_display: ".".to_owned(),
         }
     }
 
