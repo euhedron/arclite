@@ -563,8 +563,9 @@ struct Snapshot {
     now: u64,
     error: Option<String>,
     /// The last few completed runs from the log (newest-first, formatted), so a run that just finished
-    /// stays visible here instead of vanishing the instant its registry marker clears.
-    recent: Vec<String>,
+    /// stays visible here instead of vanishing the instant its registry marker clears; `Err` if the log
+    /// read failed (surfaced in the view, not collapsed into "nothing recent").
+    recent: Result<Vec<String>, String>,
 }
 
 impl Snapshot {
@@ -597,13 +598,12 @@ const RECENT_RUNS: usize = 5;
 
 /// The last [`RECENT_RUNS`] completed runs from the log, newest-first, each `command · repo · outcome`
 /// — so a just-finished run stays visible in `status` instead of vanishing when its registry marker
-/// clears. Best-effort: a log-read error yields an empty tail (the live view isn't torn up over it).
-/// Re-read each tick; the log is small, and a tail-only read is a later optimization.
-fn recent_completed() -> Vec<String> {
-    let Ok((records, _)) = crate::log::records_newest_first() else {
-        return Vec::new();
-    };
-    records
+/// clears. A log-read failure is returned as `Err` (surfaced in the view, like the registry error),
+/// not collapsed into an empty tail. Re-read each tick; the log is small, and a tail-only read is a
+/// later optimization.
+fn recent_completed() -> Result<Vec<String>, String> {
+    let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
+    Ok(records
         .iter()
         .take(RECENT_RUNS)
         .map(|r| {
@@ -614,14 +614,11 @@ fn recent_completed() -> Vec<String> {
             } else if r.get("error").is_some() {
                 "errored".to_owned()
             } else {
-                match crate::log::record_cost(r) {
-                    Some(c) => crate::log::cost_display(c),
-                    None => "tokens only".to_owned(),
-                }
+                crate::log::cost_or_unavailable(crate::log::record_cost(r))
             };
             format!("{cmd} · {} · {outcome}", crate::log::repo_basename(&repo))
         })
-        .collect()
+        .collect())
 }
 
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
@@ -977,10 +974,16 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     // header, the in-flight table (flexes), then a short recently-completed tail when there is one.
-    let recent_h = if snap.recent.is_empty() {
+    // The recently-completed tail; a log-read failure surfaces here (like the registry error above),
+    // not collapsed into "nothing recent".
+    let recent_lines: Vec<Line> = match &snap.recent {
+        Ok(lines) => lines.iter().map(|l| Line::from(l.as_str()).dim()).collect(),
+        Err(e) => vec![Line::from(format!("run log unreadable: {e}")).dim()],
+    };
+    let recent_h = if recent_lines.is_empty() {
         0
     } else {
-        snap.recent.len() as u16 + BORDER
+        recent_lines.len() as u16 + BORDER
     };
     let [header, active_area, recent_area] = Layout::vertical([
         Constraint::Length(LINE),
@@ -1029,14 +1032,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         frame.render_widget(table, active_area);
     }
 
-    if !snap.recent.is_empty() {
-        let lines: Vec<Line> = snap
-            .recent
-            .iter()
-            .map(|l| Line::from(l.as_str()).dim())
-            .collect();
+    if !recent_lines.is_empty() {
         frame.render_widget(
-            Paragraph::new(lines).block(Block::bordered().title("recently completed")),
+            Paragraph::new(recent_lines).block(Block::bordered().title("recently completed")),
             recent_area,
         );
     }
@@ -1143,31 +1141,16 @@ fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
         .cloned()
         .unwrap_or_default();
 
-    // Disclosure lines (codex token-only runs, missing usage/timestamps, unparsed) — surfaced, never
-    // hidden, exactly as the CLI rollup does.
-    let count = |k: &str| payload.get(k).and_then(Value::as_u64).unwrap_or(0);
-    let mut notes: Vec<String> = Vec::new();
-    if count("tokens_only") > 0 {
-        notes.push(format!(
-            "{} run(s) report tokens only — no $ cost (codex); in the token sums, not the cost",
-            count("tokens_only")
-        ));
-    }
-    if count("no_usage") > 0 {
-        notes.push(format!(
-            "{} run(s) lack usage data entirely (excluded from all sums)",
-            count("no_usage")
-        ));
-    }
-    if count("no_timestamp") > 0 {
-        notes.push(format!(
-            "{} run(s) without a timestamp (in the all-time total only)",
-            count("no_timestamp")
-        ));
-    }
-    if count("unparsed") > 0 {
-        notes.push(format!("{} unparsed log line(s)", count("unparsed")));
-    }
+    // Disclosure lines come ready-made from the rollup payload (built once in usage::rollup), so the
+    // view and the CLI can't drift on their wording.
+    let notes: Vec<String> = payload["notes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let notes_h = if notes.is_empty() {
         0
@@ -1175,7 +1158,7 @@ fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
         notes.len() as u16 + BORDER
     };
     let [periods_area, commands_area, notes_area] = Layout::vertical([
-        Constraint::Length(windows.len() as u16 + 1 + BORDER),
+        Constraint::Length(windows.len() as u16 + LINE + BORDER),
         Constraint::Min(0),
         Constraint::Length(notes_h),
     ])
@@ -1433,7 +1416,7 @@ mod tests {
             unreadable: 0,
             now: 100,
             error: None,
-            recent: Vec::new(),
+            recent: Ok(Vec::new()),
         }
     }
 

@@ -164,24 +164,29 @@ pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
             ));
         }
     }
+    // Disclosure lines (codex token-only runs, missing usage/timestamps, unparsed) — built once here
+    // and carried in the payload, so the TUI usage view renders the same wording rather than
+    // re-deriving (and drifting from) it.
+    let mut notes: Vec<String> = Vec::new();
     if tokens_only > 0 {
-        lines.push(format!(
+        notes.push(format!(
             "{tokens_only} run(s) report tokens only — no dollar cost (codex); counted in the token sums, not the cost"
         ));
     }
     if no_usage > 0 {
-        lines.push(format!(
+        notes.push(format!(
             "{no_usage} run(s) lack usage data entirely (excluded from all sums)"
         ));
     }
     if no_timestamp > 0 {
-        lines.push(format!(
+        notes.push(format!(
             "{no_timestamp} run(s) without a timestamp (in the all-time total only, not the timed windows)"
         ));
     }
     if unparsed > 0 {
-        lines.push(crate::log::unparsed_note(unparsed));
+        notes.push(crate::log::unparsed_note(unparsed));
     }
+    lines.extend(notes.iter().cloned());
     let payload = serde_json::json!({
         "windows": windows,
         "by_command": by_command,
@@ -189,6 +194,7 @@ pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
         "no_usage": no_usage,
         "no_timestamp": no_timestamp,
         "unparsed": unparsed,
+        "notes": notes,
     });
     Ok((payload, lines.join("\n")))
 }
