@@ -81,10 +81,10 @@ pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
                     continue;
                 }
                 w.runs += 1;
-                if r.get("blocked").and_then(Value::as_bool) == Some(true) {
+                if crate::log::is_blocked(r) {
                     w.blocked += 1;
                 }
-                if r.get("error").is_some() {
+                if crate::log::is_errored(r) {
                     w.errored += 1;
                 }
                 // Sum tokens for any record carrying a `usage` object — claude *and* codex. Codex

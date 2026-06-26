@@ -609,9 +609,9 @@ fn recent_completed() -> Result<Vec<String>, String> {
         .map(|r| {
             let cmd = crate::log::field(r, "command");
             let repo = crate::log::field(r, "repo");
-            let outcome = if r.get("blocked").and_then(Value::as_bool) == Some(true) {
+            let outcome = if crate::log::is_blocked(r) {
                 "blocked".to_owned()
-            } else if r.get("error").is_some() {
+            } else if crate::log::is_errored(r) {
                 "errored".to_owned()
             } else {
                 crate::log::cost_or_unavailable(crate::log::record_cost(r))

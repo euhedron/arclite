@@ -125,6 +125,19 @@ pub fn record_cost(record: &serde_json::Value) -> Option<f64> {
         .and_then(serde_json::Value::as_f64)
 }
 
+/// Whether a run record carries the two non-clean outcomes — gate-blocked and errored — read from the
+/// keys the run report and `arc usage` both key off, so the reading lives in one place rather than
+/// open-coded per consumer. A record can be both (a gate that blocked after an error), so these stay
+/// independent predicates, not one enum.
+pub fn is_blocked(record: &serde_json::Value) -> bool {
+    record.get("blocked").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+/// See [`is_blocked`]: whether the run carried an error payload.
+pub fn is_errored(record: &serde_json::Value) -> bool {
+    record.get("error").is_some()
+}
+
 /// A string field of a run record, or the `?` sentinel if absent — the shared accessor for the
 /// record shape that `arc log` and `arc usage` both read, so the sentinel can't drift between them.
 pub fn field(record: &serde_json::Value, key: &str) -> String {
