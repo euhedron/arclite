@@ -47,7 +47,7 @@ fn keep(r: &Value, args: &LogArgs) -> bool {
     {
         return false;
     }
-    if args.blocked && r.get("blocked").and_then(Value::as_bool) != Some(true) {
+    if args.blocked && !crate::log::is_blocked(r) {
         return false;
     }
     true
@@ -109,10 +109,10 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
         .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)));
     let repo_full = field(r, "repo");
     let repo = repo_basename(&repo_full);
-    let blocked = r.get("blocked").and_then(Value::as_bool).unwrap_or(false);
+    let blocked = crate::log::is_blocked(r);
     // A run that errored (spent but didn't complete) is flagged so failed runs stand out in the list;
     // it's mutually exclusive with a gate verdict (a failed run never reaches the gate).
-    let errored = r.get("error").is_some();
+    let errored = crate::log::is_errored(r);
     format!(
         "{id} · {age} · {} · {} · {} · {}{}{}",
         field(r, "command"),
@@ -308,7 +308,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
     if let Some(error) = run.get("error").and_then(Value::as_str) {
         meta.push_str(&format!(" · errored: {error}"));
     } else if run.get("gate").and_then(Value::as_str).is_some() {
-        let blocked = run.get("blocked").and_then(Value::as_bool) == Some(true);
+        let blocked = crate::log::is_blocked(&run);
         meta.push_str(&format!(" · gate: {}", crate::log::gate_label(blocked)));
     }
     // Run shape: runs (vs. requested), memory isolation, the budget cap, codex reasoning effort.
