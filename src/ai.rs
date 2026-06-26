@@ -371,10 +371,17 @@ fn drive(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().context(launch_err)?;
-    {
-        let mut stdin = child.stdin.take().expect("stdin was configured as piped");
-        stdin.write_all(prompt.as_bytes())?;
-    } // dropping stdin closes it, signalling end-of-input
+    // Write the prompt on its own thread, concurrently with draining stdout/stderr below: writing it
+    // all first (a large prompt on a small pipe buffer, notably Windows) deadlocks if the child emits
+    // output before consuming stdin — its output pipe fills while we're blocked writing stdin. The
+    // write result isn't propagated: a broken pipe just means the child exited early (e.g. a budget
+    // rejection), and the run's outcome comes from the result event / stderr / exit status, not from
+    // whether all stdin was written. Dropping stdin when the closure ends signals end-of-input.
+    let mut stdin = child.stdin.take().expect("stdin was configured as piped");
+    let prompt = prompt.to_owned();
+    let stdin_writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(prompt.as_bytes());
+    });
     // Drain stderr on its own thread, concurrently with the stdout stream below: a backend that fills
     // the stderr pipe buffer while we're still reading stdout would block writing it — and we'd never
     // reach a post-loop read — a deadlock. Joined after the child exits.
@@ -400,6 +407,9 @@ fn drive(
     let stderr = stderr_reader
         .join()
         .expect("the stderr reader thread panicked");
+    stdin_writer
+        .join()
+        .expect("the stdin writer thread panicked");
     Ok((status, stderr))
 }
 
