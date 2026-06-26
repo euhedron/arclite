@@ -89,7 +89,7 @@ fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 /// usage, this is the same rendering the live run report uses (`$X`, or "tokens only (no $)" for a
 /// backend like codex that reports tokens but no cost) — so a run reads the same logged as it did
 /// live. A record with no usage at all has a genuinely-absent cost, shown `$?` (never a bogus $0).
-fn cost(v: &Value) -> String {
+pub(crate) fn cost(v: &Value) -> String {
     if v.get("usage").is_some() {
         crate::log::cost_or_unavailable(crate::log::record_cost(v))
     } else {

@@ -620,7 +620,7 @@ fn recent_completed() -> Result<Vec<String>, String> {
             } else if crate::log::is_errored(r) {
                 "errored".to_owned()
             } else {
-                crate::log::cost_or_unavailable(crate::log::record_cost(r))
+                crate::commands::log::cost(r)
             };
             format!("{cmd} · {} · {outcome}", crate::log::repo_basename(&repo))
         })
