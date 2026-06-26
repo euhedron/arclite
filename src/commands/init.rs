@@ -32,12 +32,18 @@ fn starter_settings() -> String {
     )
 }
 
-/// Starter pre-push gate — a minimal composition the repo edits to taste.
-const STARTER_HOOK: &str = r#"#!/bin/sh
-# arclite gate (pre-push). Edit the command(s) below to taste; skip once with `ARC_GATE=0 git push`.
-if [ "$ARC_GATE" = "0" ]; then exit 0; fi
-arc run audit --fail-on-findings
-"#;
+/// Starter pre-push gate — a minimal composition the repo edits to taste. The binary name comes from
+/// [`crate::cli::binary_name`] (the single source `doctor` detects the hook by) rather than a literal,
+/// so a rename can't desync the scaffolded hook from arc's own detection.
+fn starter_hook() -> String {
+    format!(
+        "#!/bin/sh\n\
+         # arclite gate (pre-push). Edit the command(s) below to taste; skip once with `ARC_GATE=0 git push`.\n\
+         if [ \"$ARC_GATE\" = \"0\" ]; then exit 0; fi\n\
+         {} run audit --fail-on-findings\n",
+        crate::cli::binary_name()
+    )
+}
 
 #[derive(Serialize)]
 struct InitReport {
@@ -70,7 +76,7 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         std::fs::create_dir_all(&hooks)
             .with_context(|| format!("cannot create {}", hooks.display()))?;
         let hook = hooks.join("pre-push");
-        if write_if_absent(&hook, STARTER_HOOK, &mut created, &mut skipped)? {
+        if write_if_absent(&hook, &starter_hook(), &mut created, &mut skipped)? {
             make_executable(&hook)?;
         }
         activate_hooks(&root)?;
