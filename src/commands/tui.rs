@@ -283,8 +283,8 @@ struct App {
     config: Option<ConfigView>,
     /// The `log` view's state (records + cursor + optional drilled-in detail), loaded when it's opened.
     log: Option<LogView>,
-    /// The usage view's rollup text (or an error message), loaded when it's opened.
-    usage: Option<Result<String, String>>,
+    /// The usage view's rollup payload (or an error message), loaded when it's opened; rendered as tables.
+    usage: Option<Result<Value, String>>,
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
@@ -409,7 +409,7 @@ impl App {
         self.route = Route::Usage;
         self.usage = Some(
             crate::commands::usage::rollup()
-                .map(|(_, human)| human)
+                .map(|(payload, _)| payload)
                 .map_err(|e| format!("{e:#}")),
         );
     }
@@ -1084,22 +1084,156 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     }
 }
 
-/// The usage view: the run-log spend/token rollup `arc usage` prints, shown here. Re-loaded on entry
-/// (so a run since shows), and the same `usage::rollup` backs the CLI, so the two can't drift.
-fn render_usage(frame: &mut Frame, usage: &Result<String, String>, area: Rect) {
+/// A compact token count for table cells — `16.2M`, `412.8K`, `999` — so the big token sums fit a
+/// column instead of wrapping the way the CLI's full-width numbers do.
+fn compact(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Period-table columns: the window label, run/blocked/errored counts, the compact token breakdown,
+/// then cost taking the slack.
+const USAGE_PERIOD_WIDTHS: [Constraint; 9] = [
+    Constraint::Length(6),
+    Constraint::Length(5),
+    Constraint::Length(5),
+    Constraint::Length(5),
+    Constraint::Length(6),
+    Constraint::Length(8),
+    Constraint::Length(8),
+    Constraint::Length(6),
+    Constraint::Min(8),
+];
+
+/// By-command columns: the verb, its run count, and all-time cost.
+const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
+    Constraint::Length(12),
+    Constraint::Length(6),
+    Constraint::Min(8),
+];
+
+/// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
+/// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
+/// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
+/// backs the CLI, so the two can't drift.
+fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
     frame.render_widget(Line::from("usage").bold(), header);
-    let text = match usage {
-        Ok(rollup) => rollup.clone(),
-        Err(e) => format!("usage unreadable: {e}"),
+
+    let payload = match usage {
+        Ok(p) => p,
+        Err(e) => {
+            frame.render_widget(
+                Paragraph::new(format!("usage unreadable: {e}")).block(Block::bordered()),
+                body,
+            );
+            return;
+        }
     };
+
+    let windows = payload["windows"].as_array().cloned().unwrap_or_default();
+    let by_command = payload["by_command"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    // Disclosure lines (codex token-only runs, missing usage/timestamps, unparsed) — surfaced, never
+    // hidden, exactly as the CLI rollup does.
+    let count = |k: &str| payload.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let mut notes: Vec<String> = Vec::new();
+    if count("tokens_only") > 0 {
+        notes.push(format!(
+            "{} run(s) report tokens only — no $ cost (codex); in the token sums, not the cost",
+            count("tokens_only")
+        ));
+    }
+    if count("no_usage") > 0 {
+        notes.push(format!(
+            "{} run(s) lack usage data entirely (excluded from all sums)",
+            count("no_usage")
+        ));
+    }
+    if count("no_timestamp") > 0 {
+        notes.push(format!(
+            "{} run(s) without a timestamp (in the all-time total only)",
+            count("no_timestamp")
+        ));
+    }
+    if count("unparsed") > 0 {
+        notes.push(format!("{} unparsed log line(s)", count("unparsed")));
+    }
+
+    let notes_h = if notes.is_empty() {
+        0
+    } else {
+        notes.len() as u16 + BORDER
+    };
+    let [periods_area, commands_area, notes_area] = Layout::vertical([
+        Constraint::Length(windows.len() as u16 + 1 + BORDER),
+        Constraint::Min(0),
+        Constraint::Length(notes_h),
+    ])
+    .areas(body);
+
+    let period_rows = windows.iter().map(|w| {
+        let g = |k: &str| w.get(k).and_then(Value::as_u64).unwrap_or(0);
+        Row::new([
+            w.get("window")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            g("runs").to_string(),
+            g("blocked").to_string(),
+            g("errored").to_string(),
+            compact(g("input_tokens")),
+            compact(g("cache_creation_input_tokens")),
+            compact(g("cache_read_input_tokens")),
+            compact(g("output_tokens")),
+            crate::log::cost_display(w.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0)),
+        ])
+    });
     frame.render_widget(
-        Paragraph::new(text)
-            .block(Block::bordered())
-            .wrap(Wrap { trim: false }),
-        body,
+        Table::new(period_rows, USAGE_PERIOD_WIDTHS)
+            .header(
+                Row::new([
+                    "window", "runs", "blkd", "errd", "in", "cache wr", "cache rd", "out", "cost",
+                ])
+                .style(Style::new().bold()),
+            )
+            .block(Block::bordered().title("spend & tokens")),
+        periods_area,
     );
+
+    let cmd_rows = by_command.iter().map(|c| {
+        Row::new([
+            c.get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned(),
+            c.get("runs")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .to_string(),
+            crate::log::cost_display(c.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0)),
+        ])
+    });
+    frame.render_widget(
+        Table::new(cmd_rows, USAGE_COMMAND_WIDTHS)
+            .header(Row::new(["command", "runs", "cost"]).style(Style::new().bold()))
+            .block(Block::bordered().title("by command (all-time)")),
+        commands_area,
+    );
+
+    if !notes.is_empty() {
+        let lines: Vec<Line> = notes.iter().map(|n| Line::from(n.as_str()).dim()).collect();
+        frame.render_widget(Paragraph::new(lines).block(Block::bordered()), notes_area);
+    }
 }
 
 /// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
