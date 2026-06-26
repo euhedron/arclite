@@ -20,8 +20,9 @@ pipelines:
   # upload them to the repo's Downloads — all server-side, so the corp machine's TLS/proxy never
   # enters the picture, and coworkers get a one-click download (later, `arc update` pulls from here).
   #
-  # One-time setup: create a Repository Access Token (repo Settings -> Access tokens, scope
-  # `repository:write`) and add it as a SECURED Pipelines variable named DOWNLOADS_TOKEN.
+  # One-time setup: add a GitHub API token (repository:write scope) as a SECURED Pipelines variable
+  # named DOWNLOADS_TOKEN. The REST API authenticates an account API token as `email:token`, so the
+  # upload uses the account email as the username (`x-github-api-token-auth` is the git-only form).
   tags:
     'v*':
       - step:
@@ -37,10 +38,11 @@ pipelines:
             - rustup target add x86_64-pc-windows-gnu
             - cargo build --release --locked --target x86_64-pc-windows-gnu
             - cp target/x86_64-pc-windows-gnu/release/arc.exe "arc-${GITHUB_TAG}-windows-x86_64.exe"
-            # Upload both to Downloads. curl works here (Atlassian cloud, no corp proxy); a Repository
-            # Access Token authenticates as `x-token-auth`.
+            # Upload both to Downloads (Atlassian cloud, no corp proxy). An account API token auths to
+            # the REST API as `email:token` (its git username `x-github-api-token-auth` 401s here),
+            # so the upload uses the account email as the username.
             - >
-              curl -sf -u "x-token-auth:${DOWNLOADS_TOKEN}"
+              curl -sf -u "98573653+nikganderson@users.noreply.github.com:${DOWNLOADS_TOKEN}"
               "https://api.github.com/2.0/repositories/${GITHUB_REPO_FULL_NAME}/downloads"
               -F "files=@arc-${GITHUB_TAG}-linux-x86_64"
               -F "files=@arc-${GITHUB_TAG}-windows-x86_64.exe"
