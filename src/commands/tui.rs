@@ -35,6 +35,7 @@ use ratatui::{Frame, TerminalOptions, Viewport};
 use serde_json::Value;
 
 use crate::cli::{GlobalArgs, TuiArgs};
+use crate::commands::usage::Rollup;
 use crate::runs::ActiveRun;
 
 /// Default seconds between live refreshes when `--interval` is omitted. One second keeps the registry
@@ -283,8 +284,8 @@ struct App {
     config: Option<ConfigView>,
     /// The `log` view's state (records + cursor + optional drilled-in detail), loaded when it's opened.
     log: Option<LogView>,
-    /// The usage view's rollup payload (or an error message), loaded when it's opened; rendered as tables.
-    usage: Option<Result<Value, String>>,
+    /// The usage view's rollup (or an error message), loaded when it's opened; rendered as tables.
+    usage: Option<Result<Rollup, String>>,
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
@@ -414,7 +415,7 @@ impl App {
         self.route = Route::Usage;
         self.usage = Some(
             crate::commands::usage::rollup()
-                .map(|(payload, _)| payload)
+                .map(|(rollup, _)| rollup)
                 .map_err(|e| format!("{e:#}")),
         );
     }
@@ -1124,13 +1125,13 @@ const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
 /// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
 /// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
 /// backs the CLI, so the two can't drift.
-fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
+fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
     frame.render_widget(Line::from("usage").bold(), header);
 
-    let payload = match usage {
-        Ok(p) => p,
+    let rollup = match usage {
+        Ok(r) => r,
         Err(e) => {
             frame.render_widget(
                 Paragraph::new(format!("usage unreadable: {e}")).block(Block::bordered()),
@@ -1140,50 +1141,29 @@ fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
         }
     };
 
-    let windows = payload["windows"].as_array().cloned().unwrap_or_default();
-    let by_command = payload["by_command"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-
-    // Disclosure lines come ready-made from the rollup payload (built once in usage::rollup), so the
-    // view and the CLI can't drift on their wording.
-    let notes: Vec<String> = payload["notes"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let notes_h = if notes.is_empty() {
+    let notes_h = if rollup.notes.is_empty() {
         0
     } else {
-        notes.len() as u16 + BORDER
+        rollup.notes.len() as u16 + BORDER
     };
     let [periods_area, commands_area, notes_area] = Layout::vertical([
-        Constraint::Length(windows.len() as u16 + LINE + BORDER),
+        Constraint::Length(rollup.windows.len() as u16 + LINE + BORDER),
         Constraint::Min(0),
         Constraint::Length(notes_h),
     ])
     .areas(body);
 
-    let period_rows = windows.iter().map(|w| {
-        let g = |k: &str| w.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let period_rows = rollup.windows.iter().map(|w| {
         Row::new([
-            w.get("window")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-            g("runs").to_string(),
-            g("blocked").to_string(),
-            g("errored").to_string(),
-            compact(g("input_tokens")),
-            compact(g("cache_creation_input_tokens")),
-            compact(g("cache_read_input_tokens")),
-            compact(g("output_tokens")),
-            crate::log::cost_display(w.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0)),
+            w.window.to_owned(),
+            w.runs.to_string(),
+            w.blocked.to_string(),
+            w.errored.to_string(),
+            compact(w.input_tokens),
+            compact(w.cache_creation_input_tokens),
+            compact(w.cache_read_input_tokens),
+            compact(w.output_tokens),
+            crate::log::cost_display(w.cost_usd),
         ])
     });
     frame.render_widget(
@@ -1198,17 +1178,11 @@ fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
         periods_area,
     );
 
-    let cmd_rows = by_command.iter().map(|c| {
+    let cmd_rows = rollup.by_command.iter().map(|c| {
         Row::new([
-            c.get("command")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-            c.get("runs")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .to_string(),
-            crate::log::cost_display(c.get("cost_usd").and_then(Value::as_f64).unwrap_or(0.0)),
+            c.command.clone(),
+            c.runs.to_string(),
+            crate::log::cost_display(c.cost_usd),
         ])
     });
     frame.render_widget(
@@ -1218,8 +1192,12 @@ fn render_usage(frame: &mut Frame, usage: &Result<Value, String>, area: Rect) {
         commands_area,
     );
 
-    if !notes.is_empty() {
-        let lines: Vec<Line> = notes.iter().map(|n| Line::from(n.as_str()).dim()).collect();
+    if !rollup.notes.is_empty() {
+        let lines: Vec<Line> = rollup
+            .notes
+            .iter()
+            .map(|n| Line::from(n.as_str()).dim())
+            .collect();
         frame.render_widget(Paragraph::new(lines).block(Block::bordered()), notes_area);
     }
 }

@@ -9,37 +9,52 @@ use crate::output::emit;
 
 /// One aggregation window over the run log.
 #[derive(Serialize)]
-struct Window {
-    window: &'static str,
-    runs: usize,
-    blocked: usize,
+pub(crate) struct Window {
+    pub(crate) window: &'static str,
+    pub(crate) runs: usize,
+    pub(crate) blocked: usize,
     /// Runs that errored — spent (their usage is in the token/cost sums) but didn't complete.
-    errored: usize,
-    cost_usd: f64,
-    input_tokens: u64,
-    cache_creation_input_tokens: u64,
-    cache_read_input_tokens: u64,
-    output_tokens: u64,
+    pub(crate) errored: usize,
+    pub(crate) cost_usd: f64,
+    pub(crate) input_tokens: u64,
+    pub(crate) cache_creation_input_tokens: u64,
+    pub(crate) cache_read_input_tokens: u64,
+    pub(crate) output_tokens: u64,
 }
 
 /// Per-command all-time totals.
 #[derive(Serialize)]
-struct CommandTotal {
-    command: String,
-    runs: usize,
-    cost_usd: f64,
+pub(crate) struct CommandTotal {
+    pub(crate) command: String,
+    pub(crate) runs: usize,
+    pub(crate) cost_usd: f64,
+}
+
+/// The full run-log rollup — the structured payload `--json` serializes and the TUI usage view renders
+/// directly, so the CLI and TUI share one shape instead of the view re-parsing untyped JSON.
+#[derive(Serialize)]
+pub(crate) struct Rollup {
+    pub(crate) windows: Vec<Window>,
+    pub(crate) by_command: Vec<CommandTotal>,
+    /// Disclosure lines (codex/missing/unparsed), preformatted so the CLI and TUI share their wording.
+    pub(crate) notes: Vec<String>,
+    pub(crate) tokens_only: usize,
+    pub(crate) no_usage: usize,
+    pub(crate) no_timestamp: usize,
+    pub(crate) unparsed: usize,
 }
 
 /// The `usage` command: a deterministic rollup of the run log — no AI, just the recorded ground
 /// truth summed per window.
 pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let (payload, human) = rollup()?;
-    emit(&payload, &human, global.json)
+    let (rollup, human) = rollup()?;
+    emit(&serde_json::to_value(&rollup)?, &human, global.json)
 }
 
-/// Compute the run-log rollup once, returning the structured payload (for `--json`) and the joined
-/// human-readable lines — shared by this command and the TUI usage view so the two can't drift.
-pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
+/// Compute the run-log rollup once, returning the typed [`Rollup`] (serialized for `--json`, and
+/// rendered directly by the TUI usage view) and the joined human-readable lines — one shape, so the
+/// CLI and TUI can't drift.
+pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
     let (records, unparsed) = crate::log::records()?;
     let now = crate::log::now_secs();
     // Each window is a label plus its maximum age; `None` = all time.
@@ -187,14 +202,14 @@ pub(crate) fn rollup() -> anyhow::Result<(Value, String)> {
         notes.push(crate::log::unparsed_note(unparsed));
     }
     lines.extend(notes.iter().cloned());
-    let payload = serde_json::json!({
-        "windows": windows,
-        "by_command": by_command,
-        "tokens_only": tokens_only,
-        "no_usage": no_usage,
-        "no_timestamp": no_timestamp,
-        "unparsed": unparsed,
-        "notes": notes,
-    });
-    Ok((payload, lines.join("\n")))
+    let rollup = Rollup {
+        windows,
+        by_command,
+        notes,
+        tokens_only,
+        no_usage,
+        no_timestamp,
+        unparsed,
+    };
+    Ok((rollup, lines.join("\n")))
 }
