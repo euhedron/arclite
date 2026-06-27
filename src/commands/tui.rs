@@ -568,10 +568,11 @@ struct Snapshot {
     unreadable: usize,
     now: u64,
     error: Option<String>,
-    /// The last few completed runs from the log (newest-first, formatted), so a run that just finished
-    /// stays visible here instead of vanishing the instant its registry marker clears; `Err` if the log
-    /// read failed (surfaced in the view, not collapsed into "nothing recent").
-    recent: Result<Vec<String>, String>,
+    /// The last few completed runs from the log (newest-first) as aligned column cells —
+    /// `[age, command, repo, outcome]` — so a run that just finished stays visible here instead of
+    /// vanishing the instant its registry marker clears, lined up into a table rather than ragged
+    /// text; `Err` if the log read failed (surfaced in the view, not collapsed into "nothing recent").
+    recent: Result<Vec<[String; RECENT_COLS]>, String>,
 }
 
 impl Snapshot {
@@ -579,7 +580,7 @@ impl Snapshot {
     /// torn up the loop — a transient registry error shouldn't collapse the live view.
     fn read() -> Self {
         let now = crate::log::now_secs();
-        let recent = recent_completed();
+        let recent = recent_completed(now);
         match crate::runs::active() {
             Ok((active, unreadable)) => Self {
                 active,
@@ -602,19 +603,30 @@ impl Snapshot {
 /// How many recently-completed runs the status tail shows.
 const RECENT_RUNS: usize = 5;
 
-/// The last [`RECENT_RUNS`] completed runs from the log, newest-first, each `command · repo · outcome`
-/// — so a just-finished run stays visible in `status` instead of vanishing when its registry marker
-/// clears. A log-read failure is returned as `Err` (surfaced in the view, like the registry error),
+/// Columns in the recently-completed tail: age, command, repo, outcome.
+const RECENT_COLS: usize = 4;
+
+/// The last [`RECENT_RUNS`] completed runs from the log, newest-first, as `[age, command, repo,
+/// outcome]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
+/// instead of vanishing when its registry marker clears, aligned into columns rather than ragged
+/// text. A log-read failure is returned as `Err` (surfaced in the view, like the registry error),
 /// not collapsed into an empty tail. Re-read each tick; the log is small, and a tail-only read is a
 /// later optimization.
-fn recent_completed() -> Result<Vec<String>, String> {
+fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
     let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
     Ok(records
         .iter()
         .take(RECENT_RUNS)
         .map(|r| {
+            // How long ago the run finished — the lead column, since recency is the point of this
+            // tail; reuses `arc log`'s age wording (a missing `ts` shows "?", never a bogus age).
+            let age = r.get("ts").and_then(serde_json::Value::as_u64).map_or_else(
+                || "?".to_owned(),
+                |ts| crate::commands::log::age(now.saturating_sub(ts)),
+            );
             let cmd = crate::log::field(r, "command");
             let repo = crate::log::field(r, "repo");
+            // The same outcome the `log` view shows: a gate/error verdict, else the run's cost.
             let outcome = if crate::log::is_blocked(r) {
                 "blocked".to_owned()
             } else if crate::log::is_errored(r) {
@@ -622,7 +634,12 @@ fn recent_completed() -> Result<Vec<String>, String> {
             } else {
                 crate::commands::log::cost(r)
             };
-            format!("{cmd} · {} · {outcome}", crate::log::repo_basename(&repo))
+            [
+                age,
+                cmd,
+                crate::log::repo_basename(&repo).to_owned(),
+                outcome,
+            ]
         })
         .collect())
 }
@@ -976,20 +993,27 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
     Constraint::Length(9),  // output chars
 ];
 
+/// Column widths for the recently-completed tail — positionally paired with the header in
+/// [`render_status`]: the relative age leads (recency is the point of the tail), then the command
+/// verb and repo, with the outcome (cost, or a gate/error verdict) taking the row's slack.
+const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
+    Constraint::Length(8),  // age ("12m ago")
+    Constraint::Length(10), // command
+    Constraint::Length(16), // repo basename
+    Constraint::Min(8),     // outcome (cost / blocked / errored / tokens-only) — takes the slack
+];
+
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
-    // header, the in-flight table (flexes), then a short recently-completed tail when there is one.
-    // The recently-completed tail; a log-read failure surfaces here (like the registry error above),
-    // not collapsed into "nothing recent".
-    let recent_lines: Vec<Line> = match &snap.recent {
-        Ok(lines) => lines.iter().map(|l| Line::from(l.as_str()).dim()).collect(),
-        Err(e) => vec![Line::from(format!("run log unreadable: {e}")).dim()],
-    };
-    let recent_h = if recent_lines.is_empty() {
-        0
-    } else {
-        recent_lines.len() as u16 + BORDER
+    // header line, the in-flight table (flexes to fill), then a short recently-completed tail when
+    // there is one — sized below to its rows. The tail renders as a column-aligned table (a header
+    // above one row per run), like the active table; a log-read failure surfaces as a single line,
+    // and no completed runs collapses the tail to nothing.
+    let recent_h = match &snap.recent {
+        Ok(rows) if rows.is_empty() => 0,
+        Ok(rows) => rows.len() as u16 + LINE + BORDER, // rows + header row + border
+        Err(_) => LINE + BORDER,                       // one error line + border
     };
     let [header, active_area, recent_area] = Layout::vertical([
         Constraint::Length(LINE),
@@ -1038,11 +1062,26 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         frame.render_widget(table, active_area);
     }
 
-    if !recent_lines.is_empty() {
-        frame.render_widget(
-            Paragraph::new(recent_lines).block(Block::bordered().title("recently completed")),
-            recent_area,
-        );
+    // The recently-completed tail: a run that just finished stays visible here (column-aligned, newest
+    // first) until it scrolls past RECENT_RUNS, rather than vanishing the instant its marker clears.
+    match &snap.recent {
+        Ok(rows) if rows.is_empty() => {}
+        Ok(rows) => {
+            let table = Table::new(
+                rows.iter().map(|c| Row::new(c.clone())),
+                RECENT_COLUMN_WIDTHS,
+            )
+            .header(Row::new(["age", "command", "repo", "outcome"]).style(Style::new().bold()))
+            .block(Block::bordered().title("recently completed"));
+            frame.render_widget(table, recent_area);
+        }
+        Err(e) => {
+            frame.render_widget(
+                Paragraph::new(format!("run log unreadable: {e}"))
+                    .block(Block::bordered().title("recently completed")),
+                recent_area,
+            );
+        }
     }
 }
 
@@ -1091,10 +1130,14 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
 /// A compact token count for table cells — `16.2M`, `412.8K`, `999` — so the big token sums fit a
 /// column instead of wrapping the way the CLI's full-width numbers do.
 fn compact(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
+    // SI abbreviation thresholds: a million abbreviates to `M`, a thousand to `K`. Named so each
+    // boundary and the divisor it implies are a single value, not a bare literal repeated inline.
+    const MILLION: u64 = 1_000_000;
+    const THOUSAND: u64 = 1_000;
+    if n >= MILLION {
+        format!("{:.1}M", n as f64 / MILLION as f64)
+    } else if n >= THOUSAND {
+        format!("{:.1}K", n as f64 / THOUSAND as f64)
     } else {
         n.to_string()
     }

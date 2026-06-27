@@ -128,8 +128,9 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
     )
 }
 
-/// A coarse relative age: seconds, minutes, hours, or days.
-fn age(secs: u64) -> String {
+/// A coarse relative age: seconds, minutes, hours, or days. Shared with the TUI's status tail, so a
+/// run's "how long ago" reads the same in the cockpit as in `arc log`.
+pub(crate) fn age(secs: u64) -> String {
     match secs {
         s if s < SECS_PER_MINUTE => format!("{s}s ago"),
         s if s < SECS_PER_HOUR => format!("{}m ago", s / SECS_PER_MINUTE),
