@@ -602,11 +602,11 @@ impl Snapshot {
 /// How many recently-completed runs the status tail shows.
 const RECENT_RUNS: usize = 5;
 
-/// Columns in the recently-completed tail: age, command, repo, status, cost.
+/// Columns in the recently-completed tail: age, command, repo, outcome, cost.
 const RECENT_COLS: usize = 5;
 
 /// The last [`RECENT_RUNS`] completed runs from the log, newest-first, as `[age, command, repo,
-/// status, cost]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
+/// outcome, cost]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
 /// instead of vanishing when its registry marker clears, aligned into columns rather than ragged
 /// text. Status and cost are separate cells: a gate-blocked or errored run still spent, so its cost
 /// is shown beside the flag, never replaced by it. A log-read failure is returned as `Err` (surfaced
@@ -624,7 +624,7 @@ fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
             let cmd = crate::log::field(r, "command");
             let repo = crate::log::field(r, "repo");
             // The run's disposition (a column of its own, beside cost): blocked, errored, or ok.
-            let status = if crate::log::is_blocked(r) {
+            let outcome = if crate::log::is_blocked(r) {
                 "blocked".to_owned()
             } else if crate::log::is_errored(r) {
                 "errored".to_owned()
@@ -636,7 +636,7 @@ fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
                 age,
                 cmd,
                 crate::log::repo_basename(&repo).to_owned(),
-                status,
+                outcome,
                 cost,
             ]
         })
@@ -989,13 +989,13 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 ];
 
 /// Column widths for the recently-completed tail — positionally paired with the header in
-/// [`render_status`]: age, command, repo, the status flag, then cost taking the row's slack (wide
+/// [`render_status`]: age, command, repo, the outcome flag, then cost taking the row's slack (wide
 /// enough for the codex "tokens only" wording).
 const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
     Constraint::Length(8),  // age ("12m ago")
     Constraint::Length(10), // command
     Constraint::Length(14), // repo basename
-    Constraint::Length(8),  // status (blocked / errored / blank)
+    Constraint::Length(8),  // outcome (blocked / errored / ok)
     Constraint::Min(8),     // cost — separate column, takes the slack
 ];
 
@@ -1068,7 +1068,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 RECENT_COLUMN_WIDTHS,
             )
             .header(
-                Row::new(["age", "command", "repo", "status", "cost"]).style(Style::new().bold()),
+                Row::new(["age", "command", "repo", "outcome", "cost"]).style(Style::new().bold()),
             )
             .block(Block::bordered().title("recently completed"));
             frame.render_widget(table, recent_area);
