@@ -18,6 +18,24 @@ if [ "$ARC_GATE" = "0" ]; then
     exit 0
 fi
 
+# CI parity (blocking, deterministic): the same checks the GitHub `default` pipeline runs, so a push
+# that would turn CI red is blocked here first — before any AI spend. Cheapest check first; on a tree
+# already built locally cargo's cache makes the re-check near-instant. (arclite devs have the Rust
+# toolchain; this is arclite's own hook, not the generic `arc init --hook` scaffold.)
+echo "=== arclite gate · cargo fmt / clippy / test (CI parity) ===" >&2
+if ! cargo fmt --check >&2; then
+    echo "arclite gate: push BLOCKED — cargo fmt --check failed (run 'cargo fmt'). Override: 'ARC_GATE=0 git push'." >&2
+    exit 1
+fi
+if ! cargo clippy --all-targets --locked -- -D warnings >&2; then
+    echo "arclite gate: push BLOCKED — cargo clippy found warnings (would break CI). Override: 'ARC_GATE=0 git push'." >&2
+    exit 1
+fi
+if ! cargo test --locked >&2; then
+    echo "arclite gate: push BLOCKED — cargo test failed (would break CI). Override: 'ARC_GATE=0 git push'." >&2
+    exit 1
+fi
+
 # Advisories are scoped to the source changes being pushed (origin/main..HEAD) with --no-scan, so their
 # signal tracks the change and the cost stays small; the gate, by contrast, re-audits all of src.
 adv_includes=""
