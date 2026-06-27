@@ -28,6 +28,7 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 ```sh
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>
+arc doctor
 arc status
 arc tui                              # the interactive cockpit (human-facing front-end)
 arc log [<id>]
