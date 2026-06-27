@@ -489,7 +489,10 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         if record.is_empty() {
             continue; // -z output ends in a NUL, so the final split is empty
         }
-        if let Some(path) = record.get(PORCELAIN_PATH_OFFSET..).filter(|p| !p.is_empty()) {
+        if let Some(path) = record
+            .get(PORCELAIN_PATH_OFFSET..)
+            .filter(|p| !p.is_empty())
+        {
             changed.push(root.join(path));
         }
         if matches!(record.as_bytes().first(), Some(b'R' | b'C')) {

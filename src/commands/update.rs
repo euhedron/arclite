@@ -226,7 +226,9 @@ fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
     anyhow::ensure!(
         status.success(),
         "curl could not download {url} (exit {}) — if this platform's release isn't published yet, download it manually from {}",
-        status.code().map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+        status
+            .code()
+            .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
         downloads_page(),
     );
     let len = std::fs::metadata(dest)
