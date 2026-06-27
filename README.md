@@ -23,7 +23,7 @@ git clone https://github.com/nikganderson/arclite.git && cd arclite
 cargo install --path .        # installs the `arc` command; or `cargo build --release` → target/release/arc
 ```
 
-**Use** — the AI commands take a repo path (default `.`):
+**Use** — common commands (a `<repo>` argument defaults to `.`):
 
 ```sh
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
