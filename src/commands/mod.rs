@@ -7,6 +7,7 @@ pub mod promote;
 pub mod rules;
 pub mod status;
 pub mod tui;
+pub mod update;
 pub mod usage;
 pub mod verbs;
 

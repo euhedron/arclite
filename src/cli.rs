@@ -73,6 +73,8 @@ pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
 pub enum Command {
     /// Report runtime, environment, and available tooling.
     Doctor(DoctorArgs),
+    /// Check whether a newer arc release is published (this binary vs. the latest release tag).
+    Update(UpdateArgs),
     /// Walk a repository and report structured facts about it.
     Inspect(InspectArgs),
     /// Scaffold a repository's `.arc` config (and, with --hook, a pre-push gate).
@@ -134,6 +136,9 @@ pub struct DoctorArgs {}
 
 #[derive(Debug, Args)]
 pub struct StatusArgs {}
+
+#[derive(Debug, Args)]
+pub struct UpdateArgs {}
 
 /// Arguments for `arc tui`.
 #[derive(Debug, Args)]

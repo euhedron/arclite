@@ -152,6 +152,9 @@ pub fn run() -> ExitCode {
         Command::Doctor(args) => {
             commands::doctor::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        Command::Update(args) => {
+            commands::update::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Inspect(args) => {
             commands::inspect::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
