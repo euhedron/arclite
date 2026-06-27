@@ -102,7 +102,11 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
                     // couldn't stat a walked file — surface it via walk_errors, don't drop its size
                     Err(_) => walk_errors += 1,
                 }
-                let rel = path.strip_prefix(&root).ok();
+                // Every walked entry lives under `root` (the root itself is skipped at depth 0), so
+                // this strip cannot fail — assert the invariant rather than silently dropping a file.
+                let rel = path
+                    .strip_prefix(&root)
+                    .expect("walked entries live under the walk root");
                 let mut is_manifest = false;
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
                     && MANIFEST_NAMES.contains(&name)
@@ -119,21 +123,19 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
                     manifest_types.insert(format!("*.{ext}"));
                     is_manifest = true;
                 }
-                if is_manifest && let Some(rel) = rel {
+                if is_manifest {
                     manifest_paths.push(rel.to_string_lossy().into_owned());
                 }
                 // Tally the file under its top-level directory (a root-level file under ".") so the
                 // view shows the layout an `--include` slice targets, not just the file types.
-                if let Some(rel) = rel {
-                    let mut comps = rel.components();
-                    let top = match comps.next() {
-                        Some(first) if comps.next().is_some() => {
-                            first.as_os_str().to_string_lossy().into_owned()
-                        }
-                        _ => ".".to_owned(), // a file directly at the root
-                    };
-                    *by_top_dir.entry(top).or_insert(0) += 1;
-                }
+                let mut comps = rel.components();
+                let top = match comps.next() {
+                    Some(first) if comps.next().is_some() => {
+                        first.as_os_str().to_string_lossy().into_owned()
+                    }
+                    _ => ".".to_owned(), // a file directly at the root
+                };
+                *by_top_dir.entry(top).or_insert(0) += 1;
                 *by_extension.entry(ext).or_insert(0) += 1;
             }
             _ => {}
