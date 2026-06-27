@@ -1119,7 +1119,9 @@ fn synthesize_run(
 }
 
 /// Run the synthesis `opts.runs` times concurrently and combine the outcomes, returning the combined
-/// result and how many runs succeeded. A failed run is surfaced and skipped; only an all-fail errors.
+/// result and how many runs succeeded. A failed or errored run is surfaced and skipped from the result
+/// union; an all-errored fan-out still returns an errored synthesis carrying the spent cost, and only an
+/// all-*outright*-failed fan-out (no run returned a synthesis, so no spend to preserve) errors.
 fn multi_synthesize(
     prompt: &str,
     model: &str,
@@ -1154,8 +1156,23 @@ fn multi_synthesize(
             Err(e) => eprintln!("arclite: a run failed and was skipped: {e:#}"),
         }
     }
-    anyhow::ensure!(!ok.is_empty(), "all {n} runs failed");
     let succeeded = ok.len();
+    if ok.is_empty() {
+        // No run produced a usable result. If some ran-but-errored they still *spent*: return a combined
+        // errored synthesis carrying their folded usage, so the caller's logging path records the fan-out's
+        // real cost — the single-run errored path and the "a failed run's real cost is recorded rather
+        // than lost" guarantee — instead of erroring out before that block and dropping the spend. Only an
+        // all-*outright*-failed fan-out (every run returned `Err`: no synthesis, no spend to preserve) has
+        // nothing to return and errors here.
+        anyhow::ensure!(!errored.is_empty(), "all {n} runs failed");
+        let usage = sum_usage(errored.iter().map(|s| &s.usage));
+        let mut combined = errored
+            .into_iter()
+            .next()
+            .expect("errored is non-empty (just ensured)");
+        combined.usage = usage;
+        return Ok((combined, succeeded)); // succeeded == 0: an errored result, surfaced and logged with cost
+    }
     let mut combined = combine_runs(ok)?;
     // Fold the errored-but-spent children's usage into the total — their results are excluded, their
     // cost is not — so the reported spend is the whole fan-out's, not just the surviving runs'.
