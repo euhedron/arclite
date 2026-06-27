@@ -568,11 +568,9 @@ struct Snapshot {
     unreadable: usize,
     now: u64,
     error: Option<String>,
-    /// The last few completed runs from the log (newest-first) as aligned column cells —
-    /// `[age, command, repo, status, cost]` (status and cost separate, since a blocked/errored run
-    /// still spent) — so a run that just finished stays visible here instead of vanishing the instant
-    /// its registry marker clears, lined up into a table rather than ragged text; `Err` if the log
-    /// read failed (surfaced in the view, not collapsed into "nothing recent").
+    /// The last few completed runs from the log (newest-first) as aligned column cells, one
+    /// [`recent_completed`] row each; `Err` if the log read failed (surfaced in the view, not
+    /// collapsed into "nothing recent").
     recent: Result<Vec<[String; RECENT_COLS]>, String>,
 }
 
@@ -625,14 +623,13 @@ fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
             let age = crate::commands::log::record_age(r, now);
             let cmd = crate::log::field(r, "command");
             let repo = crate::log::field(r, "repo");
-            // Status flags only the notable terminal states (blank for a normal completion); it is a
-            // separate column from cost, never a replacement — a blocked/errored run spent too.
+            // The run's disposition (a column of its own, beside cost): blocked, errored, or ok.
             let status = if crate::log::is_blocked(r) {
                 "blocked".to_owned()
             } else if crate::log::is_errored(r) {
                 "errored".to_owned()
             } else {
-                String::new()
+                "ok".to_owned()
             };
             let cost = crate::commands::log::cost(r);
             [
@@ -992,9 +989,8 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 ];
 
 /// Column widths for the recently-completed tail — positionally paired with the header in
-/// [`render_status`]: the relative age leads (recency is the point of the tail), then the command
-/// verb, repo, and a status flag (gate-blocked/errored, blank otherwise), with the cost — a separate
-/// fact from status — taking the row's slack (so the codex "tokens only" wording fits).
+/// [`render_status`]: age, command, repo, the status flag, then cost taking the row's slack (wide
+/// enough for the codex "tokens only" wording).
 const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
     Constraint::Length(8),  // age ("12m ago")
     Constraint::Length(10), // command
@@ -1062,8 +1058,8 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         frame.render_widget(table, active_area);
     }
 
-    // The recently-completed tail: a run that just finished stays visible here (column-aligned, newest
-    // first) until it scrolls past RECENT_RUNS, rather than vanishing the instant its marker clears.
+    // The recently-completed tail, column-aligned (see `recent_completed`); a log-read failure shows
+    // as a single line instead.
     match &snap.recent {
         Ok(rows) if rows.is_empty() => {}
         Ok(rows) => {
