@@ -612,12 +612,11 @@ struct RecentTail {
     total: usize,
 }
 
-/// The recently-completed tail: the newest [`RECENT_RUNS`] runs from the log as `[age, command, repo,
-/// outcome, cost]` cells, plus the total completed-run count (so the view can disclose when older runs
-/// are elided). `age` is relative to `now`; outcome and cost are separate cells (a gate-blocked or
-/// errored run still spent, so its cost shows beside the flag). A log-read failure is `Err` (surfaced
-/// in the view, not collapsed into an empty tail). Re-read each tick; the log is small, and a tail-only
-/// read is a later optimization.
+/// Build the [`RecentTail`] from the log: the newest rows as `[age, command, repo, outcome, cost]`
+/// cells. `age` is relative to `now`; outcome and cost are separate cells (a gate-blocked or errored run
+/// still spent, so its cost shows beside the flag). A log-read failure is `Err` (surfaced in the view,
+/// not collapsed into an empty tail). Re-read each tick; the log is small, and a tail-only read is a
+/// later optimization.
 fn recent_completed(now: u64) -> Result<RecentTail, String> {
     let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
     let total = records.len();
