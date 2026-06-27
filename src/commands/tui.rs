@@ -1197,15 +1197,12 @@ fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
         }
     };
 
-    let notes_h = if rollup.notes.is_empty() {
-        0
-    } else {
-        rollup.notes.len() as u16 + BORDER
-    };
+    // periods and by-command on top (each fixed, sized to its rows), then the notes take the remaining
+    // space (Min) so a long disclosure wraps onto multiple lines instead of being clipped at the border.
     let [periods_area, commands_area, notes_area] = Layout::vertical([
         Constraint::Length(rollup.windows.len() as u16 + LINE + BORDER),
+        Constraint::Length(rollup.by_command.len() as u16 + LINE + BORDER),
         Constraint::Min(0),
-        Constraint::Length(notes_h),
     ])
     .areas(body);
 
@@ -1254,7 +1251,12 @@ fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
             .iter()
             .map(|n| Line::from(n.as_str()).dim())
             .collect();
-        frame.render_widget(Paragraph::new(lines).block(Block::bordered()), notes_area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(Block::bordered()),
+            notes_area,
+        );
     }
 }
 
