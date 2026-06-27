@@ -101,12 +101,7 @@ pub(crate) fn cost(v: &Value) -> String {
 /// the TUI's `log` view, so the list reads the same in the cockpit as on the CLI.
 pub(crate) fn row(r: &Value, now: u64) -> String {
     let id = field(r, "id");
-    // A missing `ts` is surfaced as "?", not shown as a bogus age computed from 0 — matching how the
-    // other fields (and stored_human's absolute time) disclose an absent value rather than faking one.
-    let age = r
-        .get("ts")
-        .and_then(Value::as_u64)
-        .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)));
+    let age = record_age(r, now);
     let repo_full = field(r, "repo");
     let repo = repo_basename(&repo_full);
     let blocked = crate::log::is_blocked(r);
@@ -128,9 +123,18 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
     )
 }
 
-/// A coarse relative age: seconds, minutes, hours, or days. Shared with the TUI's status tail, so a
-/// run's "how long ago" reads the same in the cockpit as in `arc log`.
-pub(crate) fn age(secs: u64) -> String {
+/// A run record's age relative to `now`, from its `ts` field: `"?"` when absent — surfaced, not shown
+/// as a bogus age computed from a zero timestamp (matching how the other fields disclose an absent
+/// value rather than faking one) — else the coarse relative [`age`]. The single `ts`→age extraction
+/// shared by the `log` row and the TUI status tail, so the missing-`ts` handling can't drift.
+pub(crate) fn record_age(r: &Value, now: u64) -> String {
+    r.get("ts")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)))
+}
+
+/// A coarse relative age: seconds, minutes, hours, or days — the private kernel of [`record_age`].
+fn age(secs: u64) -> String {
     match secs {
         s if s < SECS_PER_MINUTE => format!("{s}s ago"),
         s if s < SECS_PER_HOUR => format!("{}m ago", s / SECS_PER_MINUTE),

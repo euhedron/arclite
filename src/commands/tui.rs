@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
@@ -569,9 +569,10 @@ struct Snapshot {
     now: u64,
     error: Option<String>,
     /// The last few completed runs from the log (newest-first) as aligned column cells —
-    /// `[age, command, repo, outcome]` — so a run that just finished stays visible here instead of
-    /// vanishing the instant its registry marker clears, lined up into a table rather than ragged
-    /// text; `Err` if the log read failed (surfaced in the view, not collapsed into "nothing recent").
+    /// `[age, command, repo, status, cost]` (status and cost separate, since a blocked/errored run
+    /// still spent) — so a run that just finished stays visible here instead of vanishing the instant
+    /// its registry marker clears, lined up into a table rather than ragged text; `Err` if the log
+    /// read failed (surfaced in the view, not collapsed into "nothing recent").
     recent: Result<Vec<[String; RECENT_COLS]>, String>,
 }
 
@@ -603,42 +604,43 @@ impl Snapshot {
 /// How many recently-completed runs the status tail shows.
 const RECENT_RUNS: usize = 5;
 
-/// Columns in the recently-completed tail: age, command, repo, outcome.
-const RECENT_COLS: usize = 4;
+/// Columns in the recently-completed tail: age, command, repo, status, cost.
+const RECENT_COLS: usize = 5;
 
 /// The last [`RECENT_RUNS`] completed runs from the log, newest-first, as `[age, command, repo,
-/// outcome]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
+/// status, cost]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
 /// instead of vanishing when its registry marker clears, aligned into columns rather than ragged
-/// text. A log-read failure is returned as `Err` (surfaced in the view, like the registry error),
-/// not collapsed into an empty tail. Re-read each tick; the log is small, and a tail-only read is a
-/// later optimization.
+/// text. Status and cost are separate cells: a gate-blocked or errored run still spent, so its cost
+/// is shown beside the flag, never replaced by it. A log-read failure is returned as `Err` (surfaced
+/// in the view, like the registry error), not collapsed into an empty tail. Re-read each tick; the
+/// log is small, and a tail-only read is a later optimization.
 fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
     let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
     Ok(records
         .iter()
         .take(RECENT_RUNS)
         .map(|r| {
-            // How long ago the run finished — the lead column, since recency is the point of this
-            // tail; reuses `arc log`'s age wording (a missing `ts` shows "?", never a bogus age).
-            let age = r.get("ts").and_then(serde_json::Value::as_u64).map_or_else(
-                || "?".to_owned(),
-                |ts| crate::commands::log::age(now.saturating_sub(ts)),
-            );
+            // How long ago the run finished leads the tail, since recency is its point; the `ts`→age
+            // extraction is shared with `arc log`'s row (one missing-`ts` handling, no drift).
+            let age = crate::commands::log::record_age(r, now);
             let cmd = crate::log::field(r, "command");
             let repo = crate::log::field(r, "repo");
-            // The same outcome the `log` view shows: a gate/error verdict, else the run's cost.
-            let outcome = if crate::log::is_blocked(r) {
+            // Status flags only the notable terminal states (blank for a normal completion); it is a
+            // separate column from cost, never a replacement — a blocked/errored run spent too.
+            let status = if crate::log::is_blocked(r) {
                 "blocked".to_owned()
             } else if crate::log::is_errored(r) {
                 "errored".to_owned()
             } else {
-                crate::commands::log::cost(r)
+                String::new()
             };
+            let cost = crate::commands::log::cost(r);
             [
                 age,
                 cmd,
                 crate::log::repo_basename(&repo).to_owned(),
-                outcome,
+                status,
+                cost,
             ]
         })
         .collect())
@@ -665,23 +667,19 @@ pub fn run(args: &TuiArgs, _global: &GlobalArgs) -> anyhow::Result<()> {
     })
     .context("failed to initialize the terminal")?;
     let result = event_loop(&mut terminal, interval);
-    // ratatui's restore() resets terminal modes but does NOT reposition the cursor for an inline
-    // viewport (confirmed against ratatui-core's `Terminal` Drop) — it's left mid-region, so the shell's
-    // next prompt would overwrite the live area. Park it on the viewport's last row, then write a
-    // newline through the same backend so it lands on a fresh line *below* the region (the terminal
-    // scrolls up if needed). Legacy conhost (no `WT_SESSION`) scrolls cursor-sets inconsistently, so
-    // give it one extra newline there.
-    let bottom = terminal.get_frame().area().bottom().saturating_sub(1);
-    let _ = terminal.set_cursor_position(Position { x: 0, y: bottom });
+    // Clean up the inline region on exit. `ratatui::restore()` only resets terminal modes — for an
+    // inline viewport it clears nothing, so without this the last (mostly-blank) frame is stranded in
+    // the terminal. `Terminal::clear()` is the inline clear: it moves to the viewport's absolute origin
+    // and clears from there down, leaving scrollback above untouched. Park the cursor at that origin so
+    // the shell's next prompt reclaims the space the viewport used — no blank gap, no leftover
+    // masthead/footer. Order matters: clear + reposition run while raw mode is still on; restore()
+    // (which clears nothing) comes last, and runs even if the loop errored (panics go through the hook).
+    let _ = terminal.clear();
+    let origin = terminal.get_frame().area().as_position();
+    let _ = terminal.set_cursor_position(origin);
     let _ = terminal.show_cursor();
-    let trailing: &[u8] = if std::env::var_os("WT_SESSION").is_none() {
-        b"\r\n\r\n"
-    } else {
-        b"\r\n"
-    };
-    let _ = terminal.backend_mut().write_all(trailing);
     let _ = terminal.backend_mut().flush();
-    ratatui::restore(); // always restore — even if the loop errored (a panic is handled by the hook)
+    ratatui::restore();
     result
 }
 
@@ -995,12 +993,14 @@ const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
 
 /// Column widths for the recently-completed tail — positionally paired with the header in
 /// [`render_status`]: the relative age leads (recency is the point of the tail), then the command
-/// verb and repo, with the outcome (cost, or a gate/error verdict) taking the row's slack.
+/// verb, repo, and a status flag (gate-blocked/errored, blank otherwise), with the cost — a separate
+/// fact from status — taking the row's slack (so the codex "tokens only" wording fits).
 const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
     Constraint::Length(8),  // age ("12m ago")
     Constraint::Length(10), // command
-    Constraint::Length(16), // repo basename
-    Constraint::Min(8),     // outcome (cost / blocked / errored / tokens-only) — takes the slack
+    Constraint::Length(14), // repo basename
+    Constraint::Length(8),  // status (blocked / errored / blank)
+    Constraint::Min(8),     // cost — separate column, takes the slack
 ];
 
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
@@ -1071,7 +1071,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 rows.iter().map(|c| Row::new(c.clone())),
                 RECENT_COLUMN_WIDTHS,
             )
-            .header(Row::new(["age", "command", "repo", "outcome"]).style(Style::new().bold()))
+            .header(
+                Row::new(["age", "command", "repo", "status", "cost"]).style(Style::new().bold()),
+            )
             .block(Block::bordered().title("recently completed"));
             frame.render_widget(table, recent_area);
         }
