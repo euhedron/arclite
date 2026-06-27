@@ -138,7 +138,14 @@ pub struct DoctorArgs {}
 pub struct StatusArgs {}
 
 #[derive(Debug, Args)]
-pub struct UpdateArgs {}
+pub struct UpdateArgs {
+    /// Download the newer release and install it over the running binary (default: only report).
+    #[arg(long)]
+    pub apply: bool,
+    /// With --apply, reinstall even when already up to date (repair, or re-pull the current build).
+    #[arg(long)]
+    pub force: bool,
+}
 
 /// Arguments for `arc tui`.
 #[derive(Debug, Args)]

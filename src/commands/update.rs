@@ -1,26 +1,43 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::Context;
+
 use crate::cli::{GlobalArgs, UpdateArgs};
 use crate::output::emit;
 
-/// arc's own repository on GitHub — the single base URL for both the git remote (releases are `v*`
-/// tags this check reads via `git ls-remote`) and the Downloads page (per-OS binaries a later
-/// `--apply` will pull). One home so the check and the apply can't drift to different repos.
-const UPDATE_REPO_URL: &str = "https://github.com/nikganderson/arclite";
+/// arc's own GitHub workspace + repo — the single base for every release URL: the git remote
+/// (releases are `v*` tags this check reads via `git ls-remote`), the human Downloads page, and the
+/// Downloads REST endpoint (`--apply` pulls the per-OS binary). One home so the three can't drift.
+const WORKSPACE: &str = "nikganderson";
+const REPO: &str = "arclite";
+
+/// Env var holding the GitHub credential `--apply` uses to fetch the binary: a `user:token` Basic
+/// pair (e.g. `you@example.com:<api-token>`). Read from the environment so no secret lands in a file
+/// arc tracks; the version check needs none (it rides the user's existing git credential).
+const AUTH_ENV: &str = "ARC_GITHUB_AUTH";
 
 /// A released version as a comparable `[major, minor, patch]` triple (arc tags are plain `vX.Y.Z`).
 type Version = [u64; 3];
 
-/// The `update` command: compare the running binary's version against the highest released tag and
-/// report whether a newer arc is published. The check consults git over HTTPS with the credential a
-/// push already uses — no token handling — so it works wherever `git push` to the repo does.
-pub fn run(_args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+/// The `update` command. Without `--apply`, report whether a newer arc is published (the running
+/// binary vs. the highest release tag); with `--apply`, download that release and install it in place.
+/// The version check consults git over HTTPS with the credential a push already uses — no token — so it
+/// works wherever git does; only the `--apply` download needs [`AUTH_ENV`].
+pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    clean_stale_backup(); // tidy a prior --apply's leftover backup, best-effort
     let current = current_version();
     let latest = latest_version()?;
     let available = latest > current;
+    if args.apply {
+        return apply(current, latest, available, args.force, global);
+    }
     let human = if available {
         format!(
-            "arc {} is out of date — {} is the latest release.\nDownload: {UPDATE_REPO_URL}/downloads",
+            "arc {} is out of date — {} is the latest release.\nInstall it with `arc update --apply`, or download manually from {}",
             version_string(current),
             version_string(latest),
+            downloads_page(),
         )
     } else {
         format!(
@@ -37,6 +54,59 @@ pub fn run(_args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     emit(&payload, &human, global.json)
 }
 
+/// Download the target release's binary and install it over the running one. With no newer release,
+/// does nothing unless `--force` (a reinstall/repair of the current version).
+fn apply(
+    current: Version,
+    latest: Version,
+    available: bool,
+    force: bool,
+    global: &GlobalArgs,
+) -> anyhow::Result<()> {
+    if !available && !force {
+        let human = format!(
+            "arc {} is already the latest release — nothing to apply (use --force to reinstall).",
+            version_string(current)
+        );
+        let payload = serde_json::json!({
+            "current": version_string(current),
+            "latest": version_string(latest),
+            "applied": false,
+        });
+        return emit(&payload, &human, global.json);
+    }
+    // --force with no newer release reinstalls the current version; otherwise install the latest.
+    let target = if available { latest } else { current };
+    let name = binary_name(target);
+    let auth = std::env::var(AUTH_ENV).map_err(|_| {
+        anyhow::anyhow!(
+            "set {AUTH_ENV} to a GitHub credential (user:token, e.g. you@example.com:<api-token>) to install updates, or download {name} manually from {}",
+            downloads_page()
+        )
+    })?;
+    let exe = std::env::current_exe().context("locating the running arc binary to replace")?;
+    let download_path = sidecar(&exe, ".arc-update-new");
+    download(&download_api_url(&name), &auth, &download_path)?;
+    if let Err(e) = install(&exe, &download_path) {
+        let _ = std::fs::remove_file(&download_path); // don't leave a partial download behind
+        return Err(e);
+    }
+    let human = format!(
+        "updated arc {} → {}. Restart arc to use the new version.",
+        version_string(current),
+        version_string(target),
+    );
+    let payload = serde_json::json!({
+        "current": version_string(current),
+        "latest": version_string(latest),
+        "applied": true,
+        "installed": version_string(target),
+    });
+    emit(&payload, &human, global.json)
+}
+
+// ---- version check ----
+
 /// The running binary's version, from the compile-time package version (the single source of truth for
 /// what this binary is).
 fn current_version() -> Version {
@@ -49,7 +119,7 @@ fn current_version() -> Version {
 /// `^{}` dereference lines annotated tags emit) are skipped. Errors only if git can't be consulted, so
 /// a network or auth failure surfaces rather than masquerading as "up to date".
 fn latest_version() -> anyhow::Result<Version> {
-    let remote = format!("{UPDATE_REPO_URL}.git");
+    let remote = format!("https://github.com/{WORKSPACE}/{REPO}.git");
     let output = crate::ai::command("git")?
         .args(["ls-remote", "--tags"])
         .arg(&remote)
@@ -89,6 +159,141 @@ fn version_string(v: Version) -> String {
     format!("{}.{}.{}", v[0], v[1], v[2])
 }
 
+// ---- release URLs / artifact name ----
+
+/// The human-facing Downloads page (shown when pointing a user at a manual download).
+fn downloads_page() -> String {
+    format!("https://github.com/{WORKSPACE}/{REPO}/downloads")
+}
+
+/// The Downloads REST endpoint for one artifact — it accepts the API token and 302-redirects to the
+/// signed storage URL (the download host), where the auth header must not follow.
+fn download_api_url(name: &str) -> String {
+    format!("https://api.github.com/2.0/repositories/{WORKSPACE}/{REPO}/downloads/{name}")
+}
+
+/// The release artifact name for the running platform — `arc-v<version>-<os>-<arch><exe-suffix>`. Must
+/// match the names the release pipeline uploads (`github-pipelines.yml`); a mismatch surfaces as a
+/// download 404 (a clear failure), never a silently wrong file.
+fn binary_name(v: Version) -> String {
+    format!(
+        "arc-v{}-{}-{}{}",
+        version_string(v),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::env::consts::EXE_SUFFIX,
+    )
+}
+
+// ---- download + install ----
+
+/// Download `url` to `dest` with `curl`, authenticating with the `user:token` `auth` pair. The
+/// credential is passed via a temporary curl config file (not argv, where other processes could read
+/// it); curl drops the auth header on the cross-host redirect GitHub issues to signed storage. On
+/// Windows the system `curl.exe` is used (its Schannel backend trusts the system cert store, incl. corp
+/// roots) with revocation checks disabled, since corp networks commonly block the revocation endpoints.
+fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
+    let config_path = sidecar(dest, ".curlrc");
+    write_curl_config(&config_path, auth)?;
+    let mut cmd = Command::new(curl_program());
+    cmd.args(["--location", "--fail", "--silent", "--show-error"])
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--output")
+        .arg(dest)
+        .arg(url);
+    if cfg!(windows) {
+        cmd.arg("--ssl-no-revoke");
+    }
+    let result = cmd.status();
+    let _ = std::fs::remove_file(&config_path); // remove the credential file regardless of outcome
+    let status = result.context("running curl to download the update (is curl installed?)")?;
+    anyhow::ensure!(
+        status.success(),
+        "curl could not download {url} (exit {})",
+        status.code().map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+    );
+    let len = std::fs::metadata(dest)
+        .context("the downloaded update could not be read")?
+        .len();
+    anyhow::ensure!(len > 0, "the downloaded update was empty");
+    Ok(())
+}
+
+/// Write a curl config file granting `user = "<auth>"`, owner-only where the OS supports it — so the
+/// credential never appears in a process listing or a world-readable file.
+fn write_curl_config(path: &Path, auth: &str) -> anyhow::Result<()> {
+    // curl quotes a config value in double quotes; a Basic credential cannot contain one, so the
+    // single substitution is exact (no escaping needed).
+    std::fs::write(path, format!("user = \"{auth}\"\n")).context("writing the curl auth config")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
+/// the system/corp cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl`
+/// on `PATH`.
+fn curl_program() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let system_curl = Path::new(&root).join("System32").join("curl.exe");
+        if system_curl.exists() {
+            return system_curl;
+        }
+    }
+    PathBuf::from("curl")
+}
+
+/// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but can
+/// be renamed, so the running image is moved to a `.old` sidecar and the new binary takes its place (the
+/// running process keeps the renamed image; the next launch uses the replacement; the `.old` is cleaned
+/// on a later run). On Unix a rename over the path replaces it while the running process keeps the old
+/// inode.
+fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(new, std::fs::Permissions::from_mode(0o755));
+        std::fs::rename(new, exe)
+            .with_context(|| format!("installing the new binary at {}", exe.display()))
+    }
+    #[cfg(windows)]
+    {
+        let backup = sidecar(exe, ".old");
+        let _ = std::fs::remove_file(&backup); // clear any earlier leftover so the rename can land
+        std::fs::rename(exe, &backup)
+            .with_context(|| format!("moving the running binary aside ({})", exe.display()))?;
+        match std::fs::rename(new, exe) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::rename(&backup, exe); // roll back so an arc.exe still exists
+                Err(e).with_context(|| format!("installing the new binary at {}", exe.display()))
+            }
+        }
+    }
+}
+
+/// Remove a `.old` backup a prior Windows `--apply` left behind, best-effort: it's only removable once
+/// no process is still running that image, so a failure here (still in use) is benign — a later run
+/// retries. A no-op on Unix, which replaces the binary atomically and never writes a backup.
+fn clean_stale_backup() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::fs::remove_file(sidecar(&exe, ".old"));
+    }
+}
+
+/// A sibling path formed by appending `suffix` to `path`'s full name (not replacing its extension, so
+/// `arc.exe` + `.old` is `arc.exe.old`). Used for the download, the curl config, and the backup.
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +322,45 @@ mod tests {
     fn compile_time_version_always_parses() {
         // current_version() unwraps this, so the package version must always be a valid triple.
         assert!(parse_version(env!("CARGO_PKG_VERSION")).is_some());
+    }
+
+    #[test]
+    fn binary_name_matches_release_artifact_shape() {
+        let name = binary_name([0, 1, 2]);
+        assert!(name.starts_with("arc-v0.1.2-"));
+        assert!(name.contains(std::env::consts::OS));
+        assert!(name.contains(std::env::consts::ARCH));
+        assert!(name.ends_with(std::env::consts::EXE_SUFFIX));
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        assert_eq!(name, "arc-v0.1.2-windows-x86_64.exe"); // the exact name published today
+    }
+
+    #[test]
+    fn sidecar_appends_without_replacing_extension() {
+        assert_eq!(
+            sidecar(Path::new("arc.exe"), ".old"),
+            PathBuf::from("arc.exe.old")
+        );
+        assert_eq!(
+            sidecar(Path::new("/usr/bin/arc"), ".tmp"),
+            PathBuf::from("/usr/bin/arc.tmp")
+        );
+    }
+
+    #[test]
+    fn install_puts_new_binary_in_place() {
+        // Deterministic test of the swap on throwaway files — no network, no real binary touched.
+        let dir = std::env::temp_dir().join(format!("arc-update-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join(format!("arc{}", std::env::consts::EXE_SUFFIX));
+        let new = sidecar(&exe, ".arc-update-new");
+        std::fs::write(&exe, b"OLD").unwrap();
+        std::fs::write(&new, b"NEW").unwrap();
+        install(&exe, &new).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"NEW"); // the new binary is in place
+        assert!(!new.exists()); // the temp download was consumed by the rename
+        #[cfg(windows)]
+        assert_eq!(std::fs::read(sidecar(&exe, ".old")).unwrap(), b"OLD"); // old moved aside
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
