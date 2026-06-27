@@ -63,4 +63,16 @@ if [ "$gate" -ne 0 ]; then
     echo "arclite gate: push BLOCKED (arc audit exit $gate). Fix the findings above, or override with 'ARC_GATE=0 git push'." >&2
     exit "$gate"
 fi
+
+# Meta-gate (blocking): when the rules or meta-rules themselves change, audit the ruleset against the
+# rule-quality meta-rules — so a curated rule can't land example-bound or tied to the system's current
+# state (the general-principle discipline, self-enforced). Skipped entirely (zero cost) on a
+# rules-unchanged push; runs only once the src gate above has passed.
+if git rev-parse --verify --quiet origin/main >/dev/null 2>&1 && [ -n "$(git diff --name-only --diff-filter=d origin/main..HEAD -- .arc/rules .arc/meta-rules 2>/dev/null)" ]; then
+    echo "=== arclite meta-gate · rule-quality (rules changed) ===" >&2
+    if ! arc run audit . --include .arc/rules --ruleset rule-quality --no-scan --fail-on-findings >&2; then
+        echo "arclite meta-gate: push BLOCKED. Sharpen the flagged rule(s), or override with 'ARC_GATE=0 git push'." >&2
+        exit 1
+    fi
+fi
 exit 0
