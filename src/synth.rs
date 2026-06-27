@@ -464,7 +464,10 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .map_err(|e| format!("could not prepare git: {e:#}"))?
         .arg("-C")
         .arg(root)
-        .args(["status", "--porcelain"])
+        // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
+        // filename with non-ASCII bytes or spaces round-trips intact. Plain `--porcelain` quotes such
+        // paths (e.g. `"caf\303\251.rs"`), which a literal parse reads as an unfindable path and drops.
+        .args(["status", "--porcelain", "-z"])
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
     if !output.status.success() {
@@ -474,16 +477,26 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             root.display()
         ));
     }
-    // A porcelain line is two status chars and a space, then the path ("old -> new" for renames).
+    // Each record is two status chars and a space, then the path. A rename/copy (status 'R'/'C') is
+    // followed by a second record holding its original path — under -z the new path comes first and the
+    // ` -> ` separator is dropped — so that trailing field carries no status prefix: consume and discard
+    // it rather than mis-reading its bytes as another changed path.
     const PORCELAIN_PATH_OFFSET: usize = 3;
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let path = line.get(PORCELAIN_PATH_OFFSET..)?.trim().trim_matches('"');
-            let path = path.rsplit_once(" -> ").map_or(path, |(_, new)| new);
-            (!path.is_empty()).then(|| root.join(path))
-        })
-        .collect())
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut records = text.split('\0');
+    let mut changed = Vec::new();
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue; // -z output ends in a NUL, so the final split is empty
+        }
+        if let Some(path) = record.get(PORCELAIN_PATH_OFFSET..).filter(|p| !p.is_empty()) {
+            changed.push(root.join(path));
+        }
+        if matches!(record.as_bytes().first(), Some(b'R' | b'C')) {
+            records.next(); // a rename/copy carries its original path in the next record — discard it
+        }
+    }
+    Ok(changed)
 }
 
 /// What a run gathers into context — the shaping levers, grouped so adding one is a field, not a new
