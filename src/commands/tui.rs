@@ -568,10 +568,10 @@ struct Snapshot {
     unreadable: usize,
     now: u64,
     error: Option<String>,
-    /// The last few completed runs from the log (newest-first) as aligned column cells, one
-    /// [`recent_completed`] row each; `Err` if the log read failed (surfaced in the view, not
-    /// collapsed into "nothing recent").
-    recent: Result<Vec<[String; RECENT_COLS]>, String>,
+    /// The recently-completed tail (newest-first column cells + the total completed-run count, one
+    /// [`recent_completed`] build); `Err` if the log read failed (surfaced in the view, not collapsed
+    /// into "nothing recent").
+    recent: Result<RecentTail, String>,
 }
 
 impl Snapshot {
@@ -605,16 +605,23 @@ const RECENT_RUNS: usize = 5;
 /// Columns in the recently-completed tail: age, command, repo, outcome, cost.
 const RECENT_COLS: usize = 5;
 
-/// The last [`RECENT_RUNS`] completed runs from the log, newest-first, as `[age, command, repo,
-/// outcome, cost]` cells (`age` relative to `now`) — so a just-finished run stays visible in `status`
-/// instead of vanishing when its registry marker clears, aligned into columns rather than ragged
-/// text. Status and cost are separate cells: a gate-blocked or errored run still spent, so its cost
-/// is shown beside the flag, never replaced by it. A log-read failure is returned as `Err` (surfaced
-/// in the view, like the registry error), not collapsed into an empty tail. Re-read each tick; the
-/// log is small, and a tail-only read is a later optimization.
-fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
+/// The recently-completed tail: the newest [`RECENT_RUNS`] rows, plus the total completed-run count so
+/// the view can disclose when older runs are elided (the codebase discloses every other elision).
+struct RecentTail {
+    rows: Vec<[String; RECENT_COLS]>,
+    total: usize,
+}
+
+/// The recently-completed tail: the newest [`RECENT_RUNS`] runs from the log as `[age, command, repo,
+/// outcome, cost]` cells, plus the total completed-run count (so the view can disclose when older runs
+/// are elided). `age` is relative to `now`; outcome and cost are separate cells (a gate-blocked or
+/// errored run still spent, so its cost shows beside the flag). A log-read failure is `Err` (surfaced
+/// in the view, not collapsed into an empty tail). Re-read each tick; the log is small, and a tail-only
+/// read is a later optimization.
+fn recent_completed(now: u64) -> Result<RecentTail, String> {
     let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
-    Ok(records
+    let total = records.len();
+    let rows = records
         .iter()
         .take(RECENT_RUNS)
         .map(|r| {
@@ -640,7 +647,8 @@ fn recent_completed(now: u64) -> Result<Vec<[String; RECENT_COLS]>, String> {
                 cost,
             ]
         })
-        .collect())
+        .collect();
+    Ok(RecentTail { rows, total })
 }
 
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
@@ -1007,9 +1015,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     // above one row per run), like the active table; a log-read failure surfaces as a single line,
     // and no completed runs collapses the tail to nothing.
     let recent_h = match &snap.recent {
-        Ok(rows) if rows.is_empty() => 0,
-        Ok(rows) => rows.len() as u16 + LINE + BORDER, // rows + header row + border
-        Err(_) => LINE + BORDER,                       // one error line + border
+        Ok(tail) if tail.rows.is_empty() => 0,
+        Ok(tail) => tail.rows.len() as u16 + LINE + BORDER, // rows + header row + border
+        Err(_) => LINE + BORDER,                            // one error line + border
     };
     let [header, active_area, recent_area] = Layout::vertical([
         Constraint::Length(LINE),
@@ -1061,16 +1069,23 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     // The recently-completed tail, column-aligned (see `recent_completed`); a log-read failure shows
     // as a single line instead.
     match &snap.recent {
-        Ok(rows) if rows.is_empty() => {}
-        Ok(rows) => {
+        Ok(tail) if tail.rows.is_empty() => {}
+        Ok(tail) => {
+            // Disclose when older runs are elided (showing N of M), matching the codebase's
+            // elision-disclosure standard (arc log's "… N older run(s)", inspect's "+N more").
+            let title = if tail.total > tail.rows.len() {
+                format!("recently completed · {} of {}", tail.rows.len(), tail.total)
+            } else {
+                "recently completed".to_owned()
+            };
             let table = Table::new(
-                rows.iter().map(|c| Row::new(c.clone())),
+                tail.rows.iter().map(|c| Row::new(c.clone())),
                 RECENT_COLUMN_WIDTHS,
             )
             .header(
                 Row::new(["age", "command", "repo", "outcome", "cost"]).style(Style::new().bold()),
             )
-            .block(Block::bordered().title("recently completed"));
+            .block(Block::bordered().title(title));
             frame.render_widget(table, recent_area);
         }
         Err(e) => {
@@ -1440,7 +1455,10 @@ mod tests {
             unreadable: 0,
             now: 100,
             error: None,
-            recent: Ok(Vec::new()),
+            recent: Ok(RecentTail {
+                rows: Vec::new(),
+                total: 0,
+            }),
         }
     }
 
