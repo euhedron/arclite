@@ -38,11 +38,24 @@ pipelines:
             - rustup target add x86_64-pc-windows-gnu
             - cargo build --release --locked --target x86_64-pc-windows-gnu
             - cp target/x86_64-pc-windows-gnu/release/arc.exe "arc-${GITHUB_TAG}-windows-x86_64.exe"
-            # Upload both to Downloads (Atlassian cloud, no corp proxy). An account API token auths to
-            # the REST API as `email:token` (its git username `x-github-api-token-auth` 401s here),
-            # so the upload uses the account email as the username.
+            # Upload each binary to Downloads (Atlassian cloud, no corp proxy) in its own request — a
+            # single-file POST is the form proven to work. An account API token auths to the REST API
+            # as `email:token` (its git username `x-github-api-token-auth` 401s here), so the
+            # username is the account email. Print the HTTP status + response body and fail the step on
+            # any non-2xx, so a bad token or a rejected file surfaces the exact cause rather than `curl
+            # -f` exiting opaque.
+            - ls -la "arc-${GITHUB_TAG}-linux-x86_64" "arc-${GITHUB_TAG}-windows-x86_64.exe"
             - >
-              curl -sf -u "98573653+nikganderson@users.noreply.github.com:${DOWNLOADS_TOKEN}"
+              code=$(curl -s -o /tmp/dl_resp.txt -w '%{http_code}'
+              -u "98573653+nikganderson@users.noreply.github.com:${DOWNLOADS_TOKEN}"
               "https://api.github.com/2.0/repositories/${GITHUB_REPO_FULL_NAME}/downloads"
-              -F "files=@arc-${GITHUB_TAG}-linux-x86_64"
-              -F "files=@arc-${GITHUB_TAG}-windows-x86_64.exe"
+              -F "files=@arc-${GITHUB_TAG}-linux-x86_64");
+              echo "linux upload -> HTTP $code"; cat /tmp/dl_resp.txt; echo;
+              test "$code" -ge 200 && test "$code" -lt 300
+            - >
+              code=$(curl -s -o /tmp/dl_resp.txt -w '%{http_code}'
+              -u "98573653+nikganderson@users.noreply.github.com:${DOWNLOADS_TOKEN}"
+              "https://api.github.com/2.0/repositories/${GITHUB_REPO_FULL_NAME}/downloads"
+              -F "files=@arc-${GITHUB_TAG}-windows-x86_64.exe");
+              echo "windows upload -> HTTP $code"; cat /tmp/dl_resp.txt; echo;
+              test "$code" -ge 200 && test "$code" -lt 300
