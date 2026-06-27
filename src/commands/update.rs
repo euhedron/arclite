@@ -206,7 +206,14 @@ fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
         cmd.arg("--ssl-no-revoke");
     }
     let result = cmd.status();
-    let _ = std::fs::remove_file(&config_path); // remove the credential file regardless of outcome
+    // Remove the credential file regardless of the download's outcome; warn if it lingers, since it
+    // holds a secret — a best-effort side effect surfaced, not silently swallowed.
+    if let Err(e) = std::fs::remove_file(&config_path) {
+        eprintln!(
+            "arclite: could not remove the temporary credential file {} ({e}) — delete it manually",
+            config_path.display()
+        );
+    }
     let status = result.context("running curl to download the update (is curl installed?)")?;
     anyhow::ensure!(
         status.success(),
@@ -270,7 +277,15 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
         match std::fs::rename(new, exe) {
             Ok(()) => Ok(()),
             Err(e) => {
-                let _ = std::fs::rename(&backup, exe); // roll back so an arc.exe still exists
+                // Roll back so an arc.exe still exists; if even that fails the install is left without
+                // one, so say so loudly with the recovery path rather than swallowing it.
+                if let Err(restore) = std::fs::rename(&backup, exe) {
+                    eprintln!(
+                        "arclite: could not restore the original binary ({restore}) — it is saved at {}; rename it back to {} manually",
+                        backup.display(),
+                        exe.display()
+                    );
+                }
                 Err(e).with_context(|| format!("installing the new binary at {}", exe.display()))
             }
         }
