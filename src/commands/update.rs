@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -188,56 +189,50 @@ fn binary_name(v: Version) -> String {
 // ---- download + install ----
 
 /// Download `url` to `dest` with `curl`, authenticating with the `user:token` `auth` pair. The
-/// credential is passed via a temporary curl config file (not argv, where other processes could read
-/// it); curl drops the auth header on the cross-host redirect GitHub issues to signed storage. On
-/// Windows the system `curl.exe` is used (its Schannel backend trusts the system cert store, incl. corp
-/// roots) with revocation checks disabled, since corp networks commonly block the revocation endpoints.
+/// credential is fed to curl as a config directive over **stdin** (`--config -`) — never argv (a
+/// process listing would expose it) and never a temp file (whose permissions vary by platform); curl
+/// drops the auth header on the cross-host redirect GitHub issues to signed storage. On Windows the
+/// system `curl.exe` is used (Schannel → system/corp cert store) with revocation checks disabled, since
+/// corp networks commonly block the revocation endpoints.
 fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
-    let config_path = sidecar(dest, ".curlrc");
-    write_curl_config(&config_path, auth)?;
+    // The credential becomes a curl config line; a quote or newline would break the quoting or inject
+    // further directives, so require a single clean `user:token` line rather than trust the input.
+    anyhow::ensure!(
+        !auth.contains(['"', '\n', '\r']),
+        "{AUTH_ENV} must be a single `user:token` line with no quotes or newlines"
+    );
     let mut cmd = Command::new(curl_program());
     cmd.args(["--location", "--fail", "--silent", "--show-error"])
-        .arg("--config")
-        .arg(&config_path)
+        .args(["--config", "-"]) // read the credential config from stdin — not argv, not a file
         .arg("--output")
         .arg(dest)
-        .arg(url);
+        .arg(url)
+        .stdin(std::process::Stdio::piped());
     if cfg!(windows) {
         cmd.arg("--ssl-no-revoke");
     }
-    let result = cmd.status();
-    // Remove the credential file regardless of the download's outcome; warn if it lingers, since it
-    // holds a secret — a best-effort side effect surfaced, not silently swallowed.
-    if let Err(e) = std::fs::remove_file(&config_path) {
-        eprintln!(
-            "arclite: could not remove the temporary credential file {} ({e}) — delete it manually",
-            config_path.display()
-        );
-    }
-    let status = result.context("running curl to download the update (is curl installed?)")?;
+    let mut child = cmd
+        .spawn()
+        .context("running curl to download the update (is curl installed?)")?;
+    // Hand curl the credential, then close stdin so it proceeds. The config is one short line consumed
+    // before the download, so this can't deadlock against the output (which goes to `dest`, not a pipe).
+    child
+        .stdin
+        .take()
+        .expect("curl stdin was piped")
+        .write_all(format!("user = \"{auth}\"\n").as_bytes())
+        .context("passing the credential to curl")?;
+    let status = child.wait().context("waiting for curl")?;
     anyhow::ensure!(
         status.success(),
-        "curl could not download {url} (exit {})",
+        "curl could not download {url} (exit {}) — if this platform's release isn't published yet, download it manually from {}",
         status.code().map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+        downloads_page(),
     );
     let len = std::fs::metadata(dest)
         .context("the downloaded update could not be read")?
         .len();
     anyhow::ensure!(len > 0, "the downloaded update was empty");
-    Ok(())
-}
-
-/// Write a curl config file granting `user = "<auth>"`, owner-only where the OS supports it — so the
-/// credential never appears in a process listing or a world-readable file.
-fn write_curl_config(path: &Path, auth: &str) -> anyhow::Result<()> {
-    // curl quotes a config value in double quotes; a Basic credential cannot contain one, so the
-    // single substitution is exact (no escaping needed).
-    std::fs::write(path, format!("user = \"{auth}\"\n")).context("writing the curl auth config")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 
