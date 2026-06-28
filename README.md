@@ -29,9 +29,9 @@ cargo install --path .        # installs the `arc` command; or `cargo build --re
 arc                                  # no args → help (the binary is `arc`; the project is arclite)
 arc inspect <repo>
 arc doctor
-arc update                           # check for a newer release; --apply installs it
+arc update
 arc status
-arc tui                              # the interactive cockpit (human-facing front-end)
+arc tui
 arc log [<id>]
 arc usage
 arc rules
@@ -43,9 +43,9 @@ arc run audit     <repo> --ruleset <id>
 arc run critique  <repo> --backend codex
 arc run extract   <repo> --runs 3
 arc run evolve    <repo> --ranked
-arc run verify    <repo> --changed   # re-check the open ledger (auto-loaded) vs the diff
-arc promote <run-id>                 # write a logged run's findings into the repo's ledger
-arc retire  <verify-run-id>          # move a verify run's resolved findings out of the ledger
+arc run verify    <repo> --changed
+arc promote <run-id>
+arc retire  <verify-run-id>
 ```
 
 Run `arc <command> --help` for what a command does and its full options — authoritative there, not restated here where the copy would rot. The AI commands share one option surface (select the rules, shape the context, choose the model/tools/backend, bound or preview the spend, control output and the **gate**). Every run echoes the exact parameters it used — model, tools, memory isolation, the full list of **context sources**, the active `.arc/settings.json` layers, and where the run was logged — alongside real token usage + cost (codex reports tokens only — no dollar cost).
