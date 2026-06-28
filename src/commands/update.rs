@@ -214,11 +214,11 @@ fn binary_name(v: Version) -> String {
 /// system `curl.exe` is used (Schannel → system/corp cert store) with revocation checks disabled, since
 /// corp networks commonly block the revocation endpoints.
 fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
-    // The credential becomes a curl config line; a quote or newline would break the quoting or inject
-    // further directives, so require a single clean `user:token` line rather than trust the input.
+    // The credential becomes a curl config line; a quote, backslash (curl's escape char), or newline
+    // would break the quoting or inject further directives, so require a clean `user:token` line.
     anyhow::ensure!(
-        !auth.contains(['"', '\n', '\r']),
-        "{AUTH_ENV} must be a single `user:token` line with no quotes or newlines"
+        !auth.contains(['"', '\\', '\n', '\r']),
+        "{AUTH_ENV} must be a single `user:token` line with no quotes, backslashes, or newlines"
     );
     let mut cmd = Command::new(curl_program());
     cmd.args(["--location", "--fail", "--silent", "--show-error"])
