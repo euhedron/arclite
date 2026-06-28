@@ -360,7 +360,7 @@ fn clean_stale_backup() {
 }
 
 /// A sibling path formed by appending `suffix` to `path`'s full name (not replacing its extension, so
-/// `arc.exe` + `.old` is `arc.exe.old`). Used for the download, the curl config, and the backup.
+/// `arc.exe` + `.old` is `arc.exe.old`). Used for the download staging file and the backup.
 fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
