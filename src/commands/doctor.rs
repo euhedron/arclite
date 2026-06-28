@@ -102,6 +102,7 @@ fn probe(program: &str) -> ToolStatus {
 /// (`git config --get` outcomes, which need exit 1 separated from >1, use [`crate::git_config_get`].)
 fn git_repo_root() -> anyhow::Result<Option<String>> {
     let output = crate::ai::command("git")?
+        .env("LC_ALL", "C")
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .map_err(|e| anyhow::anyhow!("could not run git: {e}"))?;
@@ -111,8 +112,10 @@ fn git_repo_root() -> anyhow::Result<Option<String>> {
         ));
     }
     // `rev-parse` exits 128 both for "not a git repository" (git's benign not-in-a-work-tree verdict)
-    // and for a genuine fault, so the message is the only discriminator: the standard not-a-repo line
-    // reads as absent; anything else is a broken git we surface rather than mask as "not a repo".
+    // and for a genuine fault, collapsing the two onto one exit code — so the message is the only
+    // discriminator git offers. We force `LC_ALL=C` above so that message is stable English rather than
+    // locale-dependent (the justified last resort when a tool exposes no machine-readable signal for the
+    // distinction): the standard not-a-repo line reads as absent; anything else is a broken git we surface.
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.contains("not a git repository") {
         Ok(None)
