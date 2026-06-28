@@ -79,9 +79,9 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         else {
             continue; // a verdict with no id names no ledger entry
         };
-        // The id rode through the model — treat it as an untrusted path component before joining it to
-        // the ledger dir: a ledger id is a single normal segment (no separators / `..`).
-        if !is_safe_segment(id) {
+        // The id rode through the model — validate it as an untrusted path segment before joining it to
+        // the ledger dir, reusing the canonical single-safe-segment check (shared with run-id validation).
+        if crate::commands::log::ensure_safe_run_id(id).is_err() {
             unmatched.push(id.to_owned());
             continue;
         }
@@ -157,14 +157,6 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     emit(&out, &human, global.json)
 }
 
-/// True if `id` is a single normal path segment — no separators, no `..`, no root component — so
-/// joining it to the ledger dir can't escape it. The verdict id comes from the model, hence untrusted.
-fn is_safe_segment(id: &str) -> bool {
-    let mut components = Path::new(id).components();
-    matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-}
-
 /// Move one finding from the open ledger into the resolved dir, marked resolved with the verify run's
 /// provenance. Write-new-then-remove-old: the resolved copy is claimed via [`crate::claim_findings_entry`]
 /// and fully written before the open entry is removed, so a failure mid-move never loses the finding — at
@@ -207,15 +199,6 @@ fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn safe_segment_rejects_traversal_and_separators() {
-        assert!(is_safe_segment("a-finding-id"));
-        assert!(!is_safe_segment("../escape"));
-        assert!(!is_safe_segment("a/b"));
-        assert!(!is_safe_segment(".."));
-        assert!(!is_safe_segment(""));
-    }
 
     #[test]
     fn mark_resolved_flips_status_and_appends_under_existing_resolution() {
