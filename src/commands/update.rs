@@ -89,7 +89,14 @@ fn apply(
     let download_path = sidecar(&exe, ".arc-update-new");
     download(&download_api_url(&name), &auth, &download_path)?;
     if let Err(e) = install(&exe, &download_path) {
-        let _ = std::fs::remove_file(&download_path); // don't leave a partial download behind
+        // Don't leave the partial download behind; warn if it can't be removed (matching the
+        // codebase's cleanup-failure standard) rather than swallow it.
+        if let Err(rm) = std::fs::remove_file(&download_path) {
+            eprintln!(
+                "arclite: could not remove the partial download {} ({rm})",
+                download_path.display()
+            );
+        }
         return Err(e);
     }
     let human = format!(

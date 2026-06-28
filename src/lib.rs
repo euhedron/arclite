@@ -172,6 +172,11 @@ pub fn run() -> ExitCode {
         Command::Promote(args) => {
             commands::promote::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
+        // it (an explicit option silently dropped is worse than a silent default).
+        Command::Completions(_) if cli.global.json => Err(anyhow::anyhow!(
+            "`--json` has no meaning for `arc completions` (it emits a shell completion script)"
+        )),
         Command::Completions(args) => {
             // The binary name is single-sourced in `cli::binary_name`; the command itself (which
             // `generate` needs by &mut) is built here.
