@@ -4,7 +4,7 @@ use crate::cli::{DoctorArgs, GlobalArgs};
 use crate::output::emit;
 
 #[derive(Serialize)]
-struct Report {
+pub(crate) struct Report {
     arclite: &'static str,
     runtime: Runtime,
     cwd: String,
@@ -211,8 +211,17 @@ const LABEL_WIDTH: usize = 8;
 
 /// The `doctor` command.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    let report = gather()?;
+    let human = human(&report);
+    emit(&report, &human, global.json)
+}
+
+/// Probe the environment into a [`Report`]: runtime, cwd, tool versions, the log location, and the
+/// pre-push gate's wiring. Shared by `arc doctor` and the TUI doctor view, so both report identical
+/// facts from one place.
+pub(crate) fn gather() -> anyhow::Result<Report> {
     let runs = crate::log::count();
-    let report = Report {
+    Ok(Report {
         arclite: env!("CARGO_PKG_VERSION"),
         runtime: Runtime {
             os: std::env::consts::OS,
@@ -236,11 +245,18 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             error: runs.as_ref().err().map(std::string::ToString::to_string),
         },
         gate: gate_status(),
-    };
+    })
+}
 
-    let runs_display = match &runs {
-        Ok(n) => format!("{n} runs"),
-        Err(e) => format!("unreadable: {e}"),
+/// Render a [`Report`] as aligned `label  value` lines — the human view shared by `arc doctor` and the
+/// TUI doctor view, so the two renderings can't drift.
+pub(crate) fn human(report: &Report) -> String {
+    // `log::count` yields Ok or Err, so exactly one of `runs`/`error` is set; assert that invariant
+    // rather than fabricate a fallback for the pairing that can't occur.
+    let runs_display = match (report.logs.runs, report.logs.error.as_deref()) {
+        (Some(n), _) => format!("{n} runs"),
+        (None, Some(e)) => format!("unreadable: {e}"),
+        (None, None) => unreachable!("log::count sets exactly one of logs.runs / logs.error"),
     };
     // One label column at a single-sourced width, so values align without hand-spaced labels that
     // must be kept in sync with a bare alignment literal by eye.
@@ -296,7 +312,5 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         format!("{state} · {where_}")
     };
     lines.push(row("gate", &gate_line));
-    let human = lines.join("\n");
-
-    emit(&report, &human, global.json)
+    lines.join("\n")
 }

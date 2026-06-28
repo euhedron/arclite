@@ -95,6 +95,7 @@ enum Route {
     Config,
     Log,
     Usage,
+    Doctor,
 }
 
 /// A `/`-palette command: launch an AI run (a verb), open a view, or quit. Listed in *presentation*
@@ -113,6 +114,7 @@ enum Command {
     Config,
     Log,
     Usage,
+    Doctor,
     Home,
     Quit,
 }
@@ -126,6 +128,7 @@ impl Command {
         Command::Config,
         Command::Log,
         Command::Usage,
+        Command::Doctor,
         Command::Home,
         Command::Quit,
     ];
@@ -159,6 +162,7 @@ impl Command {
             Command::Config => "config",
             Command::Log => "log",
             Command::Usage => "usage",
+            Command::Doctor => "doctor",
             Command::Home => "home",
             Command::Quit => "quit",
         }
@@ -181,6 +185,7 @@ impl Command {
             Command::Config => "settings and active layers",
             Command::Log => "browse completed runs and their results",
             Command::Usage => "spend + token rollup from the run log",
+            Command::Doctor => "runtime, environment & tooling check",
             Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
         }
@@ -200,6 +205,7 @@ impl Command {
             Command::Config => app.open_config(),
             Command::Log => app.open_log(),
             Command::Usage => app.open_usage(),
+            Command::Doctor => app.open_doctor(),
             Command::Quit => app.should_quit = true,
             verb => app.start_launch(verb),
         }
@@ -297,6 +303,9 @@ struct App {
     /// A newer published release the startup check found (`Some(version)`), surfaced in the footer;
     /// `None` until the check reports, and when up to date or the check failed.
     update: Option<String>,
+    /// The doctor view's report as rendered text, loaded when the view is opened; `None` until then.
+    /// `Err` if the environment probe failed (e.g. an unreadable cwd), shown in the view.
+    doctor: Option<Result<String, String>>,
 }
 
 impl App {
@@ -323,6 +332,7 @@ impl App {
             cwd_note,
             cwd_display,
             update: None,
+            doctor: None,
         }
     }
 
@@ -428,6 +438,17 @@ impl App {
         self.usage = Some(
             crate::commands::usage::rollup()
                 .map(|(rollup, _)| rollup)
+                .map_err(|e| format!("{e:#}")),
+        );
+    }
+
+    /// Open the doctor view, probing the environment fresh (re-run on each entry, like the other
+    /// views). The same `doctor::gather`/`human` back `arc doctor`, so the two can't drift.
+    fn open_doctor(&mut self) {
+        self.route = Route::Doctor;
+        self.doctor = Some(
+            crate::commands::doctor::gather()
+                .map(|r| crate::commands::doctor::human(&r))
                 .map_err(|e| format!("{e:#}")),
         );
     }
@@ -943,6 +964,13 @@ fn render(frame: &mut Frame, app: &App) {
                 .expect("the usage view is loaded when its route is active"),
             body,
         ),
+        Route::Doctor => render_doctor(
+            frame,
+            app.doctor
+                .as_ref()
+                .expect("the doctor view is loaded when its route is active"),
+            body,
+        ),
     }
     render_footer(frame, footer, app);
 
@@ -1193,6 +1221,24 @@ const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
 /// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
 /// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
 /// backs the CLI, so the two can't drift.
+/// The doctor view: the environment/tooling report `arc doctor` prints, as aligned text — or the probe
+/// error. Loaded on entry by [`App::open_doctor`].
+fn render_doctor(frame: &mut Frame, doctor: &Result<String, String>, area: Rect) {
+    let [header, body] =
+        Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Line::from("doctor").bold(), header);
+    let text = match doctor {
+        Ok(report) => report.clone(),
+        Err(e) => format!("doctor unreadable: {e}"),
+    };
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(Block::bordered())
+            .wrap(Wrap { trim: false }),
+        body,
+    );
+}
+
 fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
@@ -1361,7 +1407,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Status | Route::Config | Route::Log | Route::Usage => {
+            Route::Status | Route::Config | Route::Log | Route::Usage | Route::Doctor => {
                 "/ commands · esc back · q quit"
             }
         }
@@ -1502,6 +1548,7 @@ mod tests {
             cwd_note: None,
             cwd_display: ".".to_owned(),
             update: None,
+            doctor: None,
         }
     }
 
@@ -1512,6 +1559,21 @@ mod tests {
         assert!(
             screen(&app, 80, 6).contains("⬆ arc 9.9.9"),
             "the footer should flag a newer release the startup check found"
+        );
+    }
+
+    #[test]
+    fn doctor_view_renders_the_report() {
+        let mut app = app_with(Route::Doctor, empty_snapshot());
+        app.doctor = Some(Ok("arclite  9.9.9\nos  testos / testarch".to_owned()));
+        let rendered = screen(&app, 80, 10);
+        assert!(
+            rendered.contains("doctor"),
+            "the doctor view shows its header"
+        );
+        assert!(
+            rendered.contains("9.9.9"),
+            "the doctor view renders the report text"
         );
     }
 
