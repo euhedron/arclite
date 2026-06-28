@@ -211,7 +211,7 @@ pub fn run_synthesis(
     // user to recall them. Only on a hard error — a logged errored run (a tripped per-run budget the
     // user set) is the user's own cap, not a backend to switch away from.
     if outcome.is_err() {
-        let others: Vec<&str> = crate::ai::KNOWN_BACKENDS
+        let others: Vec<&str> = crate::ai::known_backends()
             .iter()
             .copied()
             .filter(|&b| b != backend_name.as_str())

@@ -246,10 +246,22 @@ pub struct Request<'a> {
 /// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
 pub const DEFAULT_BACKEND: &str = "claude";
 
-/// The known synthesis backends, by name — the single set `doctor` probes and [`validate_backend`]
-/// checks against. Keep in sync with [`backend`]'s match arms below (each name maps there to its
-/// `Backend` impl, which a name list alone can't encode); everything else derives from this slice.
-pub(crate) const KNOWN_BACKENDS: &[&str] = &["claude", "codex"];
+/// Constructs a backend instance — the factory half of a [`BACKENDS`] registry row.
+type BackendFactory = fn() -> Box<dyn Backend>;
+
+/// The known synthesis backends: each name paired with its `Backend` constructor — the one registry
+/// `backend()` dispatches from and `known_backends()` lists, so adding a backend is a single row here,
+/// not a name list and a `match` arm kept in lockstep (the factory is what a name list alone can't
+/// encode). `doctor` probes, `validate_backend`, and error wording all derive from the name set.
+const BACKENDS: &[(&str, BackendFactory)] = &[
+    ("claude", || Box::new(ClaudeBackend)),
+    ("codex", || Box::new(CodexBackend)),
+];
+
+/// The known backend names, derived from the [`BACKENDS`] registry.
+pub(crate) fn known_backends() -> Vec<&'static str> {
+    BACKENDS.iter().map(|(name, _)| *name).collect()
+}
 
 /// The claude backend's default model. Update when a newer model supersedes it; the run reports the
 /// resolved id the response returns.
@@ -319,16 +331,18 @@ pub trait Backend {
     }
 }
 
-/// Select a synthesis backend by name — the single home of the known backends and their wording.
+/// Select a synthesis backend by name — dispatched from the single [`BACKENDS`] registry.
 pub fn backend(name: &str) -> anyhow::Result<Box<dyn Backend>> {
-    match name {
-        "claude" => Ok(Box::new(ClaudeBackend)),
-        "codex" => Ok(Box::new(CodexBackend)),
-        other => bail!(
-            "unknown backend `{other}` (known: {})",
-            KNOWN_BACKENDS.join(", ")
-        ),
-    }
+    BACKENDS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, make)| make())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown backend `{name}` (known: {})",
+                known_backends().join(", ")
+            )
+        })
 }
 
 /// The Claude Code CLI backend — `claude -p` with a controlled, isolated context: an explicit model,
