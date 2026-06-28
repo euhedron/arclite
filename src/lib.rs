@@ -195,6 +195,7 @@ pub fn run() -> ExitCode {
             RunVerb::Extract(a) => commands::verbs::EXTRACT.run(a, &cli.global),
             RunVerb::Audit(a) => commands::verbs::AUDIT.run(a, &cli.global),
             RunVerb::Critique(a) => commands::verbs::CRITIQUE.run(a, &cli.global),
+            RunVerb::Verify(a) => commands::verbs::VERIFY.run(a, &cli.global),
             RunVerb::Evolve(a) => commands::verbs::EVOLVE.run(a, &cli.global),
         },
     };

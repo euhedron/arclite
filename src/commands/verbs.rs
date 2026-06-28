@@ -195,6 +195,36 @@ pub const CRITIQUE: Verb = Verb {
     prompt: critique_prompt,
 };
 
+// ---- verify ----
+
+/// The `verify` structured-output item: one verdict on a previously-recorded finding.
+const VERIFY_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"string"},"verdict":{"type":"string","enum":["reproduces","resolved","indeterminate"]},"reason":{"type":"string"}},"required":["id","verdict","reason"]}"#;
+
+fn verify_prompt(ctx: &str) -> String {
+    format!(
+        "You are re-checking previously-recorded findings against the current state of a code \
+         repository. Its open findings are provided in the context below as Markdown files from the \
+         repo's ledger — each finding file's frontmatter carries an `id`.\n\n\
+         {ctx}\n\
+         For each finding present, judge against the current code whether it STILL reproduces, has \
+         been RESOLVED (the code no longer exhibits it), or is INDETERMINATE (the provided context \
+         doesn't contain what's needed to tell). Return one result per finding: its `id` (exactly as \
+         written in the file's frontmatter), the verdict (reproduces | resolved | indeterminate), \
+         and a one-clause reason grounded in the current code. Judge only what the context supports \
+         — prefer indeterminate over guessing. If no findings are present, report none and say so."
+    )
+}
+
+pub const VERIFY: Verb = Verb {
+    name: cli::NAME_VERIFY,
+    structured: Some(Structured {
+        item: VERIFY_ITEM,
+        note: "one object per finding re-checked.",
+        kinds: &[], // verdicts already bucket by their `verdict`
+    }),
+    prompt: verify_prompt,
+};
+
 // ---- evolve ----
 
 /// The `evolve` structured-output item: one radical proposal.

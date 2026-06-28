@@ -61,6 +61,8 @@ pub(crate) const NAME_AUDIT: &str = "audit";
 pub(crate) const VERB_AUDIT: &str = "Audit the repo for rule violations";
 pub(crate) const NAME_CRITIQUE: &str = "critique";
 pub(crate) const VERB_CRITIQUE: &str = "Review the repo for quality defects";
+pub(crate) const NAME_VERIFY: &str = "verify";
+pub(crate) const VERB_VERIFY: &str = "Re-check open findings against the current code";
 pub(crate) const NAME_EVOLVE: &str = "evolve";
 pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
 
@@ -100,7 +102,7 @@ pub enum Command {
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
     // substrate, kept distinct from the deterministic commands above — `run` names the step that
     // spends AI, mirroring arclite's deterministic-until-synthesis spine.
-    /// Run an AI synthesis verb: audit, critique, suggest, summarize, extract, or evolve.
+    /// Run an AI synthesis verb: audit, critique, verify, suggest, summarize, extract, or evolve.
     #[command(name = NAME_RUN)]
     Run(RunArgs),
 }
@@ -127,6 +129,8 @@ pub enum RunVerb {
     Audit(SynthArgs),
     #[command(name = NAME_CRITIQUE, about = VERB_CRITIQUE)]
     Critique(SynthArgs),
+    #[command(name = NAME_VERIFY, about = VERB_VERIFY)]
+    Verify(SynthArgs),
     #[command(name = NAME_EVOLVE, about = VERB_EVOLVE)]
     Evolve(SynthArgs),
 }

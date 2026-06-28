@@ -106,6 +106,7 @@ enum Command {
     Run,
     Audit,
     Critique,
+    Verify,
     Suggest,
     Summarize,
     Extract,
@@ -137,6 +138,7 @@ impl Command {
     const VERBS: &'static [Command] = &[
         Command::Audit,
         Command::Critique,
+        Command::Verify,
         Command::Suggest,
         Command::Summarize,
         Command::Extract,
@@ -152,6 +154,7 @@ impl Command {
             // (used by clap too), so a rename can't drift the spawn/palette from `--help`.
             Command::Audit => crate::cli::NAME_AUDIT,
             Command::Critique => crate::cli::NAME_CRITIQUE,
+            Command::Verify => crate::cli::NAME_VERIFY,
             Command::Suggest => crate::cli::NAME_SUGGEST,
             Command::Summarize => crate::cli::NAME_SUMMARIZE,
             Command::Extract => crate::cli::NAME_EXTRACT,
@@ -176,6 +179,7 @@ impl Command {
             // consts, so the palette and the CLI can't drift.
             Command::Audit => crate::cli::VERB_AUDIT,
             Command::Critique => crate::cli::VERB_CRITIQUE,
+            Command::Verify => crate::cli::VERB_VERIFY,
             Command::Suggest => crate::cli::VERB_SUGGEST,
             Command::Summarize => crate::cli::VERB_SUMMARIZE,
             Command::Extract => crate::cli::VERB_EXTRACT,
