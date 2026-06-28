@@ -129,13 +129,18 @@ fn primary_text(finding: &Value) -> &str {
         .unwrap_or("finding")
 }
 
-/// How many leading words of a finding's text form its slug id — enough to be recognizable without an
-/// unwieldy filename (a curator can rename).
-const SLUG_WORDS: usize = 8;
+/// The longest a slug id may get. Caps the ledger filename so it stays recognizable and — since a
+/// finding's text (e.g. an audit `location` listing many identifiers) can run to hundreds of chars —
+/// clear of the platform path limit (notably Windows' ~260): an over-long name would make the entry
+/// fail to *write*, not merely read badly. A curator can rename.
+const SLUG_MAX_CHARS: usize = 48;
 
-/// A kebab-case id stem from a finding's text: its first [`SLUG_WORDS`] alphanumeric words, lowercased.
+/// A kebab-case id stem from a finding's text: its leading alphanumeric words, lowercased and joined
+/// with `-`, up to [`SLUG_MAX_CHARS`] on a word boundary (a single word longer than the budget is
+/// truncated). Same-text findings still collide here by design — the atomic claim bumps a suffix.
 fn slug(text: &str) -> String {
-    let s = text
+    let mut out = String::new();
+    for word in text
         .split_whitespace()
         .map(|w| {
             w.chars()
@@ -144,13 +149,21 @@ fn slug(text: &str) -> String {
                 .to_lowercase()
         })
         .filter(|w| !w.is_empty())
-        .take(SLUG_WORDS)
-        .collect::<Vec<_>>()
-        .join("-");
-    if s.is_empty() {
+    {
+        if out.is_empty() {
+            // The first word seeds the slug, truncated if it alone exceeds the budget.
+            out.extend(word.chars().take(SLUG_MAX_CHARS));
+        } else if out.len() + 1 + word.len() <= SLUG_MAX_CHARS {
+            out.push('-');
+            out.push_str(&word);
+        } else {
+            break;
+        }
+    }
+    if out.is_empty() {
         "finding".to_owned()
     } else {
-        s
+        out
     }
 }
 
@@ -200,4 +213,33 @@ fn entry_md(finding: &Value, id: &str, run_id: &str, command: &str) -> String {
          ## Next Action\n\n\
          ## Resolution\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SLUG_MAX_CHARS, slug};
+
+    #[test]
+    fn slug_stays_within_the_path_budget_on_a_word_boundary() {
+        // A finding whose text is many long identifier-words (an audit `location`) must not yield a
+        // filename that risks the platform path limit; the slug caps in length, breaking between words.
+        let s = slug(
+            "PairThesisController citationcontext handlers GetTranscriptCitationContextAsync GetFilingCitationContextAsync",
+        );
+        assert!(s.len() <= SLUG_MAX_CHARS, "`{s}` exceeds {SLUG_MAX_CHARS}");
+        assert!(
+            !s.starts_with('-') && !s.ends_with('-'),
+            "`{s}` has a stray boundary dash"
+        );
+    }
+
+    #[test]
+    fn slug_truncates_a_single_oversized_word() {
+        assert_eq!(slug(&"x".repeat(200)).len(), SLUG_MAX_CHARS);
+    }
+
+    #[test]
+    fn slug_falls_back_when_text_has_no_alphanumerics() {
+        assert_eq!(slug("—— ·· ——"), "finding");
+    }
 }
