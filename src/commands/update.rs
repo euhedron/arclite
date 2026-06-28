@@ -13,6 +13,11 @@ use crate::output::emit;
 const WORKSPACE: &str = "nikganderson";
 const REPO: &str = "arclite";
 
+/// The GitHub web/git host and the API host — single-sourced alongside WORKSPACE/REPO so the
+/// release-URL builders below can't drift on scheme or host.
+const HOST: &str = "https://github.com";
+const API_HOST: &str = "https://api.github.com";
+
 /// Env var holding the GitHub credential `--apply` uses to fetch the binary: a `user:token` Basic
 /// pair (e.g. `you@example.com:<api-token>`). Read from the environment so no secret lands in a file
 /// arc tracks; the version check needs none (it rides the user's existing git credential).
@@ -131,7 +136,7 @@ fn current_version() -> Version {
 /// `^{}` dereference lines annotated tags emit) are skipped. Errors only if git can't be consulted, so
 /// a network or auth failure surfaces rather than masquerading as "up to date".
 fn latest_version() -> anyhow::Result<Version> {
-    let remote = format!("https://github.com/{WORKSPACE}/{REPO}.git");
+    let remote = format!("{HOST}/{WORKSPACE}/{REPO}.git");
     let output = crate::ai::command("git")?
         .args(["ls-remote", "--tags"])
         .arg(&remote)
@@ -183,13 +188,13 @@ pub(crate) fn newer_release() -> Option<String> {
 
 /// The human-facing Downloads page (shown when pointing a user at a manual download).
 fn downloads_page() -> String {
-    format!("https://github.com/{WORKSPACE}/{REPO}/downloads")
+    format!("{HOST}/{WORKSPACE}/{REPO}/downloads")
 }
 
 /// The Downloads REST endpoint for one artifact — it accepts the API token and 302-redirects to the
 /// signed storage URL (the download host), where the auth header must not follow.
 fn download_api_url(name: &str) -> String {
-    format!("https://api.github.com/2.0/repositories/{WORKSPACE}/{REPO}/downloads/{name}")
+    format!("{API_HOST}/2.0/repositories/{WORKSPACE}/{REPO}/downloads/{name}")
 }
 
 /// The release artifact name for the running platform — `arc-v<version>-<os>-<arch><exe-suffix>`. Must
