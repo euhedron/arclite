@@ -29,7 +29,7 @@ use anyhow::Context;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 use ratatui::{Frame, TerminalOptions, Viewport};
 use serde_json::Value;
@@ -82,6 +82,8 @@ enum Msg {
     Tick,
     /// A launch's dry-run finished on a worker thread: its preview text, or an error to show.
     LaunchPreview(Result<String, String>),
+    /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
+    UpdateChecked(Option<String>),
 }
 
 /// Which section is on screen. The cockpit opens on [`Route::Home`] (a launchpad), not a section — the
@@ -292,12 +294,21 @@ struct App {
     /// The launch dir, home-abbreviated for the masthead — precomputed in `new` (display_path probes
     /// the home dir) so render stays a pure function of state.
     cwd_display: String,
+    /// A newer published release the startup check found (`Some(version)`), surfaced in the footer;
+    /// `None` until the check reports, and when up to date or the check failed.
+    update: Option<String>,
 }
 
 impl App {
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         let cwd_note = cwd_warning(Path::new(&cwd));
         let cwd_display = crate::display_path(&cwd);
+        // Check for a newer release off the main thread (it's a network call); the footer flags it when
+        // the result arrives. Best-effort — a failed check (offline, etc.) simply never notifies.
+        let update_tx = tx.clone();
+        thread::spawn(move || {
+            let _ = update_tx.send(Msg::UpdateChecked(crate::commands::update::newer_release()));
+        });
         Self {
             route: Route::Home,
             status: Snapshot::read(),
@@ -311,6 +322,7 @@ impl App {
             usage: None,
             cwd_note,
             cwd_display,
+            update: None,
         }
     }
 
@@ -739,6 +751,7 @@ fn update(app: &mut App, msg: Msg) {
         Msg::Tick => app.status = Snapshot::read(),
         Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => handle_key(app, key),
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
+        Msg::UpdateChecked(newer) => app.update = newer,
         Msg::LaunchPreview(result) => {
             // Fold the dry-run's outcome into the gate — unless the launch was cancelled before it
             // arrived (then `launch` is `None` and the preview is simply dropped).
@@ -1354,7 +1367,16 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    frame.render_widget(Line::from(format!("{runs}  ·  {hints}")).dim(), area);
+    let status = format!("{runs}  ·  {hints}");
+    let line = match &app.update {
+        // A newer release found at startup — flag it, undimmed, after the status and key hints.
+        Some(version) => Line::from(vec![
+            Span::from(status).dim(),
+            Span::from(format!("  ·  ⬆ arc {version}")).yellow(),
+        ]),
+        None => Line::from(status).dim(),
+    };
+    frame.render_widget(line, area);
 }
 
 /// The `/` command palette: a centered popup with the typed query and the prefix-matched commands,
@@ -1479,7 +1501,18 @@ mod tests {
             usage: None,
             cwd_note: None,
             cwd_display: ".".to_owned(),
+            update: None,
         }
+    }
+
+    #[test]
+    fn footer_flags_a_newer_release() {
+        let mut app = app_with(Route::Home, empty_snapshot());
+        app.update = Some("9.9.9".to_owned());
+        assert!(
+            screen(&app, 80, 6).contains("⬆ arc 9.9.9"),
+            "the footer should flag a newer release the startup check found"
+        );
     }
 
     /// Render the whole frame (section + footer + any overlay) to an in-memory backend, as one string.

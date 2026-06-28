@@ -160,6 +160,14 @@ fn version_string(v: Version) -> String {
     format!("{}.{}.{}", v[0], v[1], v[2])
 }
 
+/// For the TUI's startup check: the latest release version *if* it's newer than the running binary,
+/// else `None`. Best-effort — any failure (offline, git missing) yields `None` rather than nagging,
+/// since this drives only an optional "update available" hint, not a user-invoked check.
+pub(crate) fn newer_release() -> Option<String> {
+    let latest = latest_version().ok()?;
+    (latest > current_version()).then(|| version_string(latest))
+}
+
 // ---- release URLs / artifact name ----
 
 /// The human-facing Downloads page (shown when pointing a user at a manual download).
