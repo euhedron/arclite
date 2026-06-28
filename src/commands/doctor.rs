@@ -275,7 +275,13 @@ pub(crate) fn human(report: &Report) -> String {
             &format!("{} / {}", report.runtime.os, report.runtime.arch),
         ),
         row("cwd", &crate::display_path(&report.cwd)),
-        row("cargo", &report.tools.cargo.display("not found")),
+        row(
+            "cargo",
+            &report
+                .tools
+                .cargo
+                .display("not found (needed only to build arc from source)"),
+        ),
         row("git", &report.tools.git.display("not found")),
         row(
             "curl",
