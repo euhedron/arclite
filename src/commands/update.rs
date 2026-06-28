@@ -297,12 +297,28 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Remove a `.old` backup a prior Windows `--apply` left behind, best-effort: it's only removable once
-/// no process is still running that image, so a failure here (still in use) is benign — a later run
-/// retries. A no-op on Unix, which replaces the binary atomically and never writes a backup.
+/// Remove a `.old` backup a prior Windows `--apply` left behind. Absent is the normal case (silent); a
+/// present-but-undeletable backup (the prior binary may still be running) is benign and retried on a
+/// later run, but it's surfaced — matching the codebase's warn-on-cleanup-failure standard — rather
+/// than swallowed. A no-op on Unix, which replaces the binary atomically and never writes a backup.
 fn clean_stale_backup() {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(sidecar(&exe, ".old"));
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!(
+                "arclite: could not locate the running binary to clean its update backup ({e})"
+            );
+            return;
+        }
+    };
+    let backup = sidecar(&exe, ".old");
+    if let Err(e) = std::fs::remove_file(&backup)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "arclite: could not remove the old binary backup {} ({e})",
+            backup.display()
+        );
     }
 }
 
