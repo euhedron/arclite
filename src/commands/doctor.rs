@@ -23,6 +23,9 @@ struct Runtime {
 struct Tools {
     cargo: ToolStatus,
     git: ToolStatus,
+    /// `curl`, needed only for `arc update --apply` (the binary download) — probed so doctor surfaces
+    /// the dependency up front rather than letting a user hit it mid-update.
+    curl: ToolStatus,
     /// Each known synthesis backend ([`crate::ai::KNOWN_BACKENDS`]) and its detected status — probed
     /// from that one set, so a new backend is checked here automatically rather than silently missed.
     backends: Vec<BackendTool>,
@@ -231,6 +234,7 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
         tools: Tools {
             cargo: probe("cargo"),
             git: probe("git"),
+            curl: probe("curl"),
             backends: crate::ai::KNOWN_BACKENDS
                 .iter()
                 .map(|&name| BackendTool {
@@ -270,6 +274,13 @@ pub(crate) fn human(report: &Report) -> String {
         row("cwd", &crate::display_path(&report.cwd)),
         row("cargo", &report.tools.cargo.display("not found")),
         row("git", &report.tools.git.display("not found")),
+        row(
+            "curl",
+            &report
+                .tools
+                .curl
+                .display("not found (needed only for arc update --apply)"),
+        ),
     ];
     for b in &report.tools.backends {
         // A non-default backend is optional, so qualify its "not found"; a present-but-broken one
