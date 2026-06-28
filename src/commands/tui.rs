@@ -1217,10 +1217,6 @@ const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
     Constraint::Min(8),
 ];
 
-/// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
-/// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
-/// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
-/// backs the CLI, so the two can't drift.
 /// The doctor view: the environment/tooling report `arc doctor` prints, as aligned text — or the probe
 /// error. Loaded on entry by [`App::open_doctor`].
 fn render_doctor(frame: &mut Frame, doctor: &Result<String, String>, area: Rect) {
@@ -1239,6 +1235,10 @@ fn render_doctor(frame: &mut Frame, doctor: &Result<String, String>, area: Rect)
     );
 }
 
+/// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
+/// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
+/// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
+/// backs the CLI, so the two can't drift.
 fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
