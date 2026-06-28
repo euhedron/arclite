@@ -140,6 +140,8 @@ pub fn run_synthesis(
             exclude: &args.exclude,
             scan: !args.no_scan,
             findings: args.findings,
+            // verify auto-loads the open ledger framed for re-checking (no explicit --findings needed)
+            recheck_findings: command == crate::cli::NAME_VERIFY,
         },
     )?;
     let mut prompt = build_prompt(&ctx.text);

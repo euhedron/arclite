@@ -341,11 +341,16 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
     ))
 }
 
-/// Render the repo's open findings ledger (`.arc/findings/open/*.md`) as a context block, so a run can
-/// hunt *beyond* what's already recorded rather than re-surfacing it. Absent/empty ledger → no block
-/// (nothing known yet). A finding is Markdown like a rule, so the rule loader/renderer applies —
-/// guarded against an absent dir, which the loader would otherwise treat as an error.
-fn gather_findings(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
+/// Render the repo's open findings ledger (`.arc/findings/open/*.md`) as a context block. With
+/// `recheck` (the verify verb) the findings are presented for re-checking against the current code;
+/// otherwise a run is told to hunt *beyond* them rather than re-surface them. Absent/empty ledger → no
+/// block. A finding is Markdown like a rule, so the rule loader/renderer applies — each rendered under a
+/// `## <id>` heading, so a verdict can key back to it — guarded against an absent dir.
+fn gather_findings(
+    root: &Path,
+    sources: &mut Vec<String>,
+    recheck: bool,
+) -> anyhow::Result<String> {
     let dir = crate::findings_open_dir(root);
     if !crate::try_is_dir(&dir)
         .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
@@ -357,10 +362,12 @@ fn gather_findings(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Str
         return Ok(String::new());
     }
     sources.push(format!("findings ledger ({} open)", entries.len()));
-    Ok(format!(
-        "\nFindings already recorded in this repo's ledger (surface NEW issues beyond these; do not re-report them):\n{}\n",
-        crate::rules::render(&entries)
-    ))
+    let framing = if recheck {
+        "Open findings recorded in this repo's ledger, each under a `## <id>` heading — re-check each against the current code:"
+    } else {
+        "Findings already recorded in this repo's ledger (surface NEW issues beyond these; do not re-report them):"
+    };
+    Ok(format!("\n{framing}\n{}\n", crate::rules::render(&entries)))
 }
 
 /// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
@@ -512,6 +519,9 @@ pub struct ContextSpec<'a> {
     pub exclude: &'a [String],
     pub scan: bool,
     pub findings: bool,
+    /// Auto-load the open findings ledger framed for *re-checking* (the verify verb), distinct from
+    /// `findings`, which loads it framed for hunting *beyond* what's already known.
+    pub recheck_findings: bool,
 }
 
 /// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
@@ -527,6 +537,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         exclude,
         scan,
         findings,
+        recheck_findings,
     } = spec;
     // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
     // (scan=false) drops both — and the walk itself — so a diff-scoped run's cost tracks the diff, not a
@@ -619,8 +630,8 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         &mut sources,
     ));
     text.push_str(&gather_rules(rule_sources, &mut sources)?);
-    if findings {
-        text.push_str(&gather_findings(&root, &mut sources)?);
+    if findings || recheck_findings {
+        text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
     }
 
     let mut excluded = if includes.is_empty() {

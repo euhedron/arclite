@@ -203,15 +203,15 @@ const VERIFY_ITEM: &str = r#"{"type":"object","properties":{"id":{"type":"string
 fn verify_prompt(ctx: &str) -> String {
     format!(
         "You are re-checking previously-recorded findings against the current state of a code \
-         repository. Its open findings are provided in the context below as Markdown files from the \
-         repo's ledger — each finding file's frontmatter carries an `id`.\n\n\
+         repository. The repository's open findings ledger is included in the context below, each \
+         finding under a `## <id>` heading.\n\n\
          {ctx}\n\
-         For each finding present, judge against the current code whether it STILL reproduces, has \
-         been RESOLVED (the code no longer exhibits it), or is INDETERMINATE (the provided context \
+         For each finding, judge against the current code whether it STILL reproduces, has been \
+         RESOLVED (the code no longer exhibits it), or is INDETERMINATE (the provided context \
          doesn't contain what's needed to tell). Return one result per finding: its `id` (exactly as \
-         written in the file's frontmatter), the verdict (reproduces | resolved | indeterminate), \
-         and a one-clause reason grounded in the current code. Judge only what the context supports \
-         — prefer indeterminate over guessing. If no findings are present, report none and say so."
+         in its heading), the verdict (reproduces | resolved | indeterminate), and a one-clause \
+         reason grounded in the current code. Judge only what the context supports — prefer \
+         indeterminate over guessing. If no findings are present, report none and say so."
     )
 }
 
