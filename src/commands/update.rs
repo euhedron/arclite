@@ -276,14 +276,37 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(new, std::fs::Permissions::from_mode(0o755));
+        // The exec bit is essential — a non-executable arc is broken — so surface a failed chmod with
+        // context rather than swallow it, mirroring init.rs::make_executable.
+        std::fs::set_permissions(new, std::fs::Permissions::from_mode(0o755)).with_context(
+            || {
+                format!(
+                    "making the downloaded binary executable ({})",
+                    new.display()
+                )
+            },
+        )?;
         std::fs::rename(new, exe)
             .with_context(|| format!("installing the new binary at {}", exe.display()))
     }
     #[cfg(windows)]
     {
         let backup = sidecar(exe, ".old");
-        let _ = std::fs::remove_file(&backup); // clear any earlier leftover so the rename can land
+        // A Windows rename fails if the destination exists, so remove any leftover backup first —
+        // surfacing a real failure (e.g. a stale backup still locked by a running old process) rather
+        // than letting the later rename fail opaquely; an absent backup (the normal case) is fine.
+        match std::fs::remove_file(&backup) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "removing a stale backup before install ({})",
+                        backup.display()
+                    )
+                });
+            }
+        }
         std::fs::rename(exe, &backup)
             .with_context(|| format!("moving the running binary aside ({})", exe.display()))?;
         match std::fs::rename(new, exe) {
