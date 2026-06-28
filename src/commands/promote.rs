@@ -72,7 +72,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         let stem = slug(primary_text(finding));
         let path = if args.dry_run {
             // Indicative only — a real write bumps the name on a collision (see `write_entry`).
-            entry_path(&ledger, &stem)
+            crate::findings_entry_path(&ledger, &stem)
         } else {
             write_entry(&ledger, &stem, finding, &run_id, &command)
                 .with_context(|| format!("cannot write a finding into {}", ledger.display()))?
@@ -154,16 +154,9 @@ fn slug(text: &str) -> String {
     }
 }
 
-/// The ledger path for an entry id: `<dir>/<id>.md`. One definition so the dry-run preview and the real
-/// `write_entry` build the path the same way (preview-must-share-execution-path); the only thing a real
-/// write adds is the collision-bumped id, which it can't reserve ahead of a write.
-fn entry_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.md"))
-}
-
-/// Write one finding as a ledger entry under a collision-free name, claimed atomically: `create_new`
-/// fails if the name exists, so concurrent promotes bump a numeric suffix rather than clobber. The
-/// frontmatter `id` is set to the name actually claimed, so it always matches the file stem.
+/// Write one finding as a ledger entry, claimed atomically under a collision-free name via
+/// [`crate::claim_findings_entry`]; the frontmatter `id` is set to the name actually claimed, so it
+/// always matches the file stem.
 fn write_entry(
     dir: &Path,
     stem: &str,
@@ -171,28 +164,13 @@ fn write_entry(
     run_id: &str,
     command: &str,
 ) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(dir)?;
-    let mut n = 0u32;
-    loop {
-        let id = if n == 0 {
-            stem.to_owned()
-        } else {
-            format!("{stem}-{n}")
-        };
-        let path = entry_path(dir, &id);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                file.write_all(entry_md(finding, &id, run_id, command).as_bytes())?;
-                return Ok(path);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-            Err(e) => return Err(e),
-        }
-    }
+    let (path, mut file) = crate::claim_findings_entry(dir, stem)?;
+    let id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .expect("a claimed entry path is <id>.md, so its file stem is valid UTF-8");
+    file.write_all(entry_md(finding, id, run_id, command).as_bytes())?;
+    Ok(path)
 }
 
 /// One ledger entry in the seeded format: provenance frontmatter, the finding rendered losslessly as

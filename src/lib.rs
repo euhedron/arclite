@@ -38,6 +38,42 @@ pub(crate) fn findings_resolved_dir(repo_root: &std::path::Path) -> std::path::P
     repo_root.join(ARC_DIR).join("findings").join("resolved")
 }
 
+/// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
+/// the real write in both `promote` and `retire`, so the entry-name convention has a single home.
+pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
+    dir.join(format!("{id}.md"))
+}
+
+/// Claim a collision-free `<stem>[-n].md` under `dir`, returning the path and an open handle to write.
+/// `create_new` fails if the name exists, so a concurrent writer bumps a numeric suffix rather than
+/// clobbering — the concurrency-safe ledger-entry claim shared by `promote` (a new finding) and `retire`
+/// (a moved, resolved one), single-sourced so the naming convention can't drift between them. The caller
+/// writes its own body (the two differ in content), keeping only the name-claim here.
+pub(crate) fn claim_findings_entry(
+    dir: &std::path::Path,
+    stem: &str,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    std::fs::create_dir_all(dir)?;
+    let mut n = 0u32;
+    loop {
+        let name = if n == 0 {
+            stem.to_owned()
+        } else {
+            format!("{stem}-{n}")
+        };
+        let path = findings_entry_path(dir, &name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// `git config --get <key>` in `dir`: `Ok(Some(value))` if set, `Ok(None)` if unset (git exits 1 —
 /// benign), `Err` on a real config failure (exit >1, e.g. a corrupt or locked config) — never
 /// collapsing unset with failure. Single-sourced so `init` and `doctor` read git config the same way.

@@ -96,7 +96,8 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         }
         let reason = v.get("reason").and_then(Value::as_str).unwrap_or("");
         let dest = if args.dry_run {
-            entry_path(&resolved, id) // indicative; a real move bumps on collision (see `move_entry`)
+            // indicative; a real move bumps on collision (see `move_entry`)
+            crate::findings_entry_path(&resolved, id)
         } else {
             move_entry(&src, &resolved, id, reason, &run_id).with_context(|| {
                 format!("cannot retire finding `{id}` into {}", resolved.display())
@@ -164,18 +165,10 @@ fn is_safe_segment(id: &str) -> bool {
         && components.next().is_none()
 }
 
-/// The resolved-ledger path for an id: `<dir>/<id>.md`. One definition so the dry-run preview and the
-/// real `move_entry` build it the same way (preview-must-share-execution-path); a real move only adds a
-/// collision-bumped suffix, which it can't reserve ahead of the write.
-fn entry_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.md"))
-}
-
-/// Move one finding from the open ledger into the resolved dir under a collision-free name, marked
-/// resolved with the verify run's provenance. Write-new-then-remove-old: the resolved copy is claimed
-/// with `create_new` (a concurrent retire bumps a suffix rather than clobbering) and fully written
-/// before the open entry is removed, so a failure mid-move never loses the finding — at worst it lingers
-/// in both dirs, which a re-run reconciles.
+/// Move one finding from the open ledger into the resolved dir, marked resolved with the verify run's
+/// provenance. Write-new-then-remove-old: the resolved copy is claimed via [`crate::claim_findings_entry`]
+/// and fully written before the open entry is removed, so a failure mid-move never loses the finding — at
+/// worst it lingers in both dirs, which a re-run reconciles.
 fn move_entry(
     src: &Path,
     dir: &Path,
@@ -184,28 +177,8 @@ fn move_entry(
     run_id: &str,
 ) -> std::io::Result<PathBuf> {
     let resolved_body = mark_resolved(&std::fs::read_to_string(src)?, reason, run_id);
-    std::fs::create_dir_all(dir)?;
-    let mut n = 0u32;
-    let dest = loop {
-        let name = if n == 0 {
-            id.to_owned()
-        } else {
-            format!("{id}-{n}")
-        };
-        let path = entry_path(dir, &name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                file.write_all(resolved_body.as_bytes())?;
-                break path;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-            Err(e) => return Err(e),
-        }
-    };
+    let (dest, mut file) = crate::claim_findings_entry(dir, id)?;
+    file.write_all(resolved_body.as_bytes())?;
     // Reached only after the resolved copy is safely written, so the finding is never lost; a failed
     // remove leaves a reconcilable duplicate rather than a gap.
     std::fs::remove_file(src)?;
