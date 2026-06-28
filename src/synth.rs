@@ -472,8 +472,9 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
         .arg("-C")
         .arg(root)
         // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
-        // filename with non-ASCII bytes or spaces round-trips intact. Plain `--porcelain` quotes such
-        // paths (e.g. `"caf\303\251.rs"`), which a literal parse reads as an unfindable path and drops.
+        // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
+        // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
+        // (A path with invalid UTF-8 bytes is lossily decoded below — rare; the lossy name won't match.)
         .args(["status", "--porcelain", "-z"])
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
@@ -526,7 +527,7 @@ pub struct ContextSpec<'a> {
 
 /// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
 /// summary + the manifests an inspect walk detects; the README; any `--include`d files/dirs (and, with
-/// `changed`, git-changed files); rules; and, with `findings`, the open ledger — tracking each source (and what's excluded) for the run
+/// `changed`, git-changed files); rules; and the open ledger (with `findings`, framed to hunt past it; with `recheck_findings`, framed to re-check it) — tracking each source (and what's excluded) for the run
 /// report. `max` is the optional caller cap; by default files are read whole. The prompt differs per command.
 pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context> {
     let &ContextSpec {
