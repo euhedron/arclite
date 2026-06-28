@@ -87,13 +87,17 @@ fn apply(
     })?;
     let exe = std::env::current_exe().context("locating the running arc binary to replace")?;
     let download_path = sidecar(&exe, ".arc-update-new");
-    download(&download_api_url(&name), &auth, &download_path)?;
-    if let Err(e) = install(&exe, &download_path) {
-        // Don't leave the partial download behind; warn if it can't be removed (matching the
-        // codebase's cleanup-failure standard) rather than swallow it.
-        if let Err(rm) = std::fs::remove_file(&download_path) {
+    // Stage the download, then install it. On any failure — a partial download, or an install that
+    // rolled back its own rename — the staging file may remain, so remove it on the error path (warn
+    // if it can't be removed; an absent file is the normal, silent case) and propagate the error.
+    if let Err(e) = download(&download_api_url(&name), &auth, &download_path)
+        .and_then(|()| install(&exe, &download_path))
+    {
+        if let Err(rm) = std::fs::remove_file(&download_path)
+            && rm.kind() != std::io::ErrorKind::NotFound
+        {
             eprintln!(
-                "arclite: could not remove the partial download {} ({rm})",
+                "arclite: could not remove the staging file {} ({rm})",
                 download_path.display()
             );
         }
