@@ -32,6 +32,12 @@ pub(crate) fn findings_open_dir(repo_root: &std::path::Path) -> std::path::PathB
     repo_root.join(ARC_DIR).join("findings").join("open")
 }
 
+/// The repo's resolved findings dir (`.arc/findings/resolved`) — where `retire` moves a finding once a
+/// verify run judges it `resolved`: the open ledger's counterpart, the other end of the lifecycle.
+pub(crate) fn findings_resolved_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join("findings").join("resolved")
+}
+
 /// `git config --get <key>` in `dir`: `Ok(Some(value))` if set, `Ok(None)` if unset (git exits 1 —
 /// benign), `Err` on a real config failure (exit >1, e.g. a corrupt or locked config) — never
 /// collapsing unset with failure. Single-sourced so `init` and `doctor` read git config the same way.
@@ -171,6 +177,9 @@ pub fn run() -> ExitCode {
         Command::Usage(args) => commands::usage::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Promote(args) => {
             commands::promote::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
+        Command::Retire(args) => {
+            commands::retire::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
         // it (an explicit option silently dropped is worse than a silent default).

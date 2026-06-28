@@ -1,6 +1,6 @@
 ---
 id: fail-closed-multi-run-gates
-status: open
+status: resolved
 origin_kind: agent_session
 system_run_id:
 ---
@@ -26,3 +26,4 @@ A gate is an enforcement surface. Partial execution means incomplete enforcement
 Decide whether gated multi-run failures should exit as an arclite error or as a blocked gate. Then change `multi_synthesize` or the gate path so partial failure cannot silently pass, and add a deterministic test around the policy if the code shape allows it.
 
 ## Resolution
+Resolved per verify run `1782660389-32544-91696900`: src/synth.rs run() now sets `incomplete_gate = opts.gate.is_some() && runs < opts.runs` and ORs it into `gate_blocked`, so a gated fan-out that lost any run blocks even when survivors are clean.

@@ -1,6 +1,6 @@
 ---
 id: stronger-run-ids
-status: open
+status: resolved
 origin_kind: agent_session
 system_run_id:
 ---
@@ -26,3 +26,4 @@ The log is the trace substrate for assessing spend, quality, and follow-up. Resu
 Add subsecond time plus a local sequence or random component, then keep prefix lookup behavior intact. If changing historical ids is undesirable, only change newly created ids.
 
 ## Resolution
+Resolved per verify run `1782660389-32544-91696900`: src/synth.rs now forms the id as `{ts}-{pid}-{now_subsec_nanos()}`, adding the subsecond entropy the finding asked for while resolve_id keeps prefix lookup intact.

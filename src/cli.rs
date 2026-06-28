@@ -97,6 +97,9 @@ pub enum Command {
     /// Promote a logged run's findings into the repo's `.arc/findings/` ledger — the system writes the
     /// entries (atomically, collision-free), so findings are curated without hand-editing `.arc`.
     Promote(PromoteArgs),
+    /// Retire a verify run's `resolved` findings — the system moves them out of the open ledger into
+    /// `.arc/findings/resolved/`, the lifecycle's other end (agents invoke arc, never hand-edit `.arc`).
+    Retire(RetireArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
@@ -233,6 +236,16 @@ pub struct PromoteArgs {
     /// The run id — or a unique id prefix — whose findings to promote (as shown by `arc log`).
     pub run: String,
     /// Preview which findings would be promoted, and where, without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// Arguments for `arc retire`.
+#[derive(Debug, Args)]
+pub struct RetireArgs {
+    /// The verify run id — or a unique id prefix — whose `resolved` verdicts to act on (per `arc log`).
+    pub run: String,
+    /// Preview which findings would be retired, and where, without moving anything.
     #[arg(long)]
     pub dry_run: bool,
 }

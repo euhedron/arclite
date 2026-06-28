@@ -4,6 +4,7 @@ pub mod init;
 pub mod inspect;
 pub mod log;
 pub mod promote;
+pub mod retire;
 pub mod rules;
 pub mod status;
 pub mod tui;
