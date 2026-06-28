@@ -98,19 +98,16 @@ enum Route {
     Doctor,
 }
 
-/// A `/`-palette command: launch an AI run (a verb), open a view, or quit. Listed in *presentation*
-/// order (NOT alpha-sorted — the popup preserves it, per the codex `command_popup` convention); the
-/// launchable verbs lead, since firing a run is the cockpit's primary act. `ALL` is the single source.
+/// A `/`-palette command: launch an AI run (a verb, carrying its [`crate::commands::verbs`] registry
+/// entry), open a view, or quit. Listed in *presentation* order (NOT alpha-sorted — the popup preserves
+/// it, per the codex `command_popup` convention); the `run` sub-menu's verbs come from `verbs::ALL`, so
+/// the palette can't drift from the CLI's verb set.
 #[derive(Clone, Copy)]
 enum Command {
     Run,
-    Audit,
-    Critique,
-    Verify,
-    Suggest,
-    Summarize,
-    Extract,
-    Evolve,
+    /// A synthesis verb, carrying its entry from the [`crate::commands::verbs::ALL`] registry — the run
+    /// sub-menu is built from that registry, so the palette can't drift from the CLI's verb set.
+    Verb(&'static crate::commands::verbs::Verb),
     Status,
     Config,
     Log,
@@ -134,31 +131,14 @@ impl Command {
         Command::Quit,
     ];
 
-    /// The synthesis verbs shown inside the `run` sub-menu, in presentation order.
-    const VERBS: &'static [Command] = &[
-        Command::Audit,
-        Command::Critique,
-        Command::Verify,
-        Command::Suggest,
-        Command::Summarize,
-        Command::Extract,
-        Command::Evolve,
-    ];
-
     /// The typed name the palette prefix-matches; for a verb it's also the CLI subcommand spawned.
     fn name(self) -> &'static str {
         match self {
             // The run group's name is single-sourced with clap + the launcher via cli::NAME_RUN.
             Command::Run => crate::cli::NAME_RUN,
-            // Verb names are the CLI subcommand names — single-sourced via the cli.rs NAME_* consts
-            // (used by clap too), so a rename can't drift the spawn/palette from `--help`.
-            Command::Audit => crate::cli::NAME_AUDIT,
-            Command::Critique => crate::cli::NAME_CRITIQUE,
-            Command::Verify => crate::cli::NAME_VERIFY,
-            Command::Suggest => crate::cli::NAME_SUGGEST,
-            Command::Summarize => crate::cli::NAME_SUMMARIZE,
-            Command::Extract => crate::cli::NAME_EXTRACT,
-            Command::Evolve => crate::cli::NAME_EVOLVE,
+            // A verb's name comes from its registry entry (single-sourced via verbs/cli's NAME_*, used
+            // by clap too), so a rename can't drift the spawn/palette from `--help`.
+            Command::Verb(v) => v.name(),
             // Views and quit open an in-process view (not an `arc run` subprocess like the verbs),
             // and their names are defined here rather than reused from a cli NAME_* constant.
             Command::Status => "status",
@@ -175,15 +155,9 @@ impl Command {
     fn description(self) -> &'static str {
         match self {
             Command::Run => "choose a synthesis verb to run",
-            // The launchable verbs share their text with clap `--help` via the cli.rs `VERB_*`
-            // consts, so the palette and the CLI can't drift.
-            Command::Audit => crate::cli::VERB_AUDIT,
-            Command::Critique => crate::cli::VERB_CRITIQUE,
-            Command::Verify => crate::cli::VERB_VERIFY,
-            Command::Suggest => crate::cli::VERB_SUGGEST,
-            Command::Summarize => crate::cli::VERB_SUMMARIZE,
-            Command::Extract => crate::cli::VERB_EXTRACT,
-            Command::Evolve => crate::cli::VERB_EVOLVE,
+            // A verb's hint is its registry entry's `about` (the clap `VERB_*`), so the palette and
+            // CLI can't drift.
+            Command::Verb(v) => v.about(),
             // Views and quit open an in-process view (not a subprocess launch), so their hints live here.
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
@@ -225,11 +199,16 @@ enum PaletteLevel {
 }
 
 impl PaletteLevel {
-    /// The commands listed at this level, in presentation order.
-    fn commands(self) -> &'static [Command] {
+    /// The commands listed at this level, in presentation order. The `run` sub-menu is built from the
+    /// [`crate::commands::verbs::ALL`] registry, so it can't drift from the CLI's verb set; the top
+    /// level is the fixed set of views plus the `run` group.
+    fn commands(self) -> Vec<Command> {
         match self {
-            PaletteLevel::Top => Command::TOP,
-            PaletteLevel::Run => Command::VERBS,
+            PaletteLevel::Top => Command::TOP.to_vec(),
+            PaletteLevel::Run => crate::commands::verbs::ALL
+                .iter()
+                .map(|&v| Command::Verb(v))
+                .collect(),
         }
     }
 }

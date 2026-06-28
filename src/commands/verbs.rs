@@ -13,6 +13,9 @@ use crate::cli::{self, GlobalArgs, SynthArgs};
 /// the flow around it living in [`run_synthesis`].
 pub struct Verb {
     name: &'static str,
+    /// The one-line `--help` description, single-sourced from [`cli`]'s `VERB_*`, so the TUI palette
+    /// shows a verb's hint from the verb itself rather than a parallel lookup.
+    about: &'static str,
     structured: Option<Structured>,
     prompt: fn(&str) -> String,
 }
@@ -26,6 +29,16 @@ struct Structured {
 }
 
 impl Verb {
+    /// This verb's CLI subcommand name (the `arc run <name>` the TUI palette spawns).
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// This verb's one-line `--help` description, for the TUI palette hint.
+    pub fn about(&self) -> &'static str {
+        self.about
+    }
+
     /// Build this verb's [`Structure`] (if any) and hand it, with the verb's name and prompt, to the
     /// shared synthesis flow.
     pub fn run(&self, args: &SynthArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
@@ -51,6 +64,7 @@ fn summarize_prompt(ctx: &str) -> String {
 
 pub const SUMMARIZE: Verb = Verb {
     name: cli::NAME_SUMMARIZE,
+    about: cli::VERB_SUMMARIZE,
     structured: None,
     prompt: summarize_prompt,
 };
@@ -84,6 +98,7 @@ fn suggest_prompt(ctx: &str) -> String {
 
 pub const SUGGEST: Verb = Verb {
     name: cli::NAME_SUGGEST,
+    about: cli::VERB_SUGGEST,
     structured: Some(Structured {
         item: SUGGEST_ITEM,
         note: "one object per suggestion.",
@@ -118,6 +133,7 @@ fn extract_prompt(ctx: &str) -> String {
 
 pub const EXTRACT: Verb = Verb {
     name: cli::NAME_EXTRACT,
+    about: cli::VERB_EXTRACT,
     structured: Some(Structured {
         item: EXTRACT_ITEM,
         note: "one object per proposed rule.",
@@ -145,6 +161,7 @@ fn audit_prompt(ctx: &str) -> String {
 
 pub const AUDIT: Verb = Verb {
     name: cli::NAME_AUDIT,
+    about: cli::VERB_AUDIT,
     structured: Some(Structured {
         item: AUDIT_ITEM,
         note: "one object per violation.",
@@ -187,6 +204,7 @@ fn critique_prompt(ctx: &str) -> String {
 
 pub const CRITIQUE: Verb = Verb {
     name: cli::NAME_CRITIQUE,
+    about: cli::VERB_CRITIQUE,
     structured: Some(Structured {
         item: CRITIQUE_ITEM,
         note: "one object per defect.",
@@ -217,6 +235,7 @@ fn verify_prompt(ctx: &str) -> String {
 
 pub const VERIFY: Verb = Verb {
     name: cli::NAME_VERIFY,
+    about: cli::VERB_VERIFY,
     structured: Some(Structured {
         item: VERIFY_ITEM,
         note: "one object per finding re-checked.",
@@ -244,6 +263,7 @@ fn evolve_prompt(ctx: &str) -> String {
 
 pub const EVOLVE: Verb = Verb {
     name: cli::NAME_EVOLVE,
+    about: cli::VERB_EVOLVE,
     structured: Some(Structured {
         item: EVOLVE_ITEM,
         note: "one object per proposed change.",
@@ -251,3 +271,9 @@ pub const EVOLVE: Verb = Verb {
     }),
     prompt: evolve_prompt,
 };
+
+/// Every synthesis verb, in palette presentation order — the registry the TUI's `run` sub-menu derives
+/// from, so a new verb appears there automatically rather than needing a parallel hand-kept list.
+pub const ALL: &[&Verb] = &[
+    &AUDIT, &CRITIQUE, &VERIFY, &SUGGEST, &SUMMARIZE, &EXTRACT, &EVOLVE,
+];
