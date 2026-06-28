@@ -260,7 +260,10 @@ fn curl_program() -> PathBuf {
     #[cfg(windows)]
     if let Some(root) = std::env::var_os("SystemRoot") {
         let system_curl = Path::new(&root).join("System32").join("curl.exe");
-        if system_curl.exists() {
+        // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
+        // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
+        // can't-tell as present — keeping absent distinct from unreadable.
+        if system_curl.try_exists().unwrap_or(true) {
             return system_curl;
         }
     }
