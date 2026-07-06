@@ -1,17 +1,17 @@
 {
   "defaults": {
-    "max_budget_usd": 2.5,
+    "max_budget_usd": 10.0,
     "ruleset": "self"
   },
   "rulesets": {
-    "self": {
-      "sources": [
-        "rules"
-      ]
-    },
     "rule-quality": {
       "sources": [
         "meta-rules"
+      ]
+    },
+    "self": {
+      "sources": [
+        "rules"
       ]
     }
   }
