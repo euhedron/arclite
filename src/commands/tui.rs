@@ -185,7 +185,10 @@ impl Command {
             Command::Usage => app.open_usage(),
             Command::Doctor => app.open_doctor(),
             Command::Quit => app.should_quit = true,
-            verb => app.start_launch(verb),
+            // The only remaining variant is a launchable verb. Naming it explicitly (rather than a
+            // catch-all) means a Command variant added later can't silently fall through to a launch —
+            // it fails to compile here until handled.
+            Command::Verb(_) => app.start_launch(self),
         }
     }
 }
@@ -466,10 +469,16 @@ enum ConfigView {
     Error(String),
 }
 
-/// Visible run rows in the `log` list — the inline body (the viewport less the global footer) less the
-/// view's header and hint lines. One source for both the scroll math and the render window, so they
+/// Chrome lines the `log` list spends around its scrollable body: a title/header line and a hint line.
+/// Named so `render_log`'s `Layout` and [`LOG_ROWS`] derive the body height from the *same* constants
+/// and can't silently disagree if the view's chrome ever changes (the desync a bare literal invited).
+const LOG_HEADER_LINES: u16 = LINE;
+const LOG_HINT_LINES: u16 = LINE;
+
+/// Visible run rows in the `log` list — the inline viewport less the global footer, the header, and the
+/// hint. One source for both the scroll math (`select`, PageUp/Down) and the render window, so they
 /// can't disagree on how many rows are on screen.
-const LOG_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - LINE) as usize;
+const LOG_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LOG_HEADER_LINES - LOG_HINT_LINES) as usize;
 
 /// The `log` view's state: the completed-run records (newest first) or the error reading them, the
 /// cursor + scroll offset over the list, and — when drilled in — the selected run's rendered detail.
@@ -1312,9 +1321,9 @@ fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
 /// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     let [header, body, hint] = Layout::vertical([
-        Constraint::Length(LINE),
+        Constraint::Length(LOG_HEADER_LINES),
         Constraint::Min(0),
-        Constraint::Length(LINE),
+        Constraint::Length(LOG_HINT_LINES),
     ])
     .areas(area);
 

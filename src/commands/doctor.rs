@@ -198,7 +198,7 @@ fn gate_status() -> Gate {
     // `#[command(name)]`), so a rename can't stale this detection.
     let bin = crate::cli::binary_name();
     let pre_push = match crate::read_optional(&hooks_dir.join("pre-push")) {
-        Ok(Some(body)) if body.contains(&format!("{bin} ")) => HookStatus::InvokesArc,
+        Ok(Some(body)) if hook_invokes(&body, &bin) => HookStatus::InvokesArc,
         Ok(Some(_)) => HookStatus::NoArc,
         Ok(None) => HookStatus::Absent,
         Err(e) => HookStatus::Unreadable(e.to_string()),
@@ -209,6 +209,21 @@ fn gate_status() -> Gate {
         pre_push: Some(pre_push),
         error: None,
     }
+}
+
+/// Whether a hook script actually *invokes* the `bin` command, rather than merely containing its name
+/// as a substring: `bin` must sit at a word boundary (start, or after a non-identifier char) and be
+/// followed by whitespace, so a longer token that ends in the name (`search`, `myarc`) or begins with it
+/// (`archive`) isn't a false positive that reports the gate as wired when it isn't.
+fn hook_invokes(body: &str, bin: &str) -> bool {
+    body.match_indices(bin).any(|(i, _)| {
+        let boundary_before = body[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-');
+        let whitespace_after = body[i + bin.len()..].starts_with(char::is_whitespace);
+        boundary_before && whitespace_after
+    })
 }
 
 /// Width of `doctor`'s human-output label column, so the value column aligns — named (like tui's
