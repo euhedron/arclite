@@ -4,6 +4,7 @@ version = "0.1.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Agent-first, cross-platform CLI for cross-repo code intelligence and auditing — a successor to arc."
+license = "MIT"
 publish = false
 
 [[bin]]
