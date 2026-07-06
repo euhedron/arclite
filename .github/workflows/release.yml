@@ -1,0 +1,60 @@
+name: Release
+
+# On a version tag (`git tag v0.1.4 && git push --tags`), build the per-OS binaries natively — one
+# runner per platform, no cross-compile — and publish them as assets on a GitHub Release. The asset
+# names match what `arc update --apply` fetches: `arc-v<version>-<os>-<arch>[.exe]`, where <os>/<arch>
+# are Rust's `std::env::consts::{OS,ARCH}` (see src/commands/update.rs::binary_name).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # Create the Release once, before the matrix uploads race to attach assets to it.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          --repo "${{ github.repository }}"
+          --title "${{ github.ref_name }}"
+          --notes "arc ${{ github.ref_name }}"
+          --verify-tag || true
+
+  upload:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: arc
+            asset: arc-${{ github.ref_name }}-linux-x86_64
+          - os: macos-13
+            bin: arc
+            asset: arc-${{ github.ref_name }}-macos-x86_64
+          - os: macos-latest
+            bin: arc
+            asset: arc-${{ github.ref_name }}-macos-aarch64
+          - os: windows-latest
+            bin: arc.exe
+            asset: arc-${{ github.ref_name }}-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --locked
+      - name: Stage the asset under its release name
+        shell: bash
+        run: cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+      - name: Upload the asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}"
+          --repo "${{ github.repository }}" --clobber

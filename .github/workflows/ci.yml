@@ -1,0 +1,24 @@
+name: CI
+
+# Build, test, and lint arclite on every push to main and every PR. Mirrors the checks the pre-push
+# hook runs locally (cargo fmt / clippy / test), so a green push stays green in CI.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add clippy + rustfmt
+        run: rustup component add clippy rustfmt
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo fmt --check

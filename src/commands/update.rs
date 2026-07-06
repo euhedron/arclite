@@ -7,21 +7,21 @@ use anyhow::Context;
 use crate::cli::{GlobalArgs, UpdateArgs};
 use crate::output::emit;
 
-/// arc's own GitHub workspace + repo — the single base for every release URL: the git remote
-/// (releases are `v*` tags this check reads via `git ls-remote`), the human Downloads page, and the
-/// Downloads REST endpoint (`--apply` pulls the per-OS binary). One home so the three can't drift.
-const WORKSPACE: &str = "nikganderson";
+/// arc's own GitHub owner + repo — the single base for every release URL: the git remote (releases are
+/// `v*` tags this check reads via `git ls-remote`), the human Releases page, and the release-asset URL
+/// (`--apply` pulls the per-OS binary). One home so the three can't drift.
+const OWNER: &str = "nikganderson";
 const REPO: &str = "arclite";
 
-/// The GitHub web/git host and the API host — single-sourced alongside WORKSPACE/REPO so the
-/// release-URL builders below can't drift on scheme or host.
+/// The GitHub web/git host — single-sourced alongside OWNER/REPO so the release-URL builders below
+/// can't drift on scheme or host.
 const HOST: &str = "https://github.com";
-const API_HOST: &str = "https://api.github.com";
 
-/// Env var holding the GitHub credential `--apply` uses to fetch the binary: a `user:token` Basic
-/// pair (e.g. `you@example.com:<api-token>`). Read from the environment so no secret lands in a file
-/// arc tracks; the version check needs none (it rides the user's existing git credential).
-const AUTH_ENV: &str = "ARC_GITHUB_AUTH";
+/// Env var holding an optional GitHub token `--apply` uses to fetch the binary. A public release needs
+/// none; a private repo's assets need a token (a fine-grained `contents:read`, or a classic PAT). Read
+/// from the environment so no secret lands in a file arc tracks; the version check needs none either
+/// (it rides the user's existing git credential).
+const AUTH_ENV: &str = "ARC_GITHUB_TOKEN";
 
 /// A released version as a comparable `[major, minor, patch]` triple (arc tags are plain `vX.Y.Z`).
 type Version = [u64; 3];
@@ -43,7 +43,7 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             "arc {} is out of date — {} is the latest release.\nInstall it with `arc update --apply`, or download manually from {}",
             version_string(current),
             version_string(latest),
-            downloads_page(),
+            releases_page(),
         )
     } else {
         format!(
@@ -84,19 +84,20 @@ fn apply(
     // --force with no newer release reinstalls the current version; otherwise install the latest.
     let target = if available { latest } else { current };
     let name = binary_name(target);
-    let auth = std::env::var(AUTH_ENV).map_err(|_| {
-        anyhow::anyhow!(
-            "set {AUTH_ENV} to a GitHub credential (user:token, e.g. you@example.com:<api-token>) to install updates, or download {name} manually from {}",
-            downloads_page()
-        )
-    })?;
+    // A public release needs no credential; a private repo's assets need a token. Optional — sent to
+    // curl only when set, so the common public case is frictionless.
+    let auth = std::env::var(AUTH_ENV).ok();
     let exe = std::env::current_exe().context("locating the running arc binary to replace")?;
     let download_path = sidecar(&exe, ".arc-update-new");
     // Stage the download, then install it. On any failure — a partial download, or an install that
     // rolled back its own rename — the staging file may remain, so remove it on the error path (warn
     // if it can't be removed; an absent file is the normal, silent case) and propagate the error.
-    if let Err(e) = download(&download_api_url(&name), &auth, &download_path)
-        .and_then(|()| install(&exe, &download_path))
+    if let Err(e) = download(
+        &download_url(&name, target),
+        auth.as_deref(),
+        &download_path,
+    )
+    .and_then(|()| install(&exe, &download_path))
     {
         if let Err(rm) = std::fs::remove_file(&download_path)
             && rm.kind() != std::io::ErrorKind::NotFound
@@ -136,7 +137,7 @@ fn current_version() -> Version {
 /// `^{}` dereference lines annotated tags emit) are skipped. Errors only if git can't be consulted, so
 /// a network or auth failure surfaces rather than masquerading as "up to date".
 fn latest_version() -> anyhow::Result<Version> {
-    let remote = format!("{HOST}/{WORKSPACE}/{REPO}.git");
+    let remote = format!("{HOST}/{OWNER}/{REPO}.git");
     let output = crate::ai::command("git")?
         .args(["ls-remote", "--tags"])
         .arg(&remote)
@@ -186,20 +187,23 @@ pub(crate) fn newer_release() -> Option<String> {
 
 // ---- release URLs / artifact name ----
 
-/// The human-facing Downloads page (shown when pointing a user at a manual download).
-fn downloads_page() -> String {
-    format!("{HOST}/{WORKSPACE}/{REPO}/downloads")
+/// The human-facing Releases page (shown when pointing a user at a manual download).
+fn releases_page() -> String {
+    format!("{HOST}/{OWNER}/{REPO}/releases")
 }
 
-/// The Downloads REST endpoint for one artifact — it accepts the API token and 302-redirects to the
-/// signed storage URL (the download host), where the auth header must not follow.
-fn download_api_url(name: &str) -> String {
-    format!("{API_HOST}/2.0/repositories/{WORKSPACE}/{REPO}/downloads/{name}")
+/// The release-asset URL for one artifact under its `v<version>` tag. GitHub 302-redirects to the
+/// signed storage host, where the auth header (private repos) must not follow.
+fn download_url(name: &str, v: Version) -> String {
+    format!(
+        "{HOST}/{OWNER}/{REPO}/releases/download/v{}/{name}",
+        version_string(v)
+    )
 }
 
 /// The release artifact name for the running platform — `arc-v<version>-<os>-<arch><exe-suffix>`. Must
-/// match the names the release pipeline uploads (`github-pipelines.yml`); a mismatch surfaces as a
-/// download 404 (a clear failure), never a silently wrong file.
+/// match the asset names the release workflow uploads (`.github/workflows/release.yml`); a mismatch
+/// surfaces as a download 404 (a clear failure), never a silently wrong file.
 fn binary_name(v: Version) -> String {
     format!(
         "arc-v{}-{}-{}{}",
@@ -212,40 +216,42 @@ fn binary_name(v: Version) -> String {
 
 // ---- download + install ----
 
-/// Download `url` to `dest` with `curl`, authenticating with the `user:token` `auth` pair. The
-/// credential is fed to curl as a config directive over **stdin** (`--config -`) — never argv (a
-/// process listing would expose it) and never a temp file (whose permissions vary by platform); curl
-/// drops the auth header on the cross-host redirect GitHub issues to signed storage. On Windows the
-/// system `curl.exe` is used (Schannel → system/corp cert store) with revocation checks disabled, since
-/// corp networks commonly block the revocation endpoints.
-fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
-    // The credential becomes a curl config line; a quote, backslash (curl's escape char), or newline
-    // would break the quoting or inject further directives, so require a clean `user:token` line.
-    anyhow::ensure!(
-        !auth.contains(['"', '\\', '\n', '\r']),
-        "{AUTH_ENV} must be a single `user:token` line with no quotes, backslashes, or newlines"
-    );
+/// Download `url` to `dest` with `curl`. Public release assets need no auth; for a private repo a
+/// token (`AUTH_ENV`) is sent as an `Authorization` header via curl's stdin config (`--config -`) —
+/// never argv (a process listing would expose it) and never a temp file. curl drops that header on the
+/// cross-host redirect GitHub issues to signed storage, which carries its own auth.
+fn download(url: &str, auth: Option<&str>, dest: &Path) -> anyhow::Result<()> {
+    // A token becomes a curl config line; a quote, backslash (curl's escape char), or newline would
+    // break the quoting or inject further directives, so require a clean single-line token.
+    if let Some(token) = auth {
+        anyhow::ensure!(
+            !token.contains(['"', '\\', '\n', '\r']),
+            "{AUTH_ENV} must be a single-line token with no quotes, backslashes, or newlines"
+        );
+    }
     let mut cmd = Command::new(curl_program());
     cmd.args(["--location", "--fail", "--silent", "--show-error"])
-        .args(["--config", "-"]) // read the credential config from stdin — not argv, not a file
         .arg("--output")
         .arg(dest)
-        .arg(url)
-        .stdin(std::process::Stdio::piped());
-    if cfg!(windows) {
-        cmd.arg("--ssl-no-revoke");
+        .arg(url);
+    if auth.is_some() {
+        // Read the Authorization header from a config directive on stdin — not argv, not a file.
+        cmd.args(["--config", "-"])
+            .stdin(std::process::Stdio::piped());
     }
     let mut child = cmd
         .spawn()
         .context("running curl to download the update (is curl installed?)")?;
-    // Hand curl the credential, then close stdin so it proceeds. The config is one short line consumed
-    // before the download, so this can't deadlock against the output (which goes to `dest`, not a pipe).
-    child
-        .stdin
-        .take()
-        .expect("curl stdin was piped")
-        .write_all(format!("user = \"{auth}\"\n").as_bytes())
-        .context("passing the credential to curl")?;
+    if let Some(token) = auth {
+        // Hand curl the header, then close stdin so it proceeds. One short line consumed before the
+        // download, so this can't deadlock against the output (which goes to `dest`, not a pipe).
+        child
+            .stdin
+            .take()
+            .expect("curl stdin was piped")
+            .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
+            .context("passing the credential to curl")?;
+    }
     let status = child.wait().context("waiting for curl")?;
     anyhow::ensure!(
         status.success(),
@@ -253,7 +259,7 @@ fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
         status
             .code()
             .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
-        downloads_page(),
+        releases_page(),
     );
     let len = std::fs::metadata(dest)
         .context("the downloaded update could not be read")?
@@ -263,8 +269,8 @@ fn download(url: &str, auth: &str, dest: &Path) -> anyhow::Result<()> {
 }
 
 /// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
-/// the system/corp cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl`
-/// on `PATH`.
+/// the system cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl` on
+/// `PATH`.
 fn curl_program() -> PathBuf {
     #[cfg(windows)]
     if let Some(root) = std::env::var_os("SystemRoot") {
