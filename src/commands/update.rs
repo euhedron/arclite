@@ -1,8 +1,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::Context;
+use serde::Deserialize;
 
 use crate::cli::{GlobalArgs, UpdateArgs};
 use crate::output::emit;
@@ -13,9 +14,14 @@ use crate::output::emit;
 const OWNER: &str = "nikganderson";
 const REPO: &str = "arclite";
 
-/// The GitHub web/git host — single-sourced alongside OWNER/REPO so the release-URL builders below
-/// can't drift on scheme or host.
+/// The GitHub web/git host and the REST API host — single-sourced alongside OWNER/REPO so the URL
+/// builders below can't drift on scheme or host. The web host serves the human Releases page and the
+/// git remote (the version check); the API host serves the asset lookup + download `--apply` uses.
 const HOST: &str = "https://github.com";
+const API_HOST: &str = "https://api.github.com";
+
+/// The `User-Agent` sent on GitHub API requests — the API rejects requests that omit one.
+const USER_AGENT: &str = "arclite";
 
 /// Env var holding an optional GitHub token `--apply` uses to fetch the binary. A public release needs
 /// none; a private repo's assets need a token (a fine-grained `contents:read`, or a classic PAT). Read
@@ -84,16 +90,20 @@ fn apply(
     // --force with no newer release reinstalls the current version; otherwise install the latest.
     let target = if available { latest } else { current };
     let name = binary_name(target);
-    // A public release needs no credential; a private repo's assets need a token. Optional — sent to
-    // curl only when set, so the common public case is frictionless.
+    // A public release needs no credential; a private repo needs a token for both the asset lookup and
+    // the download. Optional — sent to curl only when set, so the public case stays frictionless.
     let auth = std::env::var(AUTH_ENV).ok();
     let exe = std::env::current_exe().context("locating the running arc binary to replace")?;
     let download_path = sidecar(&exe, ".arc-update-new");
+    // Resolve this platform's asset id from the releases API, then download it by id — the documented
+    // way to fetch an asset's bytes (there is no download-by-name endpoint), working for public and
+    // private repos alike. The lookup precedes any staging, so a failure here leaves nothing to clean up.
+    let asset_id = release_asset_id(target, &name, auth.as_deref())?;
     // Stage the download, then install it. On any failure — a partial download, or an install that
     // rolled back its own rename — the staging file may remain, so remove it on the error path (warn
     // if it can't be removed; an absent file is the normal, silent case) and propagate the error.
     if let Err(e) = download(
-        &download_url(&name, target),
+        &asset_download_url(asset_id),
         auth.as_deref(),
         &download_path,
     )
@@ -192,13 +202,58 @@ fn releases_page() -> String {
     format!("{HOST}/{OWNER}/{REPO}/releases")
 }
 
-/// The release-asset URL for one artifact under its `v<version>` tag. GitHub 302-redirects to the
-/// signed storage host, where the auth header (private repos) must not follow.
-fn download_url(name: &str, v: Version) -> String {
-    format!(
-        "{HOST}/{OWNER}/{REPO}/releases/download/v{}/{name}",
-        version_string(v)
-    )
+/// The REST API URL for a release asset's *bytes*: a `GET` with `Accept: application/octet-stream`
+/// 302-redirects to signed storage (curl drops the auth header on that cross-host hop, which carries
+/// its own auth). The numeric `asset_id` comes from [`release_asset_id`] — the API has no
+/// download-by-name endpoint, so the id must be resolved first.
+fn asset_download_url(asset_id: u64) -> String {
+    format!("{API_HOST}/repos/{OWNER}/{REPO}/releases/assets/{asset_id}")
+}
+
+/// Resolve this platform's binary (`name`) to its numeric asset id in the `v<version>` release, via the
+/// releases API (`GET /releases/tags/{tag}` → its `assets` array). A private repo needs a token for this
+/// call too; a public one needs none. The two failure modes read distinctly — couldn't reach/authorize
+/// the release (network/auth, hinting at the token when none was given) vs. the release carries no asset
+/// for this platform — so a not-yet-published build isn't a mystery.
+fn release_asset_id(target: Version, name: &str, auth: Option<&str>) -> anyhow::Result<u64> {
+    #[derive(Deserialize)]
+    struct Asset {
+        id: u64,
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Release {
+        assets: Vec<Asset>,
+    }
+    let url = format!(
+        "{API_HOST}/repos/{OWNER}/{REPO}/releases/tags/v{}",
+        version_string(target)
+    );
+    let body = curl_get(&url, auth, "application/vnd.github+json", None).with_context(|| {
+        let hint = if auth.is_none() {
+            format!(" (a private repo needs {AUTH_ENV} set)")
+        } else {
+            String::new()
+        };
+        format!(
+            "looking up the v{} release on GitHub{hint}",
+            version_string(target)
+        )
+    })?;
+    let release: Release =
+        serde_json::from_str(&body).context("parsing the GitHub release metadata")?;
+    release
+        .assets
+        .into_iter()
+        .find(|a| a.name == name)
+        .map(|a| a.id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "the v{} release has no {name} asset — this platform's binary may not be published yet; download manually from {}",
+                version_string(target),
+                releases_page(),
+            )
+        })
 }
 
 /// The release artifact name for the running platform — `arc-v<version>-<os>-<arch><exe-suffix>`. Must
@@ -216,14 +271,37 @@ fn binary_name(v: Version) -> String {
 
 // ---- download + install ----
 
-/// Download `url` to `dest` with `curl`. Public release assets need no auth; for a private repo a
-/// token (`AUTH_ENV`) is sent as an `Authorization` header via curl's stdin config (`--config -`) —
-/// never argv (a process listing would expose it) and never a temp file. curl drops that header on the
-/// cross-host redirect GitHub issues to signed storage, which carries its own auth.
+/// Download the release asset at `url` to `dest`. Thin wrapper over [`curl_get`] with the
+/// `application/octet-stream` Accept that makes the API return the binary bytes, plus a non-empty check.
 fn download(url: &str, auth: Option<&str>, dest: &Path) -> anyhow::Result<()> {
-    // A token becomes a curl config line; a quote, backslash (curl's escape char), or newline would
-    // break the quoting or inject further directives, so require a clean single-line token.
+    curl_get(url, auth, "application/octet-stream", Some(dest)).with_context(|| {
+        format!(
+            "downloading the update (if this platform's release isn't published, download it manually from {})",
+            releases_page()
+        )
+    })?;
+    let len = std::fs::metadata(dest)
+        .context("the downloaded update could not be read")?
+        .len();
+    anyhow::ensure!(len > 0, "the downloaded update was empty");
+    Ok(())
+}
+
+/// `GET url` with `curl`, returning the response body. `auth` (if set) rides an `Authorization` header
+/// via a stdin config directive (`--config -`) — never argv (a process listing would expose it) and
+/// never a temp file. `accept` sets the Accept header; a `User-Agent` is always sent (the GitHub API
+/// rejects requests without one). With `dest`, the body is written there (a binary) and the returned
+/// string is empty; without, the body is captured and returned (JSON metadata). curl follows redirects
+/// and drops the auth header on the cross-host hop to signed storage, which carries its own auth.
+fn curl_get(
+    url: &str,
+    auth: Option<&str>,
+    accept: &str,
+    dest: Option<&Path>,
+) -> anyhow::Result<String> {
     if let Some(token) = auth {
+        // A token becomes a curl config line; a quote, backslash (curl's escape char), or newline would
+        // break the quoting or inject further directives, so require a clean single-line token.
         anyhow::ensure!(
             !token.contains(['"', '\\', '\n', '\r']),
             "{AUTH_ENV} must be a single-line token with no quotes, backslashes, or newlines"
@@ -231,20 +309,22 @@ fn download(url: &str, auth: Option<&str>, dest: &Path) -> anyhow::Result<()> {
     }
     let mut cmd = Command::new(curl_program());
     cmd.args(["--location", "--fail", "--silent", "--show-error"])
-        .arg("--output")
-        .arg(dest)
-        .arg(url);
+        .args(["--user-agent", USER_AGENT])
+        .arg("--header")
+        .arg(format!("Accept: {accept}"))
+        .arg(url)
+        .stdout(Stdio::piped());
+    if let Some(dest) = dest {
+        cmd.arg("--output").arg(dest);
+    }
     if auth.is_some() {
         // Read the Authorization header from a config directive on stdin — not argv, not a file.
-        cmd.args(["--config", "-"])
-            .stdin(std::process::Stdio::piped());
+        cmd.args(["--config", "-"]).stdin(Stdio::piped());
     }
-    let mut child = cmd
-        .spawn()
-        .context("running curl to download the update (is curl installed?)")?;
+    let mut child = cmd.spawn().context("running curl (is curl installed?)")?;
     if let Some(token) = auth {
-        // Hand curl the header, then close stdin so it proceeds. One short line consumed before the
-        // download, so this can't deadlock against the output (which goes to `dest`, not a pipe).
+        // Hand curl the header, then close stdin (dropping the handle) so it proceeds. One short line,
+        // consumed before any response body, so it can't deadlock against the captured stdout.
         child
             .stdin
             .take()
@@ -252,20 +332,16 @@ fn download(url: &str, auth: Option<&str>, dest: &Path) -> anyhow::Result<()> {
             .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
             .context("passing the credential to curl")?;
     }
-    let status = child.wait().context("waiting for curl")?;
+    let output = child.wait_with_output().context("waiting for curl")?;
     anyhow::ensure!(
-        status.success(),
-        "curl could not download {url} (exit {}) — if this platform's release isn't published yet, download it manually from {}",
-        status
+        output.status.success(),
+        "curl could not GET {url} (exit {})",
+        output
+            .status
             .code()
             .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
-        releases_page(),
     );
-    let len = std::fs::metadata(dest)
-        .context("the downloaded update could not be read")?
-        .len();
-    anyhow::ensure!(len > 0, "the downloaded update was empty");
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
