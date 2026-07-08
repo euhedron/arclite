@@ -1,6 +1,6 @@
 [package]
 name = "arclite"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Agent-first, cross-platform CLI for cross-repo code intelligence and auditing — a successor to arc."
