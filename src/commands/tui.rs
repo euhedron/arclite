@@ -93,6 +93,7 @@ enum Route {
     Home,
     Status,
     Config,
+    Rules,
     Log,
     Usage,
     Doctor,
@@ -110,6 +111,7 @@ enum Command {
     Verb(&'static crate::commands::verbs::Verb),
     Status,
     Config,
+    Rules,
     Log,
     Usage,
     Doctor,
@@ -124,6 +126,7 @@ impl Command {
         Command::Run,
         Command::Status,
         Command::Config,
+        Command::Rules,
         Command::Log,
         Command::Usage,
         Command::Doctor,
@@ -143,6 +146,7 @@ impl Command {
             // and their names are defined here rather than reused from a cli NAME_* constant.
             Command::Status => "status",
             Command::Config => "config",
+            Command::Rules => "rules",
             Command::Log => "log",
             Command::Usage => "usage",
             Command::Doctor => "doctor",
@@ -161,6 +165,7 @@ impl Command {
             // Views and quit open an in-process view (not a subprocess launch), so their hints live here.
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
+            Command::Rules => "the ruleset in play: sources and rule provenance",
             Command::Log => "browse completed runs and their results",
             Command::Usage => "spend + token rollup from the run log",
             Command::Doctor => "runtime, environment & tooling check",
@@ -181,6 +186,7 @@ impl Command {
             Command::Home => app.route = Route::Home,
             Command::Status => app.route = Route::Status,
             Command::Config => app.open_config(),
+            Command::Rules => app.open_rules(),
             Command::Log => app.open_log(),
             Command::Usage => app.open_usage(),
             Command::Doctor => app.open_doctor(),
@@ -292,6 +298,11 @@ struct App {
     /// The doctor view's report as rendered text, loaded when the view is opened; `None` until then.
     /// `Err` if the environment probe failed (e.g. an unreadable cwd), shown in the view.
     doctor: Option<Result<String, String>>,
+    /// The rules view's report — the same text `arc rules` prints — loaded when the view is opened;
+    /// `None` until then. `Err` if rule resolution failed (e.g. unreadable settings), shown in the view.
+    rules: Option<Result<String, String>>,
+    /// Scroll offset over the rules report, reset on entry — the rule list can outrun the viewport.
+    rules_scroll: u16,
 }
 
 impl App {
@@ -319,6 +330,8 @@ impl App {
             cwd_display,
             update: None,
             doctor: None,
+            rules: None,
+            rules_scroll: 0,
         }
     }
 
@@ -435,6 +448,19 @@ impl App {
         self.doctor = Some(
             crate::commands::doctor::gather()
                 .map(|r| crate::commands::doctor::human(&r))
+                .map_err(|e| format!("{e:#}")),
+        );
+    }
+
+    /// Open the rules view, resolving the active ruleset fresh (re-run on each entry, like the other
+    /// views); the scroll resets to the top. The same `rules::report` backs `arc rules`, so the two
+    /// can't drift.
+    fn open_rules(&mut self) {
+        self.route = Route::Rules;
+        self.rules_scroll = 0;
+        self.rules = Some(
+            crate::commands::rules::report(Path::new("."), None, None)
+                .map(|(_, human)| human)
                 .map_err(|e| format!("{e:#}")),
         );
     }
@@ -828,8 +854,10 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        // The log view is the first section to own a cursor, so it alone gets per-key navigation here.
+        // Sections that own navigation state get their per-key handling here: the log's cursor and
+        // detail scroll, and the rules report's scroll.
         _ if app.route == Route::Log => handle_log_key(app, key.code),
+        _ if app.route == Route::Rules => handle_rules_key(app, key.code),
         _ => {}
     }
 }
@@ -962,12 +990,23 @@ fn render(frame: &mut Frame, app: &App) {
                 .expect("the usage view is loaded when its route is active"),
             body,
         ),
-        Route::Doctor => render_doctor(
+        Route::Doctor => render_text_report(
             frame,
+            body,
+            "doctor",
             app.doctor
                 .as_ref()
                 .expect("the doctor view is loaded when its route is active"),
+            0, // the doctor report fits the viewport; no scroll state
+        ),
+        Route::Rules => render_text_report(
+            frame,
             body,
+            "rules",
+            app.rules
+                .as_ref()
+                .expect("the rules view is loaded when its route is active"),
+            app.rules_scroll,
         ),
     }
     render_footer(frame, footer, app);
@@ -1215,22 +1254,52 @@ const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
     Constraint::Min(8),
 ];
 
-/// The doctor view: the environment/tooling report `arc doctor` prints, as aligned text — or the probe
-/// error. Loaded on entry by [`App::open_doctor`].
-fn render_doctor(frame: &mut Frame, doctor: &Result<String, String>, area: Rect) {
+/// Shared body for the text-report views — doctor (the environment/tooling report) and rules (the
+/// resolved ruleset): a bold title over the report — or its error, prefixed "<title> unreadable" — in
+/// a bordered, wrapped paragraph, scrolled by `scroll`. One renderer so the sibling views can't drift.
+fn render_text_report(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    report: &Result<String, String>,
+    scroll: u16,
+) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
-    frame.render_widget(Line::from("doctor").bold(), header);
-    let text = match doctor {
+    frame.render_widget(Line::from(title).bold(), header);
+    let text = match report {
         Ok(report) => report.clone(),
-        Err(e) => format!("doctor unreadable: {e}"),
+        Err(e) => format!("{title} unreadable: {e}"),
     };
     frame.render_widget(
         Paragraph::new(text)
             .block(Block::bordered())
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
         body,
     );
+}
+
+/// Rows of the rules report visible at once — the inline viewport less the footer, the view header,
+/// and the bordered body's frame — the PageUp/PageDown step for the rules view's scroll.
+const RULES_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - BORDER) as usize;
+
+/// Keys while the `rules` view is on screen: scroll the report — the rule list can outrun the inline
+/// viewport, unlike its fixed-height report sibling (doctor). Esc is handled one level up.
+fn handle_rules_key(app: &mut App, code: KeyCode) {
+    let delta = match code {
+        KeyCode::Up => -1,
+        KeyCode::Down => 1,
+        KeyCode::PageUp => -(RULES_ROWS as i32),
+        KeyCode::PageDown => RULES_ROWS as i32,
+        KeyCode::Home => i32::MIN,
+        _ => return,
+    };
+    // Clamp at the top only, mirroring the log detail's scroll: the body wraps, so the rendered height
+    // isn't known here — over-scrolling the bottom into blank beats hiding wrapped tail lines.
+    app.rules_scroll = i32::from(app.rules_scroll)
+        .saturating_add(delta)
+        .clamp(0, i32::from(u16::MAX)) as u16;
 }
 
 /// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
@@ -1405,6 +1474,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
+            Route::Rules => "/ commands · ↑↓ scroll · esc back · q quit",
             Route::Status | Route::Config | Route::Log | Route::Usage | Route::Doctor => {
                 "/ commands · esc back · q quit"
             }
@@ -1547,6 +1617,8 @@ mod tests {
             cwd_display: ".".to_owned(),
             update: None,
             doctor: None,
+            rules: None,
+            rules_scroll: 0,
         }
     }
 
