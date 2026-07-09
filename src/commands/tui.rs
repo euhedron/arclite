@@ -301,8 +301,9 @@ struct App {
     /// The rules view's report — the same text `arc rules` prints — loaded when the view is opened;
     /// `None` until then. `Err` if rule resolution failed (e.g. unreadable settings), shown in the view.
     rules: Option<Result<String, String>>,
-    /// Scroll offset over the rules report, reset on entry — the rule list can outrun the viewport.
-    rules_scroll: u16,
+    /// Scroll offset over the active text-report view (doctor or rules — only one shows at a time),
+    /// reset on entry — either report can outrun the inline viewport.
+    report_scroll: u16,
 }
 
 impl App {
@@ -331,7 +332,7 @@ impl App {
             update: None,
             doctor: None,
             rules: None,
-            rules_scroll: 0,
+            report_scroll: 0,
         }
     }
 
@@ -445,6 +446,7 @@ impl App {
     /// views). The same `doctor::gather`/`human` back `arc doctor`, so the two can't drift.
     fn open_doctor(&mut self) {
         self.route = Route::Doctor;
+        self.report_scroll = 0;
         self.doctor = Some(
             crate::commands::doctor::gather()
                 .map(|r| crate::commands::doctor::human(&r))
@@ -457,9 +459,9 @@ impl App {
     /// can't drift.
     fn open_rules(&mut self) {
         self.route = Route::Rules;
-        self.rules_scroll = 0;
+        self.report_scroll = 0;
         self.rules = Some(
-            crate::commands::rules::report(Path::new("."), None, None)
+            crate::commands::rules::report(Path::new(&self.cwd), None, None)
                 .map(|(_, human)| human)
                 .map_err(|e| format!("{e:#}")),
         );
@@ -590,25 +592,26 @@ fn launch_command(verb: &str) -> std::io::Result<std::process::Command> {
 }
 
 /// Run a verb's dry-run as a subprocess of this same `arc` binary and return its **preview** — the
-/// header (params + estimate) arc prints before the appended prompt — for the gate, or an error
-/// string. Zero spend (`--dry-run`); the cockpit shows arc's own output rather than re-deriving it.
+/// header (params + estimate) a human dry-run prints before the prompt — for the gate, or an error
+/// string. Zero spend (`--dry-run`); read from the `--json` payload's `preview` field — the
+/// machine-readable channel — not parsed out of the human layout (prefer-machine-readable-tool-output).
 fn dry_run_preview(verb: &str) -> Result<String, String> {
     let output = launch_command(verb)
         .map_err(|e| format!("can't locate the arc binary: {e}"))?
-        .arg("--dry-run")
+        .args(["--dry-run", "--json"])
         .output()
         .map_err(|e| format!("couldn't start the dry-run: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("the dry-run failed: {}", stderr.trim()));
     }
-    let out = String::from_utf8_lossy(&output.stdout).into_owned();
-    // arc prints the preview header, a blank line, then the full prompt — take everything before that
-    // first blank line (or all of it, should a run ever emit no prompt section).
-    let header = out
-        .split_once("\n\n")
-        .map_or(out.as_str(), |(head, _)| head);
-    Ok(header.trim_end().to_owned())
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("the dry-run's JSON payload didn't parse: {e}"))?;
+    payload
+        .get("preview")
+        .and_then(serde_json::Value::as_str)
+        .map(|preview| preview.trim_end().to_owned())
+        .ok_or_else(|| "the dry-run's JSON payload has no `preview` field".to_owned())
 }
 
 /// What the live status reflects at one instant: the in-flight runs, how many registry entries couldn't
@@ -855,9 +858,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         // Sections that own navigation state get their per-key handling here: the log's cursor and
-        // detail scroll, and the rules report's scroll.
+        // detail scroll, and the text-report views' shared scroll.
         _ if app.route == Route::Log => handle_log_key(app, key.code),
-        _ if app.route == Route::Rules => handle_rules_key(app, key.code),
+        _ if matches!(app.route, Route::Rules | Route::Doctor) => {
+            handle_report_key(app, key.code);
+        }
         _ => {}
     }
 }
@@ -997,7 +1002,7 @@ fn render(frame: &mut Frame, app: &App) {
             app.doctor
                 .as_ref()
                 .expect("the doctor view is loaded when its route is active"),
-            0, // the doctor report fits the viewport; no scroll state
+            app.report_scroll,
         ),
         Route::Rules => render_text_report(
             frame,
@@ -1006,7 +1011,7 @@ fn render(frame: &mut Frame, app: &App) {
             app.rules
                 .as_ref()
                 .expect("the rules view is loaded when its route is active"),
-            app.rules_scroll,
+            app.report_scroll,
         ),
     }
     render_footer(frame, footer, app);
@@ -1280,24 +1285,25 @@ fn render_text_report(
     );
 }
 
-/// Rows of the rules report visible at once — the inline viewport less the footer, the view header,
-/// and the bordered body's frame — the PageUp/PageDown step for the rules view's scroll.
-const RULES_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - BORDER) as usize;
+/// Rows of a text report visible at once — the inline viewport less the footer, the view header, and
+/// the bordered body's frame — the PageUp/PageDown step for the report views' scroll.
+const REPORT_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - BORDER) as usize;
 
-/// Keys while the `rules` view is on screen: scroll the report — the rule list can outrun the inline
-/// viewport, unlike its fixed-height report sibling (doctor). Esc is handled one level up.
-fn handle_rules_key(app: &mut App, code: KeyCode) {
+/// Keys while a text-report view (doctor, rules) is on screen: scroll the report — either can outrun
+/// the inline viewport (a long rule list; a doctor report on a tool-rich machine), and clipping the
+/// tail silently would misreport the very state the view exists to show. Esc is handled one level up.
+fn handle_report_key(app: &mut App, code: KeyCode) {
     let delta = match code {
         KeyCode::Up => -1,
         KeyCode::Down => 1,
-        KeyCode::PageUp => -(RULES_ROWS as i32),
-        KeyCode::PageDown => RULES_ROWS as i32,
+        KeyCode::PageUp => -(REPORT_ROWS as i32),
+        KeyCode::PageDown => REPORT_ROWS as i32,
         KeyCode::Home => i32::MIN,
         _ => return,
     };
     // Clamp at the top only, mirroring the log detail's scroll: the body wraps, so the rendered height
     // isn't known here — over-scrolling the bottom into blank beats hiding wrapped tail lines.
-    app.rules_scroll = i32::from(app.rules_scroll)
+    app.report_scroll = i32::from(app.report_scroll)
         .saturating_add(delta)
         .clamp(0, i32::from(u16::MAX)) as u16;
 }
@@ -1474,8 +1480,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Rules => "/ commands · ↑↓ scroll · esc back · q quit",
-            Route::Status | Route::Config | Route::Log | Route::Usage | Route::Doctor => {
+            Route::Rules | Route::Doctor => "/ commands · ↑↓ scroll · esc back · q quit",
+            Route::Status | Route::Config | Route::Log | Route::Usage => {
                 "/ commands · esc back · q quit"
             }
         }
@@ -1618,7 +1624,7 @@ mod tests {
             update: None,
             doctor: None,
             rules: None,
-            rules_scroll: 0,
+            report_scroll: 0,
         }
     }
 

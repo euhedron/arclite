@@ -824,6 +824,10 @@ struct DryRunOutput<'a> {
     note: &'static str,
     /// Where `--output` *would* write on a real run, if set.
     output_target: Option<String>,
+    /// The human preview header (params + estimate + disclosures — the text before the prompt), as a
+    /// machine-readable field: a consumer showing the preview (the TUI's launch gate) reads it here
+    /// instead of parsing the human layout, while its composition keeps this one home.
+    preview: String,
     prompt: &'a str,
 }
 
@@ -872,7 +876,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         let output_target = opts
             .output
             .map(|dir| output_path(dir, opts.command).display().to_string());
-        let mut human = format!(
+        let mut preview = format!(
             "[dry run]\nrun: {}\nprompt: {} chars (~{} tokens)\nnote: {}",
             report.human(),
             estimate.chars,
@@ -880,34 +884,35 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             DRY_RUN_NOTE,
         );
         if let Some(target) = &output_target {
-            human.push_str(&format!("\noutput: would write {target} on a real run"));
+            preview.push_str(&format!("\noutput: would write {target} on a real run"));
         }
         if opts.schema.is_some() {
-            human.push_str("\nstructured: on — the result will be a schema-validated object");
+            preview.push_str("\nstructured: on — the result will be a schema-validated object");
         }
         if let Some(field) = opts.gate {
-            human.push_str(&format!(
+            preview.push_str(&format!(
                 "\ngate: on — a real run exits {GATE_BLOCKED_EXIT} if `{field}` is non-empty"
             ));
         }
         // Disclose logging status + where real runs would record, even though a dry run logs nothing.
         match (opts.log, crate::log::path()) {
             (true, Some(path)) => {
-                human.push_str(&format!(
+                preview.push_str(&format!(
                     "\nlogging: on — real runs append to {}",
                     path.display()
                 ));
             }
-            (false, _) => human.push_str(LOGGING_OFF_NOTE),
+            (false, _) => preview.push_str(LOGGING_OFF_NOTE),
             (true, None) => {}
         }
-        human.push_str(&format!("\n\n{prompt}"));
+        let human = format!("{preview}\n\n{prompt}");
         let out = DryRunOutput {
             dry_run: true,
             run: report,
             estimate,
             note: DRY_RUN_NOTE,
             output_target,
+            preview,
             prompt,
         };
         emit(&out, &human, opts.json)?;
