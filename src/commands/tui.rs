@@ -63,7 +63,7 @@ const LAUNCH_WIDTH: u16 = 72;
 const MASTHEAD_HEIGHT: u16 = 4;
 
 /// Height of a single-row text line — a header, hint, footer, or input. Named so the rows a view
-/// reserves for these (and [`LOG_ROWS`]) stay single-sourced with the `Constraint::Length` splits
+/// reserves for these (and [`LIST_ROWS`]) stay single-sourced with the `Constraint::Length` splits
 /// that lay them out, rather than recurring as bare `1`s.
 const LINE: u16 = 1;
 
@@ -298,11 +298,11 @@ struct App {
     /// The doctor view's report as rendered text, loaded when the view is opened; `None` until then.
     /// `Err` if the environment probe failed (e.g. an unreadable cwd), shown in the view.
     doctor: Option<Result<String, String>>,
-    /// The rules view's report — the same text `arc rules` prints — loaded when the view is opened;
-    /// `None` until then. `Err` if rule resolution failed (e.g. unreadable settings), shown in the view.
-    rules: Option<Result<String, String>>,
-    /// Scroll offset over the active text-report view (doctor or rules — only one shows at a time),
-    /// reset on entry — either report can outrun the inline viewport.
+    /// The rules view's state (the resolved ruleset + cursor + an optional open rule), loaded when
+    /// the view is opened; `None` until then.
+    rules: Option<RulesView>,
+    /// Scroll offset over the doctor report, reset on entry — a tool-rich machine's report can outrun
+    /// the inline viewport.
     report_scroll: u16,
 }
 
@@ -455,16 +455,53 @@ impl App {
     }
 
     /// Open the rules view, resolving the active ruleset fresh (re-run on each entry, like the other
-    /// views); the scroll resets to the top. The same `rules::report` backs `arc rules`, so the two
-    /// can't drift.
+    /// views) into a browsable list — cursor over the rules, Enter opens one to read. The same
+    /// `rules::resolved` backs `arc rules`, so the two can't drift.
     fn open_rules(&mut self) {
         self.route = Route::Rules;
-        self.report_scroll = 0;
-        self.rules = Some(
-            crate::commands::rules::report(Path::new(&self.cwd), None, None)
-                .map(|(_, human)| human)
+        self.rules = Some(RulesView {
+            report: crate::commands::rules::resolved(Path::new(&self.cwd), None, None)
                 .map_err(|e| format!("{e:#}")),
-        );
+            selected: 0,
+            offset: 0,
+            detail: None,
+        });
+    }
+}
+
+/// The rules view's state: the resolved ruleset (or the resolution error), the cursor + scroll offset
+/// over the rule list, and — when a rule is opened — which rule and how far it's scrolled.
+struct RulesView {
+    report: Result<crate::commands::rules::Report, String>,
+    selected: usize,
+    offset: usize,
+    detail: Option<RuleDetail>,
+}
+
+/// One opened rule: its index into the report's rules (valid by construction — set from a cursor that
+/// only ever points at a real row) and a scroll offset, since a rule body can outrun the inline body.
+struct RuleDetail {
+    index: usize,
+    scroll: u16,
+}
+
+impl RulesView {
+    /// Move the cursor to `i`, keeping it inside the visible window.
+    fn select(&mut self, i: usize) {
+        select_visible(&mut self.selected, &mut self.offset, i);
+    }
+
+    /// Open the rule under the cursor for reading. A no-op when no rules resolved.
+    fn open_detail(&mut self) {
+        let Ok(report) = self.report.as_ref() else {
+            return;
+        };
+        if self.selected < report.rules.len() {
+            self.detail = Some(RuleDetail {
+                index: self.selected,
+                scroll: 0,
+            });
+        }
     }
 }
 
@@ -497,16 +534,28 @@ enum ConfigView {
     Error(String),
 }
 
-/// Chrome lines the `log` list spends around its scrollable body: a title/header line and a hint line.
-/// Named so `render_log`'s `Layout` and [`LOG_ROWS`] derive the body height from the *same* constants
-/// and can't silently disagree if the view's chrome ever changes (the desync a bare literal invited).
-const LOG_HEADER_LINES: u16 = LINE;
-const LOG_HINT_LINES: u16 = LINE;
+/// Chrome lines a full-height list view (log, rules) spends around its scrollable body: a title/header
+/// line and a hint line. Named so the views' `Layout`s and [`LIST_ROWS`] derive the body height from
+/// the *same* constants and can't silently disagree if the chrome ever changes (the desync a bare
+/// literal invited).
+const LIST_HEADER_LINES: u16 = LINE;
+const LIST_HINT_LINES: u16 = LINE;
 
-/// Visible run rows in the `log` list — the inline viewport less the global footer, the header, and the
-/// hint. One source for both the scroll math (`select`, PageUp/Down) and the render window, so they
-/// can't disagree on how many rows are on screen.
-const LOG_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LOG_HEADER_LINES - LOG_HINT_LINES) as usize;
+/// Visible rows in a full-height list view (log, rules) — the inline viewport less the global footer,
+/// the header, and the hint. One source for both the cursor math ([`select_visible`], PageUp/Down) and
+/// the render window, so they can't disagree on how many rows are on screen.
+const LIST_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LIST_HEADER_LINES - LIST_HINT_LINES) as usize;
+
+/// Move a list cursor to `i`, scrolling `offset` the minimum needed to keep the cursor inside the
+/// [`LIST_ROWS`] visible window — the one statement of the keep-visible list math (log + rules lists).
+fn select_visible(selected: &mut usize, offset: &mut usize, i: usize) {
+    *selected = i;
+    if i < *offset {
+        *offset = i;
+    } else if i >= *offset + LIST_ROWS {
+        *offset = i + 1 - LIST_ROWS;
+    }
+}
 
 /// The `log` view's state: the completed-run records (newest first) or the error reading them, the
 /// cursor + scroll offset over the list, and — when drilled in — the selected run's rendered detail.
@@ -531,12 +580,7 @@ struct LogDetail {
 impl LogView {
     /// Move the cursor to `i`, scrolling the window the minimum needed to keep it visible.
     fn select(&mut self, i: usize) {
-        self.selected = i;
-        if i < self.offset {
-            self.offset = i;
-        } else if i >= self.offset + LOG_ROWS {
-            self.offset = i + 1 - LOG_ROWS;
-        }
+        select_visible(&mut self.selected, &mut self.offset, i);
     }
 
     /// Open the selected run's detail — its stored result rendered like `arc log <id>`, or a note when
@@ -847,14 +891,19 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('/') => app.palette = Some(Palette::new()),
         KeyCode::Char('q') => app.should_quit = true,
-        // Esc backs out one level: a section returns to home; home leaves the cockpit — but inside the
-        // log detail it returns to the list first.
+        // Esc backs out one level: a section returns to home; home leaves the cockpit — but inside an
+        // open log-run or rule detail it returns to that view's list first.
         KeyCode::Esc => {
             if app.route == Route::Log
                 && let Some(log) = app.log.as_mut()
                 && log.detail.is_some()
             {
                 log.detail = None;
+            } else if app.route == Route::Rules
+                && let Some(rules) = app.rules.as_mut()
+                && rules.detail.is_some()
+            {
+                rules.detail = None;
             } else {
                 match app.route {
                     Route::Home => app.should_quit = true,
@@ -862,12 +911,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        // Sections that own navigation state get their per-key handling here: the log's cursor and
-        // detail scroll, and the text-report views' shared scroll.
+        // Sections that own navigation state get their per-key handling here: the log's and the rules
+        // view's cursor + detail scroll, and the doctor report's scroll.
         _ if app.route == Route::Log => handle_log_key(app, key.code),
-        _ if matches!(app.route, Route::Rules | Route::Doctor) => {
-            handle_report_key(app, key.code);
-        }
+        _ if app.route == Route::Rules => handle_rules_key(app, key.code),
+        _ if app.route == Route::Doctor => handle_report_key(app, key.code),
         _ => {}
     }
 }
@@ -943,13 +991,8 @@ fn handle_log_key(app: &mut App, code: KeyCode) {
     let Some(log) = app.log.as_mut() else { return };
     // Detail open: arrows/page scroll the body; Home jumps to the top.
     if log.detail.is_some() {
-        match code {
-            KeyCode::Up => log.scroll_detail(-1),
-            KeyCode::Down => log.scroll_detail(1),
-            KeyCode::PageUp => log.scroll_detail(-(LOG_ROWS as i32)),
-            KeyCode::PageDown => log.scroll_detail(LOG_ROWS as i32),
-            KeyCode::Home => log.scroll_detail(i32::MIN),
-            _ => {}
+        if let Some(delta) = scroll_delta(code, LIST_ROWS) {
+            log.scroll_detail(delta);
         }
         return;
     }
@@ -961,8 +1004,8 @@ fn handle_log_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Up => log.select(log.selected.saturating_sub(1)),
         KeyCode::Down => log.select((log.selected + 1).min(last)),
-        KeyCode::PageUp => log.select(log.selected.saturating_sub(LOG_ROWS)),
-        KeyCode::PageDown => log.select((log.selected + LOG_ROWS).min(last)),
+        KeyCode::PageUp => log.select(log.selected.saturating_sub(LIST_ROWS)),
+        KeyCode::PageDown => log.select((log.selected + LIST_ROWS).min(last)),
         KeyCode::Home => log.select(0),
         KeyCode::End => log.select(last),
         KeyCode::Enter => log.open_detail(),
@@ -1009,14 +1052,12 @@ fn render(frame: &mut Frame, app: &App) {
                 .expect("the doctor view is loaded when its route is active"),
             app.report_scroll,
         ),
-        Route::Rules => render_text_report(
+        Route::Rules => render_rules(
             frame,
-            body,
-            "rules",
             app.rules
                 .as_ref()
                 .expect("the rules view is loaded when its route is active"),
-            app.report_scroll,
+            body,
         ),
     }
     render_footer(frame, footer, app);
@@ -1264,9 +1305,8 @@ const USAGE_COMMAND_WIDTHS: [Constraint; 3] = [
     Constraint::Min(8),
 ];
 
-/// Shared body for the text-report views — doctor (the environment/tooling report) and rules (the
-/// resolved ruleset): a bold title over the report — or its error, prefixed "<title> unreadable" — in
-/// a bordered, wrapped paragraph, scrolled by `scroll`. One renderer so the sibling views can't drift.
+/// The doctor view's body: a bold title over the report — or its error, prefixed "<title> unreadable"
+/// — in a bordered, wrapped paragraph, scrolled by `scroll`.
 fn render_text_report(
     frame: &mut Frame,
     area: Rect,
@@ -1290,23 +1330,133 @@ fn render_text_report(
     );
 }
 
-/// Rows of a text report visible at once — the inline viewport less the footer, the view header, and
-/// the bordered body's frame — the PageUp/PageDown step for the report views' scroll.
+/// Rows of the doctor report visible at once — the inline viewport less the footer, the view header,
+/// and the bordered body's frame — the PageUp/PageDown step for its scroll.
 const REPORT_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LINE - BORDER) as usize;
 
-/// Keys while a text-report view (doctor, rules) is on screen: scroll the report — either can outrun
-/// the inline viewport (a long rule list; a doctor report on a tool-rich machine), and clipping the
-/// tail silently would misreport the very state the view exists to show. Esc is handled one level up.
-fn handle_report_key(app: &mut App, code: KeyCode) {
-    let delta = match code {
+/// Map a key to a scroll delta for a text body — line steps, page jumps of `page`, Home to the top;
+/// `None` for keys that don't scroll. The one keymap for every scrolled body (log detail, rule detail,
+/// doctor report), so the views can't drift on navigation.
+fn scroll_delta(code: KeyCode, page: usize) -> Option<i32> {
+    Some(match code {
         KeyCode::Up => -1,
         KeyCode::Down => 1,
-        KeyCode::PageUp => -(REPORT_ROWS as i32),
-        KeyCode::PageDown => REPORT_ROWS as i32,
+        KeyCode::PageUp => -(page as i32),
+        KeyCode::PageDown => page as i32,
         KeyCode::Home => i32::MIN,
-        _ => return,
+        _ => return None,
+    })
+}
+
+/// Keys while the doctor report is on screen: scroll it — a tool-rich machine's report can outrun the
+/// inline viewport, and clipping the tail silently would misreport the very state the view exists to
+/// show. Esc is handled one level up.
+fn handle_report_key(app: &mut App, code: KeyCode) {
+    if let Some(delta) = scroll_delta(code, REPORT_ROWS) {
+        app.report_scroll = scrolled(app.report_scroll, delta);
+    }
+}
+
+/// Keys while the `rules` view is on screen: move the cursor or page through the rule list, open the
+/// highlighted rule, or scroll an open rule's body. Esc is handled one level up (it closes an open
+/// rule, else backs out of the view).
+fn handle_rules_key(app: &mut App, code: KeyCode) {
+    let Some(view) = app.rules.as_mut() else {
+        return;
     };
-    app.report_scroll = scrolled(app.report_scroll, delta);
+    if let Some(detail) = view.detail.as_mut() {
+        if let Some(delta) = scroll_delta(code, LIST_ROWS) {
+            detail.scroll = scrolled(detail.scroll, delta);
+        }
+        return;
+    }
+    let last = match &view.report {
+        Ok(report) if !report.rules.is_empty() => report.rules.len() - 1,
+        _ => return, // empty or unresolvable — nothing to navigate
+    };
+    match code {
+        KeyCode::Up => view.select(view.selected.saturating_sub(1)),
+        KeyCode::Down => view.select((view.selected + 1).min(last)),
+        KeyCode::PageUp => view.select(view.selected.saturating_sub(LIST_ROWS)),
+        KeyCode::PageDown => view.select((view.selected + LIST_ROWS).min(last)),
+        KeyCode::Home => view.select(0),
+        KeyCode::End => view.select(last),
+        KeyCode::Enter => view.open_detail(),
+        _ => {}
+    }
+}
+
+/// The rules view: the resolved ruleset as a browsable list — cursor over `id ← source` rows, Enter
+/// opens the rule's body to read (scrolled; provenance in the hint) — or the resolution error. Loaded
+/// on entry by [`App::open_rules`]; skipped sources are disclosed in the hint, never dropped silently.
+fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
+    let [header, body, hint] = Layout::vertical([
+        Constraint::Length(LIST_HEADER_LINES),
+        Constraint::Min(0),
+        Constraint::Length(LIST_HINT_LINES),
+    ])
+    .areas(area);
+
+    let report = match &view.report {
+        Ok(report) => report,
+        Err(e) => {
+            frame.render_widget(Line::from("rules").bold(), header);
+            frame.render_widget(
+                Paragraph::new(format!("rules unresolvable: {e}")).block(Block::bordered()),
+                body,
+            );
+            return;
+        }
+    };
+
+    // Drilled into one rule: its body, scrolled, with the provenance in the hint.
+    if let Some(detail) = &view.detail {
+        let rule = &report.rules[detail.index];
+        frame.render_widget(Line::from(format!("rules · {}", rule.id)).bold(), header);
+        frame.render_widget(
+            Paragraph::new(rule.body.clone())
+                .wrap(Wrap { trim: false })
+                .scroll((detail.scroll, 0)),
+            body,
+        );
+        frame.render_widget(
+            Line::from(format!("{} · ↑↓ scroll · esc back", rule.source)).dim(),
+            hint,
+        );
+        return;
+    }
+
+    // The rule list.
+    frame.render_widget(
+        Line::from(format!("rules · {}", report.description)).bold(),
+        header,
+    );
+    if report.rules.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no rules resolve from the active ruleset").block(Block::bordered()),
+            body,
+        );
+    } else {
+        let end = (view.offset + LIST_ROWS).min(report.rules.len());
+        let rows: Vec<Line> = report.rules[view.offset..end]
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let line = Line::from(format!("{} ← {}", r.id, r.source));
+                if view.offset + i == view.selected {
+                    line.reversed() // the cursor
+                } else {
+                    line
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(rows), body);
+    }
+    let mut hint_text = format!("{} rule(s) · ↑↓ move · enter open", report.rules.len());
+    if !report.skipped.is_empty() {
+        hint_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
+    }
+    frame.render_widget(Line::from(hint_text).dim(), hint);
 }
 
 /// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
@@ -1397,9 +1547,9 @@ fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
 /// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     let [header, body, hint] = Layout::vertical([
-        Constraint::Length(LOG_HEADER_LINES),
+        Constraint::Length(LIST_HEADER_LINES),
         Constraint::Min(0),
-        Constraint::Length(LOG_HINT_LINES),
+        Constraint::Length(LIST_HINT_LINES),
     ])
     .areas(area);
 
@@ -1436,7 +1586,7 @@ fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
             body,
         );
     } else {
-        let end = (log.offset + LOG_ROWS).min(runs.len());
+        let end = (log.offset + LIST_ROWS).min(runs.len());
         let rows: Vec<Line> = runs[log.offset..end]
             .iter()
             .enumerate()
@@ -1481,8 +1631,8 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Rules | Route::Doctor => "/ commands · ↑↓ scroll · esc back · q quit",
-            Route::Status | Route::Config | Route::Log | Route::Usage => {
+            Route::Doctor => "/ commands · ↑↓ scroll · esc back · q quit",
+            Route::Status | Route::Config | Route::Log | Route::Usage | Route::Rules => {
                 "/ commands · esc back · q quit"
             }
         }

@@ -56,8 +56,11 @@ adv_outs=""
 if [ -n "$adv_includes" ]; then
     for verb in critique suggest extract; do
         out=$(mktemp)
+        # Read-only tools (claude-only — drop them if moving a verb to --backend codex): a diff-scoped
+        # context can't see cross-module references, so let the advisory consult the rest of the repo
+        # at its own judgment instead of flagging what it can't see.
         # shellcheck disable=SC2086  # intended word-split: one --include per changed file
-        arc run "$verb" . --no-scan $adv_includes >"$out" 2>&1 &
+        arc run "$verb" . --no-scan $adv_includes --allow-tool Read --allow-tool Grep --allow-tool Glob >"$out" 2>&1 &
         adv_pids="$adv_pids $!"
         adv_outs="$adv_outs $out"
     done
