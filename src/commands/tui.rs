@@ -1001,15 +1001,10 @@ fn handle_log_key(app: &mut App, code: KeyCode) {
         Ok(runs) if !runs.is_empty() => runs.len() - 1,
         _ => return, // empty or unreadable — nothing to navigate
     };
-    match code {
-        KeyCode::Up => log.select(log.selected.saturating_sub(1)),
-        KeyCode::Down => log.select((log.selected + 1).min(last)),
-        KeyCode::PageUp => log.select(log.selected.saturating_sub(LIST_ROWS)),
-        KeyCode::PageDown => log.select((log.selected + LIST_ROWS).min(last)),
-        KeyCode::Home => log.select(0),
-        KeyCode::End => log.select(last),
-        KeyCode::Enter => log.open_detail(),
-        _ => {}
+    match list_action(code, log.selected, last) {
+        Some(ListAction::Select(i)) => log.select(i),
+        Some(ListAction::Open) => log.open_detail(),
+        None => {}
     }
 }
 
@@ -1348,6 +1343,28 @@ fn scroll_delta(code: KeyCode, page: usize) -> Option<i32> {
     })
 }
 
+/// What a key means over a cursored list: move the cursor to a target row, or open the selected one.
+enum ListAction {
+    Select(usize),
+    Open,
+}
+
+/// Map a key over a cursored list of `last + 1` rows with the cursor at `selected` — the one keymap
+/// for every list view (log, rules), so their navigation can't drift. `None` for keys the list
+/// doesn't handle.
+fn list_action(code: KeyCode, selected: usize, last: usize) -> Option<ListAction> {
+    Some(match code {
+        KeyCode::Up => ListAction::Select(selected.saturating_sub(1)),
+        KeyCode::Down => ListAction::Select((selected + 1).min(last)),
+        KeyCode::PageUp => ListAction::Select(selected.saturating_sub(LIST_ROWS)),
+        KeyCode::PageDown => ListAction::Select((selected + LIST_ROWS).min(last)),
+        KeyCode::Home => ListAction::Select(0),
+        KeyCode::End => ListAction::Select(last),
+        KeyCode::Enter => ListAction::Open,
+        _ => return None,
+    })
+}
+
 /// Keys while the doctor report is on screen: scroll it — a tool-rich machine's report can outrun the
 /// inline viewport, and clipping the tail silently would misreport the very state the view exists to
 /// show. Esc is handled one level up.
@@ -1374,15 +1391,10 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
         Ok(report) if !report.rules.is_empty() => report.rules.len() - 1,
         _ => return, // empty or unresolvable — nothing to navigate
     };
-    match code {
-        KeyCode::Up => view.select(view.selected.saturating_sub(1)),
-        KeyCode::Down => view.select((view.selected + 1).min(last)),
-        KeyCode::PageUp => view.select(view.selected.saturating_sub(LIST_ROWS)),
-        KeyCode::PageDown => view.select((view.selected + LIST_ROWS).min(last)),
-        KeyCode::Home => view.select(0),
-        KeyCode::End => view.select(last),
-        KeyCode::Enter => view.open_detail(),
-        _ => {}
+    match list_action(code, view.selected, last) {
+        Some(ListAction::Select(i)) => view.select(i),
+        Some(ListAction::Open) => view.open_detail(),
+        None => {}
     }
 }
 

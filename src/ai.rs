@@ -610,8 +610,10 @@ impl Backend for CodexBackend {
     }
 }
 
-/// codex's `turn.completed.usage` token fields — tokens only, no dollar cost.
-#[derive(Deserialize)]
+/// codex's `turn.completed.usage` token fields — tokens only, no dollar cost. `Default` (all zeros)
+/// is the honest shape for a run that failed before any turn completed: no usage was ever reported,
+/// mirroring the claude error path's empty-`modelUsage` case.
+#[derive(Deserialize, Default)]
 struct CodexUsage {
     input_tokens: u64,
     #[serde(default)]
@@ -717,6 +719,11 @@ fn synthesize_codex(
                 }
             }
             "turn.failed" | "error" => {
+                // A failure payload can carry the doomed turn's usage — take it when present, so the
+                // errored run's record shows what the failure actually consumed.
+                if let Some(u) = event.get("usage") {
+                    usage_raw = Some(u.clone());
+                }
                 failure = Some(
                     event
                         .pointer("/error/message")
@@ -729,15 +736,41 @@ fn synthesize_codex(
             _ => {}
         },
     )?;
-    if let Some(msg) = failure {
-        bail!("codex reported an error: {msg}");
+    // Parse whatever usage the stream reported before the run ended, however it ended — a malformed
+    // object surfaces as a parse error rather than being swallowed to zeros (the honest ground-truth
+    // contract, cf. parse_result's loud bails).
+    let usage: Option<CodexUsage> = usage_raw
+        .map(serde_json::from_value)
+        .transpose()
+        .context("codex's `usage` object was malformed")?;
+    // A run that failed after spending still gets its cost recorded: carry the failure as a value with
+    // the captured usage (the claude contract — [`Synthesis::error`]), so the caller logs an *errored*
+    // run instead of losing the spend on a bail. No captured usage → an all-zeros record: the honest
+    // shape for a run that died before any turn completed.
+    let error = if let Some(msg) = failure {
+        Some(format!("codex reported an error: {msg}"))
+    } else if !status.success() {
+        Some(format!("codex exited with {}: {}", status, stderr.trim()))
+    } else {
+        None
+    };
+    if let Some(error) = error {
+        let usage = usage.unwrap_or_default();
+        return Ok(Synthesis {
+            text: String::new(),
+            usage: Usage {
+                model: req.model.to_owned(),
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens + usage.reasoning_output_tokens,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: usage.cached_input_tokens,
+                cost_usd: None,
+            },
+            structured: None,
+            error: Some(error),
+        });
     }
-    if !status.success() {
-        bail!("codex exited with {}: {}", status, stderr.trim());
-    }
-    let usage = usage_raw.context("codex produced no `turn.completed` usage event")?;
-    let usage: CodexUsage = serde_json::from_value(usage)
-        .context("codex's `turn.completed` `usage` object was malformed")?;
+    let usage = usage.context("codex produced no `turn.completed` usage event")?;
     // The result is codex's `-o` artifact (clean + schema-valid) — its documented result channel, so
     // an absent/empty one on an otherwise-successful run is surfaced rather than papered over, the way
     // the claude path bails when its result event is missing.
@@ -766,7 +799,7 @@ fn synthesize_codex(
             cost_usd: None, // codex reports tokens only — no fabricated dollar cost
         },
         structured,
-        error: None, // codex errored-run logging is a follow-up; success-only for now
+        error: None, // a completed run; failures returned above, carrying their captured usage
     })
 }
 
