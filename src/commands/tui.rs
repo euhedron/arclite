@@ -80,8 +80,13 @@ enum Msg {
     Input(Event),
     /// The refresh tick: re-read live state.
     Tick,
-    /// A launch's dry-run finished on a worker thread: its preview text, or an error to show.
-    LaunchPreview(Result<String, String>),
+    /// A launch's dry-run finished on a worker thread: which verb it previewed (the launch it may fold
+    /// into must still be for that verb — a late preview must not dress a newer launch), and its
+    /// preview text or an error to show.
+    LaunchPreview {
+        verb: &'static str,
+        result: Result<String, String>,
+    },
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
 }
@@ -347,7 +352,10 @@ impl App {
         let tx = self.tx.clone();
         let name = verb.name();
         thread::spawn(move || {
-            let _ = tx.send(Msg::LaunchPreview(dry_run_preview(name)));
+            let _ = tx.send(Msg::LaunchPreview {
+                verb: name,
+                result: dry_run_preview(name),
+            });
         });
     }
 
@@ -849,10 +857,15 @@ fn update(app: &mut App, msg: Msg) {
         Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => handle_key(app, key),
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
         Msg::UpdateChecked(newer) => app.update = newer,
-        Msg::LaunchPreview(result) => {
-            // Fold the dry-run's outcome into the gate — unless the launch was cancelled before it
-            // arrived (then `launch` is `None` and the preview is simply dropped).
-            if let Some(launch) = app.launch.as_mut() {
+        Msg::LaunchPreview { verb, result } => {
+            // Fold the dry-run's outcome into the gate only if the open launch is still the one it was
+            // computed for — cancelled (`launch` is `None`) or replaced by another verb's launch, the
+            // stale preview is dropped rather than dressing a newer pending action in an older one's
+            // parameters. Verb identity suffices today because a launch is fully determined by its verb
+            // (`launch_command` takes nothing else); shaped launches will need a per-launch id.
+            if let Some(launch) = app.launch.as_mut()
+                && launch.verb.name() == verb
+            {
                 launch.stage = match result {
                     Ok(preview) => LaunchStage::Confirming { preview },
                     Err(error) => LaunchStage::Failed { error },
