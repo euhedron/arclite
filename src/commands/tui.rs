@@ -571,14 +571,19 @@ impl LogView {
     /// Scroll the open detail by `delta` rows. A no-op while the list (not a detail) is showing.
     fn scroll_detail(&mut self, delta: i32) {
         if let Some(detail) = self.detail.as_mut() {
-            // Clamp at the top only: the body wraps, so its on-screen height isn't known here — let the
-            // bottom over-scroll into blank rather than hide wrapped tail lines. A precise bottom clamp
-            // (needs the rendered line count) is a refinement for the detail-view rework.
-            detail.scroll = i32::from(detail.scroll)
-                .saturating_add(delta)
-                .clamp(0, i32::from(u16::MAX)) as u16;
+            detail.scroll = scrolled(detail.scroll, delta);
         }
     }
+}
+
+/// A scroll offset moved by `delta` rows — the one clamp for every scrolled text body (the log detail,
+/// the doctor/rules reports). Clamped at the top only: the bodies wrap, so their on-screen height isn't
+/// known here — let the bottom over-scroll into blank rather than hide wrapped tail lines (a precise
+/// bottom clamp needs the rendered line count).
+fn scrolled(scroll: u16, delta: i32) -> u16 {
+    i32::from(scroll)
+        .saturating_add(delta)
+        .clamp(0, i32::from(u16::MAX)) as u16
 }
 
 /// The base `arc run <verb> .` command both the dry-run preview and the confirmed launch build on —
@@ -1301,11 +1306,7 @@ fn handle_report_key(app: &mut App, code: KeyCode) {
         KeyCode::Home => i32::MIN,
         _ => return,
     };
-    // Clamp at the top only, mirroring the log detail's scroll: the body wraps, so the rendered height
-    // isn't known here — over-scrolling the bottom into blank beats hiding wrapped tail lines.
-    app.report_scroll = i32::from(app.report_scroll)
-        .saturating_add(delta)
-        .clamp(0, i32::from(u16::MAX)) as u16;
+    app.report_scroll = scrolled(app.report_scroll, delta);
 }
 
 /// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
