@@ -538,8 +538,9 @@ fn synthesize_claude(
 const CODEX_REASONING_EFFORT: &str = "xhigh";
 
 /// The reasoning-effort levels codex's `model_reasoning_effort` accepts. Update if codex's lineup
-/// changes; [`CODEX_REASONING_EFFORT`] (the default) must be one of these.
-const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+/// changes; [`CODEX_REASONING_EFFORT`] (the default) must be one of these. Shared with the config
+/// key's option list, so the picker and the validator can't drift.
+pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
 /// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.

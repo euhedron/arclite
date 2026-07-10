@@ -14,6 +14,15 @@ struct Setting {
     key: &'static str,
     read: fn(&Settings) -> Option<String>,
     parse: fn(&str) -> anyhow::Result<serde_json::Value>,
+    /// The closed set of valid values, when the key has an enumerable one (the TUI picks among them);
+    /// `None` for open values — a model id (not headlessly enumerable), a dollar amount, a comma-list
+    /// — which edit as free text. Enumerations come from the same single sources the validators use.
+    options: fn(&Settings) -> Option<Vec<String>>,
+}
+
+/// `options` for the open-valued settings (free text).
+fn no_options(_: &Settings) -> Option<Vec<String>> {
+    None
 }
 
 /// `parse` for the plain-string settings.
@@ -26,6 +35,7 @@ const SETTINGS: &[Setting] = &[
         key: "defaults.model",
         read: |s| s.default_model.clone(),
         parse: parse_string,
+        options: no_options,
     },
     Setting {
         key: "defaults.backend",
@@ -34,11 +44,24 @@ const SETTINGS: &[Setting] = &[
             crate::ai::validate_backend(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
         },
+        options: |_| {
+            Some(
+                crate::ai::known_backends()
+                    .iter()
+                    .map(|b| (*b).to_owned())
+                    .collect(),
+            )
+        },
     },
     Setting {
         key: "defaults.ruleset",
         read: |s| s.default_ruleset.clone(),
         parse: parse_string,
+        // The defined rulesets are the meaningful values; none defined -> free text (a future one).
+        options: |s| {
+            let ids = s.ruleset_ids();
+            (!ids.is_empty()).then_some(ids)
+        },
     },
     Setting {
         key: "defaults.logging",
@@ -48,6 +71,7 @@ const SETTINGS: &[Setting] = &[
                 v.parse::<bool>().context("expected `true` or `false`")?,
             ))
         },
+        options: |_| Some(vec!["true".to_owned(), "false".to_owned()]),
     },
     Setting {
         key: "defaults.max_budget_usd",
@@ -57,11 +81,13 @@ const SETTINGS: &[Setting] = &[
             crate::settings::validate_budget(cap)?;
             Ok(serde_json::Value::from(cap))
         },
+        options: no_options,
     },
     Setting {
         key: "defaults.codex_model",
         read: |s| s.default_codex_model.clone(),
         parse: parse_string,
+        options: no_options,
     },
     Setting {
         key: "defaults.codex_reasoning_effort",
@@ -69,6 +95,14 @@ const SETTINGS: &[Setting] = &[
         parse: |v| {
             crate::ai::validate_reasoning_effort(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
+        },
+        options: |_| {
+            Some(
+                crate::ai::CODEX_REASONING_EFFORTS
+                    .iter()
+                    .map(|e| (*e).to_owned())
+                    .collect(),
+            )
         },
     },
     // A root-level key (a list beside `defaults`/`rulesets`, not a scalar default) — the dotted-path
@@ -86,6 +120,7 @@ const SETTINGS: &[Setting] = &[
                     .collect(),
             ))
         },
+        options: no_options,
     },
 ];
 
@@ -118,10 +153,18 @@ struct Listed {
     layers: Vec<String>,
 }
 
-/// The resolved settings as (key, value) pairs (a `None` value = unset) plus the active layers — the
-/// projection `arc config list` and the TUI's config view share, so the two can't drift apart.
+/// One resolved setting: its key, value (`None` = unset), and — when the key's value space is a
+/// closed, enumerable set — the valid options the TUI's picker offers.
+pub(crate) struct ResolvedSetting {
+    pub key: &'static str,
+    pub value: Option<String>,
+    pub options: Option<Vec<String>>,
+}
+
+/// The resolved settings plus the active layers — the projection `arc config list` and the TUI's
+/// config view share, so the two can't drift apart.
 pub(crate) struct ResolvedSettings {
-    pub values: Vec<(&'static str, Option<String>)>,
+    pub values: Vec<ResolvedSetting>,
     pub layers: Vec<String>,
 }
 
@@ -130,7 +173,14 @@ pub(crate) struct ResolvedSettings {
 pub(crate) fn resolved(repo: &std::path::Path) -> anyhow::Result<ResolvedSettings> {
     let s = Settings::load(repo)?;
     Ok(ResolvedSettings {
-        values: SETTINGS.iter().map(|st| (st.key, (st.read)(&s))).collect(),
+        values: SETTINGS
+            .iter()
+            .map(|st| ResolvedSetting {
+                key: st.key,
+                value: (st.read)(&s),
+                options: (st.options)(&s),
+            })
+            .collect(),
         layers: s.active_display(),
     })
 }
@@ -140,10 +190,11 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
     let ResolvedSettings { values, layers } = resolved(std::path::Path::new("."))?;
     let mut lines: Vec<String> = values
         .iter()
-        .map(|(key, value)| {
+        .map(|v| {
             format!(
-                "{key}: {}",
-                value
+                "{}: {}",
+                v.key,
+                v.value
                     .clone()
                     .unwrap_or_else(|| crate::settings::UNSET.to_owned())
             )
@@ -155,7 +206,7 @@ fn list(global: &GlobalArgs) -> anyhow::Result<()> {
     ));
     let settings = values
         .iter()
-        .map(|(key, value)| ((*key).to_owned(), serde_json::json!(value)))
+        .map(|v| (v.key.to_owned(), serde_json::json!(v.value)))
         .collect();
     emit(&Listed { settings, layers }, &lines.join("\n"), global.json)
 }

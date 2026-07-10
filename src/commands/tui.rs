@@ -598,19 +598,35 @@ enum LaunchStage {
 /// loaded.
 enum ConfigView {
     Loaded {
-        /// (key, resolved value or "(unset)") for every settable key.
-        values: Vec<(String, String)>,
+        /// One row per settable key: resolved display value + (closed-set keys) the picker options.
+        values: Vec<ConfigRow>,
         /// The active settings-file layers (user then project), empty if none.
         layers: Vec<String>,
         /// The cursor over the settings rows.
         selected: usize,
-        /// An in-progress edit of the selected setting — the input buffer; `None` while browsing.
-        /// Saving validates and writes through the same path as `arc config set` (the project layer).
-        editing: Option<String>,
+        /// An in-progress edit of the selected setting; `None` while browsing. Saving validates and
+        /// writes through the same path as `arc config set` (the project layer).
+        editing: Option<ConfigEdit>,
         /// The last save attempt's validation error, shown on the info line until the next action.
         error: Option<String>,
     },
     Error(String),
+}
+
+/// One config row as the view holds it: the key, its resolved display value, and — when the key's
+/// value space is a closed, enumerable set — the options a picker selects among.
+struct ConfigRow {
+    key: String,
+    value: String,
+    options: Option<Vec<String>>,
+}
+
+/// An in-progress edit of one setting. Closed-set keys (backend, logging, effort, ruleset) get a
+/// picker over their valid values; open ones — a model id (not headlessly enumerable), a dollar
+/// amount, a comma-list — edit as free text.
+enum ConfigEdit {
+    Text(String),
+    Pick { options: Vec<String>, index: usize },
 }
 
 /// Load the config view's state: the `arc config list` projection with the cursor at `selected`
@@ -623,11 +639,10 @@ fn load_config_view(cwd: &str, selected: usize) -> ConfigView {
             values: r
                 .values
                 .into_iter()
-                .map(|(k, v)| {
-                    (
-                        k.to_owned(),
-                        v.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
-                    )
+                .map(|v| ConfigRow {
+                    key: v.key.to_owned(),
+                    value: v.value.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
+                    options: v.options,
                 })
                 .collect(),
             layers: r.layers,
@@ -1386,13 +1401,17 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
             editing,
             error,
         } => {
-            let rows = values.iter().enumerate().map(|(i, (key, value))| {
-                // While editing, the selected row's value cell is the input buffer with a caret.
+            let rows = values.iter().enumerate().map(|(i, r)| {
+                // While editing, the selected row's value cell is the edit surface: the picker's
+                // current option between cycle arrows, or the text buffer with a caret.
                 let cell = match editing {
-                    Some(buffer) if i == *selected => format!("{buffer}█"),
-                    _ => value.clone(),
+                    Some(ConfigEdit::Pick { options, index }) if i == *selected => {
+                        format!("◂ {} ▸", options[*index])
+                    }
+                    Some(ConfigEdit::Text(buffer)) if i == *selected => format!("{buffer}█"),
+                    _ => r.value.clone(),
                 };
-                let row = Row::new([key.clone(), cell]);
+                let row = Row::new([r.key.clone(), cell]);
                 if i == *selected {
                     row.style(Style::new().reversed()) // the cursor
                 } else {
@@ -1564,7 +1583,8 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
 }
 
 /// Keys while browsing the config table: move the cursor, or open the selected setting for editing —
-/// prefilled with the current value (an unset one starts empty). Esc is handled one level up.
+/// a picker over its valid values when the key's set is closed, else a text input prefilled with the
+/// current value (an unset one starts empty). Esc is handled one level up.
 fn handle_config_key(app: &mut App, code: KeyCode) {
     let Some(ConfigView::Loaded {
         values,
@@ -1583,11 +1603,18 @@ fn handle_config_key(app: &mut App, code: KeyCode) {
         KeyCode::Home => *selected = 0,
         KeyCode::End => *selected = last,
         KeyCode::Enter => {
-            let current = &values[*selected].1;
-            *editing = Some(if current == crate::settings::UNSET {
-                String::new()
-            } else {
-                current.clone()
+            let row = &values[*selected];
+            *editing = Some(match &row.options {
+                Some(options) => ConfigEdit::Pick {
+                    // Start on the current value when it's among the options, else the first.
+                    index: options.iter().position(|o| *o == row.value).unwrap_or(0),
+                    options: options.clone(),
+                },
+                None => ConfigEdit::Text(if row.value == crate::settings::UNSET {
+                    String::new()
+                } else {
+                    row.value.clone()
+                }),
             });
             *error = None;
         }
@@ -1595,9 +1622,10 @@ fn handle_config_key(app: &mut App, code: KeyCode) {
     }
 }
 
-/// Keys while a config edit is open: edit the buffer, save (validated and written via the shared
-/// `arc config set` path, then re-resolved), or cancel. Runs ahead of the global bindings, so typed
-/// text can't quit the cockpit or open the palette.
+/// Keys while a config edit is open: cycle a picker or edit the text buffer, save (validated and
+/// written via the shared `arc config set` path, then re-resolved), or cancel. Runs ahead of the
+/// global bindings, so a free-text value containing `q` or `/` types into the buffer instead of
+/// quitting the cockpit or opening the palette.
 fn handle_config_edit_key(app: &mut App, code: KeyCode) {
     // The save is staged out of the view borrow — it rewrites settings and replaces the whole view.
     let mut save: Option<(String, String, usize)> = None;
@@ -1608,19 +1636,37 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
         error,
         ..
     }) = app.config.as_mut()
-        && let Some(buffer) = editing.as_mut()
     {
-        match code {
-            KeyCode::Enter => save = Some((values[*selected].0.clone(), buffer.clone(), *selected)),
-            KeyCode::Esc => {
-                *editing = None;
-                *error = None;
+        if code == KeyCode::Esc {
+            *editing = None;
+            *error = None;
+        } else if let Some(edit) = editing.as_mut() {
+            match edit {
+                ConfigEdit::Text(buffer) => match code {
+                    KeyCode::Enter => {
+                        save = Some((values[*selected].key.clone(), buffer.clone(), *selected));
+                    }
+                    KeyCode::Backspace => {
+                        buffer.pop();
+                    }
+                    KeyCode::Char(c) => buffer.push(c),
+                    _ => {}
+                },
+                ConfigEdit::Pick { options, index } => match code {
+                    KeyCode::Up | KeyCode::Left => {
+                        *index = (*index + options.len() - 1) % options.len();
+                    }
+                    KeyCode::Down | KeyCode::Right => *index = (*index + 1) % options.len(),
+                    KeyCode::Enter => {
+                        save = Some((
+                            values[*selected].key.clone(),
+                            options[*index].clone(),
+                            *selected,
+                        ));
+                    }
+                    _ => {}
+                },
             }
-            KeyCode::Backspace => {
-                buffer.pop();
-            }
-            KeyCode::Char(c) => buffer.push(c),
-            _ => {}
         }
     }
     if let Some((key, value, keep)) = save {
@@ -1949,19 +1995,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                     "/ commands · ↑↓ move · enter open · space toggle · esc back · q quit"
                 }
             }
-            Route::Config => {
-                if matches!(
-                    &app.config,
-                    Some(ConfigView::Loaded {
-                        editing: Some(_),
-                        ..
-                    })
-                ) {
-                    "enter save · esc cancel"
-                } else {
-                    "/ commands · ↑↓ move · enter edit · esc back · q quit"
-                }
-            }
+            Route::Config => match &app.config {
+                Some(ConfigView::Loaded {
+                    editing: Some(ConfigEdit::Pick { .. }),
+                    ..
+                }) => "↑↓ select · enter save · esc cancel",
+                Some(ConfigView::Loaded {
+                    editing: Some(ConfigEdit::Text(_)),
+                    ..
+                }) => "type value · enter save · esc cancel",
+                _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
+            },
             Route::Status | Route::Usage => "/ commands · esc back · q quit",
         }
     };

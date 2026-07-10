@@ -143,6 +143,12 @@ impl Settings {
         self.rulesets.get(id).map(Vec::as_slice)
     }
 
+    /// The defined ruleset ids (sorted — the map is ordered) — the closed set `defaults.ruleset` can
+    /// meaningfully take, enumerated for the config picker.
+    pub fn ruleset_ids(&self) -> Vec<String> {
+        self.rulesets.keys().cloned().collect()
+    }
+
     /// Whether per-run logging is on: the default, unless explicitly disabled. Single source for the
     /// "on unless `defaults.logging = false`" rule that `run_synthesis` gates on and `config` reports.
     pub fn logging_enabled(&self) -> bool {
