@@ -297,7 +297,9 @@ fn curl_get(
         .map(|b| ("Authorization", b))
         .into_iter()
         .collect();
-    crate::http::get(url, &[("Accept", accept)], &secret, dest)
+    // Redirects on: the release-asset flow *is* a 302 to signed storage, and this credential is
+    // Authorization-class — the kind curl documents stripping on a cross-host hop.
+    crate::http::get(url, &[("Accept", accept)], &secret, true, dest)
 }
 
 /// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but can

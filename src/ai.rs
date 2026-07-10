@@ -286,10 +286,13 @@ fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
         #[serde(default)]
         has_more: bool,
     }
+    // Redirects off, fail closed: no redirect is part of this API's contract, and `x-api-key` is a
+    // custom header curl would forward to whatever host a redirect named — no stripping exists for it.
     let body = crate::http::get(
         ANTHROPIC_MODELS_URL,
         &[("anthropic-version", ANTHROPIC_API_VERSION)],
         &[("x-api-key", &key)],
+        false,
         None,
     )
     .context("fetching Anthropic's model list")?;
@@ -326,8 +329,16 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
         data: Vec<Entry>,
     }
     let bearer = format!("Bearer {key}");
-    let body = crate::http::get(OPENAI_MODELS_URL, &[], &[("Authorization", &bearer)], None)
-        .context("fetching OpenAI's model list")?;
+    // Redirects off, fail closed: no redirect is part of this API's contract either — refused rather
+    // than followed, matching the Anthropic listing's posture.
+    let body = crate::http::get(
+        OPENAI_MODELS_URL,
+        &[],
+        &[("Authorization", &bearer)],
+        false,
+        None,
+    )
+    .context("fetching OpenAI's model list")?;
     let mut page: Page = serde_json::from_str(&body).context("parsing OpenAI's model list")?;
     page.data.sort_by_key(|e| std::cmp::Reverse(e.created));
     Ok(ModelListing {

@@ -1,8 +1,14 @@
 //! Minimal HTTP GET via the system `curl` — the one statement of arclite's outbound-HTTP mechanics,
 //! shared by the self-updater and the provider model listings. Secret header values ride curl's stdin
 //! config (`--config -`) — never argv (a process listing would expose them) and never a temp file;
-//! plain headers (an Accept, a version pin) go on argv normally. curl follows redirects and drops
-//! credential headers on a cross-host hop, which lands on signed storage that carries its own auth.
+//! plain headers (an Accept, a version pin) go on argv normally.
+//!
+//! Redirects are per-call, because curl's cross-host credential stripping covers only its
+//! *authentication* credentials (`Authorization`, per `--location`'s "curl only sends its credentials
+//! to the initial host") — a custom secret header (an `x-api-key`) is forwarded to whatever host a
+//! redirect names. So a caller sending Authorization to an endpoint whose contract *is* a redirect
+//! (a release asset's 302 to signed storage) opts in; one sending a custom-header credential must
+//! not follow redirects at all — refused outright rather than trusted to a stripping that never runs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -11,13 +17,16 @@ use std::process::{Command, Stdio};
 use anyhow::Context;
 
 /// `GET url`, returning the response body. `plain` headers go on argv; `secret` header values go via
-/// stdin config directives. With `dest`, the body is written there (a binary) and the returned string
-/// is empty; without, the body is captured and returned (JSON metadata). A `User-Agent` is always
-/// sent (some APIs — GitHub's — reject requests without one).
+/// stdin config directives. `follow_redirects` is the module-doc contract: on for an
+/// Authorization-credentialed endpoint whose designed flow is a redirect, off — fail closed — for a
+/// custom-header credential curl would forward. With `dest`, the body is written there (a binary) and
+/// the returned string is empty; without, the body is captured and returned (JSON metadata). A
+/// `User-Agent` is always sent (some APIs — GitHub's — reject requests without one).
 pub(crate) fn get(
     url: &str,
     plain: &[(&str, &str)],
     secret: &[(&str, &str)],
+    follow_redirects: bool,
     dest: Option<&Path>,
 ) -> anyhow::Result<String> {
     for (name, value) in secret {
@@ -29,10 +38,13 @@ pub(crate) fn get(
         );
     }
     let mut cmd = Command::new(curl_program());
-    cmd.args(["--location", "--fail", "--silent", "--show-error"])
+    cmd.args(["--fail", "--silent", "--show-error"])
         .args(["--user-agent", "arclite"])
         .arg(url)
         .stdout(Stdio::piped());
+    if follow_redirects {
+        cmd.arg("--location");
+    }
     for (name, value) in plain {
         cmd.arg("--header").arg(format!("{name}: {value}"));
     }
