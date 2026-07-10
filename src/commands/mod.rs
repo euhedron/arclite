@@ -135,6 +135,7 @@ pub fn run_synthesis(
         &synth::ContextSpec {
             includes: &args.include,
             rule_sources: &resolution.sources,
+            disabled_rules: &settings.disabled_rules,
             max: args.max_file_chars,
             changed: args.changed,
             exclude: &args.exclude,

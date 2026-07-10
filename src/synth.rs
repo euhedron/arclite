@@ -306,12 +306,17 @@ fn gather_includes(
     ctx
 }
 
-/// Render the rules from `rule_sources` as a context block, recording which rule ids were included.
-fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::Result<String> {
+/// Render the rules from `rule_sources` as a context block, recording which rule ids were included —
+/// and which the settings' disabled list filtered out, so a shrunken ruleset is always disclosed.
+fn gather_rules(
+    rule_sources: &[PathBuf],
+    disabled_rules: &[String],
+    sources: &mut Vec<String>,
+) -> anyhow::Result<String> {
     if rule_sources.is_empty() {
         return Ok(String::new());
     }
-    let (rules, skipped) = crate::rules::load_sources(rule_sources)?;
+    let (loaded, skipped) = crate::rules::load_sources(rule_sources)?;
     for src in &skipped {
         // A configured source that resolved to nothing (typo'd path, absent dir, or a non-`.md`
         // file): surface it in the manifest so a shrunken ruleset never goes unnoticed.
@@ -320,11 +325,28 @@ fn gather_rules(rule_sources: &[PathBuf], sources: &mut Vec<String>) -> anyhow::
             src.display()
         ));
     }
-    if rules.is_empty() {
+    let (rules, disabled) = crate::rules::partition_disabled(loaded, disabled_rules);
+    if !disabled.is_empty() {
         sources.push(format!(
-            "rules: none found in {} source(s)",
-            rule_sources.len()
+            "rules disabled in settings ({}): {}",
+            disabled.len(),
+            disabled
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
+    }
+    if rules.is_empty() {
+        // Distinguish an empty ruleset from one emptied by the disabled list — different remedies.
+        if disabled.is_empty() {
+            sources.push(format!(
+                "rules: none found in {} source(s)",
+                rule_sources.len()
+            ));
+        } else {
+            sources.push("rules: every resolved rule is disabled in settings".to_owned());
+        }
         return Ok(String::new());
     }
     let ids = rules
@@ -515,6 +537,8 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 pub struct ContextSpec<'a> {
     pub includes: &'a [PathBuf],
     pub rule_sources: &'a [PathBuf],
+    /// Rule ids the settings disable — filtered out of the context, with the filtering disclosed.
+    pub disabled_rules: &'a [String],
     pub max: Option<usize>,
     pub changed: bool,
     pub exclude: &'a [String],
@@ -533,6 +557,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     let &ContextSpec {
         includes,
         rule_sources,
+        disabled_rules,
         max,
         changed,
         exclude,
@@ -630,7 +655,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         &mut seen,
         &mut sources,
     ));
-    text.push_str(&gather_rules(rule_sources, &mut sources)?);
+    text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
     }

@@ -78,6 +78,13 @@ pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathB
     Ok((by_id.into_values().collect(), skipped))
 }
 
+/// Split `rules` into (active, disabled) by the configured disabled-id list, preserving order — the
+/// one statement of rule disabling, shared by the rules report and the synthesis context, so a rule
+/// can't be filtered on one surface yet slip into another.
+pub fn partition_disabled(rules: Vec<Rule>, disabled: &[String]) -> (Vec<Rule>, Vec<Rule>) {
+    rules.into_iter().partition(|r| !disabled.contains(&r.id))
+}
+
 /// Render rules as a prompt block — one section per rule (not a one-line bullet) so
 /// multi-paragraph rule bodies round-trip when fed back via `--rules`.
 pub fn render(rules: &[Rule]) -> String {

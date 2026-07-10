@@ -415,28 +415,26 @@ impl App {
     }
 
     /// Open the config view, loading the resolved settings + active layers for the launch directory.
-    /// Re-loaded on each entry (so an external edit shows on return). Read-only for now; the same
-    /// `resolved` projection backs `arc config list`, so the two can't drift.
+    /// Re-loaded on each entry (so an external edit shows on return); the same `resolved` projection
+    /// backs `arc config list`, so the two can't drift. Rows edit in place — see [`App::save_config`].
     fn open_config(&mut self) {
         self.route = Route::Config;
-        self.config = Some(
-            match crate::commands::config::resolved(std::path::Path::new(&self.cwd)) {
-                Ok(r) => ConfigView::Loaded {
-                    values: r
-                        .values
-                        .into_iter()
-                        .map(|(k, v)| {
-                            (
-                                k.to_owned(),
-                                v.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
-                            )
-                        })
-                        .collect(),
-                    layers: r.layers,
-                },
-                Err(e) => ConfigView::Error(format!("{e:#}")),
-            },
-        );
+        self.config = Some(load_config_view(&self.cwd, 0));
+    }
+
+    /// Persist an edited setting through the same validated write path as `arc config set` (the
+    /// project layer), then re-resolve the view with the cursor kept — the shown values are re-read
+    /// from disk, never assumed from the write. A rejected value keeps the edit open with the error
+    /// on the info line.
+    fn save_config(&mut self, key: &str, value: &str, keep: usize) {
+        match crate::commands::config::set_value(Path::new(&self.cwd), key, value, false) {
+            Ok(_) => self.config = Some(load_config_view(&self.cwd, keep)),
+            Err(e) => {
+                if let Some(ConfigView::Loaded { error, .. }) = self.config.as_mut() {
+                    *error = Some(format!("{e:#}"));
+                }
+            }
+        }
     }
 
     /// Open the usage view, loading the run-log rollup. Re-loaded on each entry (so a run since shows),
@@ -463,27 +461,74 @@ impl App {
     }
 
     /// Open the rules view, resolving the active ruleset fresh (re-run on each entry, like the other
-    /// views) into a browsable list — cursor over the rules, Enter opens one to read. The same
-    /// `rules::resolved` backs `arc rules`, so the two can't drift.
+    /// views) into a browsable list — cursor over the rules, Enter opens one to read, space toggles
+    /// one on/off. The same `rules::resolved` backs `arc rules`, so the two can't drift.
     fn open_rules(&mut self) {
         self.route = Route::Rules;
-        self.rules = Some(RulesView {
-            report: crate::commands::rules::resolved(Path::new(&self.cwd), None, None)
-                .map_err(|e| format!("{e:#}")),
-            selected: 0,
-            offset: 0,
-            detail: None,
-        });
+        self.rules = Some(RulesView::load(&self.cwd, 0, 0));
+    }
+
+    /// Toggle the selected rule between enabled and disabled: rewrite the settings' disabled list
+    /// through the same validated write path as `arc config set disabled_rules` (the project layer),
+    /// then re-resolve the view with the cursor kept — the shown state is re-read from disk, never
+    /// assumed from the write. A failed load or write is surfaced on the info line.
+    fn toggle_selected_rule(&mut self) {
+        let Some(view) = self.rules.as_ref() else {
+            return;
+        };
+        let Ok(report) = view.report.as_ref() else {
+            return;
+        };
+        let Some(entry) = report.rules.get(view.selected) else {
+            return;
+        };
+        let id = entry.id.clone();
+        let (keep_selected, keep_offset) = (view.selected, view.offset);
+        // The merged (user + project) disabled list ± the toggled id, written whole to the project
+        // layer — whole-list overlay is the layering rule this list already follows.
+        let toggled = match crate::settings::Settings::load(Path::new(&self.cwd)) {
+            Ok(settings) => {
+                let mut ids = settings.disabled_rules;
+                match ids.iter().position(|d| d == &id) {
+                    Some(i) => {
+                        ids.remove(i);
+                    }
+                    None => ids.push(id),
+                }
+                ids.join(",")
+            }
+            Err(e) => {
+                if let Some(v) = self.rules.as_mut() {
+                    v.notice = Some(format!("{e:#}"));
+                }
+                return;
+            }
+        };
+        if let Err(e) = crate::commands::config::set_value(
+            Path::new(&self.cwd),
+            "disabled_rules",
+            &toggled,
+            false,
+        ) {
+            if let Some(v) = self.rules.as_mut() {
+                v.notice = Some(format!("{e:#}"));
+            }
+            return;
+        }
+        self.rules = Some(RulesView::load(&self.cwd, keep_selected, keep_offset));
     }
 }
 
 /// The rules view's state: the resolved ruleset (or the resolution error), the cursor + scroll offset
-/// over the rule list, and — when a rule is opened — which rule and how far it's scrolled.
+/// over the rule list, when a rule is opened — which rule and how far it's scrolled — and a failed
+/// toggle-write's error for the info line.
 struct RulesView {
     report: Result<crate::commands::rules::Report, String>,
     selected: usize,
     offset: usize,
     detail: Option<RuleDetail>,
+    /// A failed toggle's load/write error, shown on the info line until the next action.
+    notice: Option<String>,
 }
 
 /// One opened rule: its index into the report's rules (valid by construction — set from a cursor that
@@ -494,6 +539,24 @@ struct RuleDetail {
 }
 
 impl RulesView {
+    /// Resolve the ruleset into a fresh view with the cursor at `selected`/`offset` (clamped) — one
+    /// loader for opening the view and re-resolving after a toggle, so shown state is always re-read.
+    fn load(cwd: &str, selected: usize, offset: usize) -> Self {
+        let report = crate::commands::rules::resolved(Path::new(cwd), None, None)
+            .map_err(|e| format!("{e:#}"));
+        let last = match &report {
+            Ok(r) => r.rules.len().saturating_sub(1),
+            Err(_) => 0,
+        };
+        Self {
+            report,
+            selected: selected.min(last),
+            offset,
+            detail: None,
+            notice: None,
+        }
+    }
+
     /// Move the cursor to `i`, keeping it inside the visible window.
     fn select(&mut self, i: usize) {
         select_visible(&mut self.selected, &mut self.offset, i);
@@ -530,16 +593,49 @@ enum LaunchStage {
     Failed { error: String },
 }
 
-/// The settings shown by the config view, loaded on entering it: the resolved defaults and active
-/// layers, or the error if `.arc/settings.json` couldn't be loaded.
+/// The settings shown by the config view, loaded on entering it: the resolved settings and active
+/// layers plus the cursor and any in-progress edit, or the error if `.arc/settings.json` couldn't be
+/// loaded.
 enum ConfigView {
     Loaded {
-        /// (key, resolved value or "(unset)") for every settable default.
+        /// (key, resolved value or "(unset)") for every settable key.
         values: Vec<(String, String)>,
         /// The active settings-file layers (user then project), empty if none.
         layers: Vec<String>,
+        /// The cursor over the settings rows.
+        selected: usize,
+        /// An in-progress edit of the selected setting — the input buffer; `None` while browsing.
+        /// Saving validates and writes through the same path as `arc config set` (the project layer).
+        editing: Option<String>,
+        /// The last save attempt's validation error, shown on the info line until the next action.
+        error: Option<String>,
     },
     Error(String),
+}
+
+/// Load the config view's state: the `arc config list` projection with the cursor at `selected`
+/// (clamped), not editing. One loader for opening the view and re-resolving it after a save, so the
+/// shown values are always re-read from disk, never assumed from the write.
+fn load_config_view(cwd: &str, selected: usize) -> ConfigView {
+    match crate::commands::config::resolved(Path::new(cwd)) {
+        Ok(r) => ConfigView::Loaded {
+            selected: selected.min(r.values.len().saturating_sub(1)),
+            values: r
+                .values
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_owned(),
+                        v.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
+                    )
+                })
+                .collect(),
+            layers: r.layers,
+            editing: None,
+            error: None,
+        },
+        Err(e) => ConfigView::Error(format!("{e:#}")),
+    }
 }
 
 /// Chrome lines a list/detail view (log, rules) spends around its boxed body: a title line above and
@@ -909,6 +1005,20 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         app.should_quit = true;
         return;
     }
+    // While a config edit is open, every key belongs to the input line — including `/`, `q`, and
+    // Esc — so typed text can't trigger the global bindings underneath.
+    if app.route == Route::Config
+        && matches!(
+            &app.config,
+            Some(ConfigView::Loaded {
+                editing: Some(_),
+                ..
+            })
+        )
+    {
+        handle_config_edit_key(app, key.code);
+        return;
+    }
     if app.palette.is_some() {
         handle_palette_key(app, key.code);
         return;
@@ -937,9 +1047,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         // Sections that own navigation state get their per-key handling here: the log's and the rules
-        // view's cursor + detail scroll, and the doctor report's scroll.
+        // view's cursor + detail scroll, the config table's cursor + edit entry, and the doctor
+        // report's scroll.
         _ if app.route == Route::Log => handle_log_key(app, key.code),
         _ if app.route == Route::Rules => handle_rules_key(app, key.code),
+        _ if app.route == Route::Config => handle_config_key(app, key.code),
         _ if app.route == Route::Doctor => handle_report_key(app, key.code),
         _ => {}
     }
@@ -1267,23 +1379,41 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
             Paragraph::new(format!("settings unreadable: {e}")).block(Block::bordered()),
             body,
         ),
-        ConfigView::Loaded { values, layers } => {
-            let rows = values
-                .iter()
-                .map(|(key, value)| Row::new([key.clone(), value.clone()]));
+        ConfigView::Loaded {
+            values,
+            layers,
+            selected,
+            editing,
+            error,
+        } => {
+            let rows = values.iter().enumerate().map(|(i, (key, value))| {
+                // While editing, the selected row's value cell is the input buffer with a caret.
+                let cell = match editing {
+                    Some(buffer) if i == *selected => format!("{buffer}█"),
+                    _ => value.clone(),
+                };
+                let row = Row::new([key.clone(), cell]);
+                if i == *selected {
+                    row.style(Style::new().reversed()) // the cursor
+                } else {
+                    row
+                }
+            });
             let table = Table::new(rows, CONFIG_COLUMN_WIDTHS)
                 .header(Row::new(["setting", "value"]).style(Style::new().bold()))
                 .block(Block::bordered());
             frame.render_widget(table, body);
 
-            frame.render_widget(
-                Line::from(format!(
+            // A rejected edit's error outranks the routine layers fact until the next action.
+            let info = match error {
+                Some(e) => Line::from(e.clone()).dim(),
+                None => Line::from(format!(
                     "layers: {}",
                     crate::join_or(layers, crate::settings::NO_LAYERS)
                 ))
                 .dim(),
-                layers_line,
-            );
+            };
+            frame.render_widget(info, layers_line);
         }
     }
 }
@@ -1400,26 +1530,101 @@ fn handle_report_key(app: &mut App, code: KeyCode) {
 }
 
 /// Keys while the `rules` view is on screen: move the cursor or page through the rule list, open the
-/// highlighted rule, or scroll an open rule's body. Esc is handled one level up (it closes an open
-/// rule, else backs out of the view).
+/// highlighted rule, toggle it on/off with space, or scroll an open rule's body. Esc is handled one
+/// level up (it closes an open rule, else backs out of the view).
 fn handle_rules_key(app: &mut App, code: KeyCode) {
-    let Some(view) = app.rules.as_mut() else {
-        return;
-    };
-    if let Some(detail) = view.detail.as_mut() {
-        if let Some(delta) = scroll_delta(code, LIST_ROWS) {
-            detail.scroll = scrolled(detail.scroll, delta);
+    // The toggle is staged out of the view borrow — it rewrites settings and replaces the whole view.
+    let mut toggle = false;
+    {
+        let Some(view) = app.rules.as_mut() else {
+            return;
+        };
+        if let Some(detail) = view.detail.as_mut() {
+            if let Some(delta) = scroll_delta(code, LIST_ROWS) {
+                detail.scroll = scrolled(detail.scroll, delta);
+            }
+            return;
         }
-        return;
+        let last = match &view.report {
+            Ok(report) if !report.rules.is_empty() => report.rules.len() - 1,
+            _ => return, // empty or unresolvable — nothing to navigate
+        };
+        match code {
+            KeyCode::Char(' ') => toggle = true,
+            _ => match list_action(code, view.selected, last) {
+                Some(ListAction::Select(i)) => view.select(i),
+                Some(ListAction::Open) => view.open_detail(),
+                None => {}
+            },
+        }
     }
-    let last = match &view.report {
-        Ok(report) if !report.rules.is_empty() => report.rules.len() - 1,
-        _ => return, // empty or unresolvable — nothing to navigate
+    if toggle {
+        app.toggle_selected_rule();
+    }
+}
+
+/// Keys while browsing the config table: move the cursor, or open the selected setting for editing —
+/// prefilled with the current value (an unset one starts empty). Esc is handled one level up.
+fn handle_config_key(app: &mut App, code: KeyCode) {
+    let Some(ConfigView::Loaded {
+        values,
+        selected,
+        editing,
+        error,
+        ..
+    }) = app.config.as_mut()
+    else {
+        return;
     };
-    match list_action(code, view.selected, last) {
-        Some(ListAction::Select(i)) => view.select(i),
-        Some(ListAction::Open) => view.open_detail(),
-        None => {}
+    let last = values.len().saturating_sub(1);
+    match code {
+        KeyCode::Up => *selected = selected.saturating_sub(1),
+        KeyCode::Down => *selected = (*selected + 1).min(last),
+        KeyCode::Home => *selected = 0,
+        KeyCode::End => *selected = last,
+        KeyCode::Enter => {
+            let current = &values[*selected].1;
+            *editing = Some(if current == crate::settings::UNSET {
+                String::new()
+            } else {
+                current.clone()
+            });
+            *error = None;
+        }
+        _ => {}
+    }
+}
+
+/// Keys while a config edit is open: edit the buffer, save (validated and written via the shared
+/// `arc config set` path, then re-resolved), or cancel. Runs ahead of the global bindings, so typed
+/// text can't quit the cockpit or open the palette.
+fn handle_config_edit_key(app: &mut App, code: KeyCode) {
+    // The save is staged out of the view borrow — it rewrites settings and replaces the whole view.
+    let mut save: Option<(String, String, usize)> = None;
+    if let Some(ConfigView::Loaded {
+        values,
+        selected,
+        editing,
+        error,
+        ..
+    }) = app.config.as_mut()
+        && let Some(buffer) = editing.as_mut()
+    {
+        match code {
+            KeyCode::Enter => save = Some((values[*selected].0.clone(), buffer.clone(), *selected)),
+            KeyCode::Esc => {
+                *editing = None;
+                *error = None;
+            }
+            KeyCode::Backspace => {
+                buffer.pop();
+            }
+            KeyCode::Char(c) => buffer.push(c),
+            _ => {}
+        }
+    }
+    if let Some((key, value, keep)) = save {
+        app.save_config(&key, &value, keep);
     }
 }
 
@@ -1452,7 +1657,8 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         }
     };
 
-    // Drilled into one rule: its body, scrolled; the info line carries the rule's full path.
+    // Drilled into one rule: its body, scrolled; the info line carries the rule's full path (and its
+    // off state, when disabled).
     if let Some(detail) = &view.detail {
         let rule = &report.rules[detail.index];
         frame.render_widget(Line::from(format!("rules · {}", rule.id)).bold(), header);
@@ -1463,7 +1669,11 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
                 .scroll((detail.scroll, 0)),
             body,
         );
-        frame.render_widget(Line::from(rule.source.clone()).dim(), info);
+        let mut info_text = rule.source.clone();
+        if rule.disabled {
+            info_text.push_str(" · disabled");
+        }
+        frame.render_widget(Line::from(info_text).dim(), info);
         return;
     }
 
@@ -1501,14 +1711,18 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, r)| {
+                // A two-char gutter marks a disabled rule, and its whole row dims — the off state
+                // reads at a glance without breaking the id/pool column alignment.
+                let gutter = if r.disabled { "✗ " } else { "  " };
                 let line = if one_pool {
-                    Line::from(r.id.clone())
+                    Line::from(format!("{gutter}{}", r.id))
                 } else {
                     Line::from(vec![
-                        Span::from(format!("{:<id_width$}  ", r.id)),
+                        Span::from(format!("{gutter}{:<id_width$}  ", r.id)),
                         Span::from(pool(&r.source)).dim(),
                     ])
                 };
+                let line = if r.disabled { line.dim() } else { line };
                 if view.offset + i == view.selected {
                     line.reversed() // the cursor
                 } else {
@@ -1518,7 +1732,22 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
             .collect();
         frame.render_widget(Paragraph::new(rows).block(Block::bordered()), body);
     }
+    // A failed toggle's error outranks the routine facts until the next action.
+    if let Some(notice) = &view.notice {
+        frame.render_widget(Line::from(notice.clone()).dim(), info);
+        return;
+    }
+    let disabled = report.rules.iter().filter(|r| r.disabled).count();
     let mut info_text = format!("{} rule(s)", report.rules.len());
+    if disabled > 0 {
+        info_text.push_str(&format!(" · {disabled} disabled"));
+    }
+    if !report.disabled_unmatched.is_empty() {
+        info_text.push_str(&format!(
+            " · {} disabled id(s) match no rule",
+            report.disabled_unmatched.len()
+        ));
+    }
     if !report.skipped.is_empty() {
         info_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
     }
@@ -1698,8 +1927,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.palette.is_some() {
         "↑↓ select · enter run · esc close"
     } else {
-        // The list views' hints swap when drilled into a detail — the same keys move the list but
-        // scroll an opened body. Their info lines carry facts only; every control is named here.
+        // The stateful views' hints track their mode — the same keys move a list but scroll an opened
+        // body, and a config edit owns the keyboard. Info lines carry facts only; every control is
+        // named here.
         const SCROLL: &str = "/ commands · ↑↓ scroll · esc back · q quit";
         const BROWSE: &str = "/ commands · ↑↓ move · enter open · esc back · q quit";
         match app.route {
@@ -1716,10 +1946,23 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 if app.rules.as_ref().is_some_and(|r| r.detail.is_some()) {
                     SCROLL
                 } else {
-                    BROWSE
+                    "/ commands · ↑↓ move · enter open · space toggle · esc back · q quit"
                 }
             }
-            Route::Status | Route::Config | Route::Usage => "/ commands · esc back · q quit",
+            Route::Config => {
+                if matches!(
+                    &app.config,
+                    Some(ConfigView::Loaded {
+                        editing: Some(_),
+                        ..
+                    })
+                ) {
+                    "enter save · esc cancel"
+                } else {
+                    "/ commands · ↑↓ move · enter edit · esc back · q quit"
+                }
+            }
+            Route::Status | Route::Usage => "/ commands · esc back · q quit",
         }
     };
 

@@ -71,6 +71,22 @@ const SETTINGS: &[Setting] = &[
             Ok(serde_json::Value::String(v.to_owned()))
         },
     },
+    // A root-level key (a list beside `defaults`/`rulesets`, not a scalar default) — the dotted-path
+    // writer below handles the single-segment path the same way. Read/written as a comma-joined line;
+    // stored as a JSON array.
+    Setting {
+        key: "disabled_rules",
+        read: |s| (!s.disabled_rules.is_empty()).then(|| s.disabled_rules.join(",")),
+        parse: |v| {
+            Ok(serde_json::Value::Array(
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(|id| serde_json::Value::String(id.to_owned()))
+                    .collect(),
+            ))
+        },
+    },
 ];
 
 /// Look up a settable key, or error listing the known set — so `get` and `set` validate one way.
@@ -158,13 +174,20 @@ fn get(key: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     )
 }
 
-/// Write one setting into a layer's `settings.json`, preserving every other key (and any rulesets).
-fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Result<()> {
+/// Write one setting into a layer's `settings.json`, preserving every other key (and any rulesets) —
+/// the shared write path behind `arc config set` and the TUI's editors. `repo` anchors the project
+/// layer; returns the file written. The value is validated and typed by the key's [`Setting::parse`].
+pub(crate) fn set_value(
+    repo: &std::path::Path,
+    key: &str,
+    value: &str,
+    user: bool,
+) -> anyhow::Result<std::path::PathBuf> {
     let setting = setting(key)?;
     let path = if user {
         Settings::user_path().context("cannot determine the home directory for the user layer")?
     } else {
-        Settings::project_path(std::path::Path::new("."))
+        Settings::project_path(repo)
     };
     // Load the existing layer (or start fresh) as a Value, so unrelated keys round-trip untouched.
     let mut root: serde_json::Value =
@@ -196,6 +219,12 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
     }
     std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&root)?))
         .with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(path)
+}
+
+/// The `config set` CLI: write via [`set_value`] and report where.
+fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Result<()> {
+    let path = set_value(std::path::Path::new("."), key, value, user)?;
     let human = format!("set {key} = {value}  ({})", path.display());
     emit(
         &serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() }),

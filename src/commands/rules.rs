@@ -3,11 +3,14 @@ use std::path::Path;
 use crate::cli::{GlobalArgs, RulesArgs};
 use crate::output::emit;
 
-/// One resolved rule as the report carries it: `id`, display-ready provenance, and the Markdown body.
+/// One resolved rule as the report carries it: `id`, display-ready provenance, the Markdown body, and
+/// whether the settings' disabled list switches it off (kept in the report — a disabled rule must stay
+/// visible to be re-enabled, and its absence from runs disclosed).
 pub(crate) struct RuleEntry {
     pub id: String,
     pub source: String,
     pub body: String,
+    pub disabled: bool,
 }
 
 /// The resolved-rules projection — the one statement backing `arc rules` (payload + human) and the
@@ -18,6 +21,9 @@ pub(crate) struct Report {
     pub description: String,
     pub sources: Vec<String>,
     pub rules: Vec<RuleEntry>,
+    /// Configured disabled ids that match no resolved rule — stale entries, surfaced so they can be
+    /// cleaned up rather than silently rotting in settings.
+    pub disabled_unmatched: Vec<String>,
     pub skipped: Vec<String>,
     pub layers: Vec<String>,
 }
@@ -34,24 +40,32 @@ pub(crate) fn resolved(
     let resolution = super::resolve_rule_sources(rules_override, ruleset, &settings)?;
     let (rules, skipped) = crate::rules::load_sources(&resolution.sources)?;
     let rel = |p: &Path| p.strip_prefix(&root).unwrap_or(p).display().to_string();
+    let disabled_unmatched = settings
+        .disabled_rules
+        .iter()
+        .filter(|id| !rules.iter().any(|r| &r.id == *id))
+        .cloned()
+        .collect();
     Ok(Report {
         description: resolution.description.clone(),
         sources: resolution.sources.iter().map(|p| rel(p)).collect(),
         rules: rules
             .into_iter()
             .map(|r| RuleEntry {
+                disabled: settings.disabled_rules.contains(&r.id),
                 id: r.id,
                 source: rel(&r.source),
                 body: r.body,
             })
             .collect(),
+        disabled_unmatched,
         skipped: skipped.iter().map(|p| rel(p)).collect(),
         layers: settings.active.iter().map(|p| rel(p)).collect(),
     })
 }
 
-/// The `rules` command — beyond the rules themselves, it also surfaces skipped sources and the
-/// settings layers in effect.
+/// The `rules` command — beyond the rules themselves, it also surfaces disabled rules, skipped
+/// sources, and the settings layers in effect.
 pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let report = resolved(&args.path, args.rules.as_deref(), args.ruleset.as_deref())?;
 
@@ -64,9 +78,28 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             lines.push(format!("  {s}"));
         }
     }
-    lines.push(format!("rules ({}):", report.rules.len()));
+    let disabled = report.rules.iter().filter(|r| r.disabled).count();
+    if disabled == 0 {
+        lines.push(format!("rules ({}):", report.rules.len()));
+    } else {
+        lines.push(format!(
+            "rules ({} active, {disabled} disabled):",
+            report.rules.len() - disabled,
+        ));
+    }
     for r in &report.rules {
-        lines.push(format!("  {} ← {}", r.id, r.source));
+        if r.disabled {
+            lines.push(format!("  {} ← {}  (disabled)", r.id, r.source));
+        } else {
+            lines.push(format!("  {} ← {}", r.id, r.source));
+        }
+    }
+    if !report.disabled_unmatched.is_empty() {
+        lines.push(format!(
+            "disabled ids matching no rule ({}): {}",
+            report.disabled_unmatched.len(),
+            report.disabled_unmatched.join(", ")
+        ));
     }
     if !report.skipped.is_empty() {
         lines.push(format!("skipped sources ({}):", report.skipped.len()));
@@ -84,8 +117,9 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "sources": report.sources,
         "rules": report.rules
             .iter()
-            .map(|r| serde_json::json!({ "id": r.id, "source": r.source }))
+            .map(|r| serde_json::json!({ "id": r.id, "source": r.source, "disabled": r.disabled }))
             .collect::<Vec<_>>(),
+        "disabled_unmatched": report.disabled_unmatched,
         "skipped": report.skipped,
         "settings": report.layers,
     });

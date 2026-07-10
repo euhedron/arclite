@@ -22,6 +22,10 @@ pub struct Settings {
     pub default_codex_model: Option<String>,
     /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
     pub default_codex_reasoning_effort: Option<String>,
+    /// Rule ids disabled for this scope (`disabled_rules` at the settings root — a list, so it sits
+    /// beside `defaults`/`rulesets` rather than under the scalar defaults). Filtered out of every
+    /// resolved ruleset, with the filtering disclosed wherever rules are reported.
+    pub disabled_rules: Vec<String>,
     /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
@@ -33,6 +37,8 @@ struct Raw {
     defaults: RawDefaults,
     #[serde(default)]
     rulesets: BTreeMap<String, RawRuleset>,
+    #[serde(default)]
+    disabled_rules: Option<Vec<String>>,
 }
 
 /// Scalar command defaults as written in `settings.json`. Each key is a typed field here (+ a merge
@@ -120,6 +126,11 @@ impl Settings {
             &mut self.default_codex_reasoning_effort,
             raw.defaults.codex_reasoning_effort,
         );
+        // The disabled list overlays whole, like the scalar defaults: a later layer that sets it wins,
+        // one that omits it leaves the earlier layer's in place.
+        if let Some(disabled) = raw.disabled_rules {
+            self.disabled_rules = disabled;
+        }
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
             self.rulesets.insert(id, sources); // project (merged last) wins on id collision
