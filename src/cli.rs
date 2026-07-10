@@ -87,6 +87,9 @@ pub enum Command {
     Tui(TuiArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),
+    /// List the models each backend's provider API reports available (needs an API key: the
+    /// provider's standard env var, or a saved user-layer `api_keys.*` setting).
+    Models(ModelsArgs),
     /// Get, set, or list arclite settings (`config list` shows the keys).
     Config(ConfigArgs),
     /// Show the run history, or one run's full result with `<id>` (the completed-run log).
@@ -160,6 +163,14 @@ pub struct TuiArgs {
     /// Seconds between live refreshes of the run registry.
     #[arg(long, value_name = "SECS", default_value_t = crate::commands::tui::DEFAULT_INTERVAL_SECS)]
     pub interval: f64,
+}
+
+/// Arguments for `arc models`.
+#[derive(Debug, Args)]
+pub struct ModelsArgs {
+    /// Only this backend's provider (default: every known backend).
+    #[arg(long, value_name = "NAME")]
+    pub backend: Option<String>,
 }
 
 /// Arguments for `arc rules`.

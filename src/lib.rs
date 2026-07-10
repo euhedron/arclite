@@ -7,6 +7,7 @@ use clap::Parser;
 mod ai;
 mod cli;
 mod commands;
+mod http;
 mod log;
 mod output;
 mod rules;
@@ -206,6 +207,9 @@ pub fn run() -> ExitCode {
         }
         Command::Tui(args) => commands::tui::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Rules(args) => commands::rules::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Models(args) => {
+            commands::models::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         Command::Config(args) => {
             commands::config::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }

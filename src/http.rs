@@ -1,0 +1,84 @@
+//! Minimal HTTP GET via the system `curl` — the one statement of arclite's outbound-HTTP mechanics,
+//! shared by the self-updater and the provider model listings. Secret header values ride curl's stdin
+//! config (`--config -`) — never argv (a process listing would expose them) and never a temp file;
+//! plain headers (an Accept, a version pin) go on argv normally. curl follows redirects and drops
+//! credential headers on a cross-host hop, which lands on signed storage that carries its own auth.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use anyhow::Context;
+
+/// `GET url`, returning the response body. `plain` headers go on argv; `secret` header values go via
+/// stdin config directives. With `dest`, the body is written there (a binary) and the returned string
+/// is empty; without, the body is captured and returned (JSON metadata). A `User-Agent` is always
+/// sent (some APIs — GitHub's — reject requests without one).
+pub(crate) fn get(
+    url: &str,
+    plain: &[(&str, &str)],
+    secret: &[(&str, &str)],
+    dest: Option<&Path>,
+) -> anyhow::Result<String> {
+    for (name, value) in secret {
+        // A secret becomes a curl config line; a quote, backslash (curl's escape char), or newline
+        // would break the quoting or inject further directives, so require a clean single-line value.
+        anyhow::ensure!(
+            !value.contains(['"', '\\', '\n', '\r']),
+            "the {name} credential must be a single line with no quotes, backslashes, or newlines"
+        );
+    }
+    let mut cmd = Command::new(curl_program());
+    cmd.args(["--location", "--fail", "--silent", "--show-error"])
+        .args(["--user-agent", "arclite"])
+        .arg(url)
+        .stdout(Stdio::piped());
+    for (name, value) in plain {
+        cmd.arg("--header").arg(format!("{name}: {value}"));
+    }
+    if let Some(dest) = dest {
+        cmd.arg("--output").arg(dest);
+    }
+    if !secret.is_empty() {
+        // Read the credential headers from config directives on stdin — not argv, not a file.
+        cmd.args(["--config", "-"]).stdin(Stdio::piped());
+    }
+    let mut child = cmd.spawn().context("running curl (is curl installed?)")?;
+    if !secret.is_empty() {
+        // Hand curl the headers, then close stdin (dropping the handle) so it proceeds. A few short
+        // lines, consumed before any response body, so this can't deadlock against captured stdout.
+        let mut stdin = child.stdin.take().expect("curl stdin was piped");
+        for (name, value) in secret {
+            stdin
+                .write_all(format!("header = \"{name}: {value}\"\n").as_bytes())
+                .context("passing a credential to curl")?;
+        }
+    }
+    let output = child.wait_with_output().context("waiting for curl")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "curl could not GET {url} (exit {})",
+        output
+            .status
+            .code()
+            .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
+/// the system cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl` on
+/// `PATH`.
+fn curl_program() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let system_curl = Path::new(&root).join("System32").join("curl.exe");
+        // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
+        // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
+        // can't-tell as present — keeping absent distinct from unreadable.
+        if system_curl.try_exists().unwrap_or(true) {
+            return system_curl;
+        }
+    }
+    PathBuf::from("curl")
+}

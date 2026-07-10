@@ -1,6 +1,4 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::Context;
 use serde::Deserialize;
@@ -19,9 +17,6 @@ const REPO: &str = "arclite";
 /// git remote (the version check); the API host serves the asset lookup + download `--apply` uses.
 const HOST: &str = "https://github.com";
 const API_HOST: &str = "https://api.github.com";
-
-/// The `User-Agent` sent on GitHub API requests — the API rejects requests that omit one.
-const USER_AGENT: &str = "arclite";
 
 /// Env var holding an optional GitHub token `--apply` uses to fetch the binary. A public release needs
 /// none; a private repo's assets need a token (a fine-grained `contents:read`, or a classic PAT). Read
@@ -287,78 +282,22 @@ fn download(url: &str, auth: Option<&str>, dest: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `GET url` with `curl`, returning the response body. `auth` (if set) rides an `Authorization` header
-/// via a stdin config directive (`--config -`) — never argv (a process listing would expose it) and
-/// never a temp file. `accept` sets the Accept header; a `User-Agent` is always sent (the GitHub API
-/// rejects requests without one). With `dest`, the body is written there (a binary) and the returned
-/// string is empty; without, the body is captured and returned (JSON metadata). curl follows redirects
-/// and drops the auth header on the cross-host hop to signed storage, which carries its own auth.
+/// `GET url` via [`crate::http::get`] — the shared curl path (secrets on stdin, never argv) — with
+/// `auth` (if set) as a `Bearer` credential. `accept` sets the Accept header; with `dest`, the body
+/// lands there (a binary), else it's returned (JSON metadata).
 fn curl_get(
     url: &str,
     auth: Option<&str>,
     accept: &str,
     dest: Option<&Path>,
 ) -> anyhow::Result<String> {
-    if let Some(token) = auth {
-        // A token becomes a curl config line; a quote, backslash (curl's escape char), or newline would
-        // break the quoting or inject further directives, so require a clean single-line token.
-        anyhow::ensure!(
-            !token.contains(['"', '\\', '\n', '\r']),
-            "{AUTH_ENV} must be a single-line token with no quotes, backslashes, or newlines"
-        );
-    }
-    let mut cmd = Command::new(curl_program());
-    cmd.args(["--location", "--fail", "--silent", "--show-error"])
-        .args(["--user-agent", USER_AGENT])
-        .arg("--header")
-        .arg(format!("Accept: {accept}"))
-        .arg(url)
-        .stdout(Stdio::piped());
-    if let Some(dest) = dest {
-        cmd.arg("--output").arg(dest);
-    }
-    if auth.is_some() {
-        // Read the Authorization header from a config directive on stdin — not argv, not a file.
-        cmd.args(["--config", "-"]).stdin(Stdio::piped());
-    }
-    let mut child = cmd.spawn().context("running curl (is curl installed?)")?;
-    if let Some(token) = auth {
-        // Hand curl the header, then close stdin (dropping the handle) so it proceeds. One short line,
-        // consumed before any response body, so it can't deadlock against the captured stdout.
-        child
-            .stdin
-            .take()
-            .expect("curl stdin was piped")
-            .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
-            .context("passing the credential to curl")?;
-    }
-    let output = child.wait_with_output().context("waiting for curl")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "curl could not GET {url} (exit {})",
-        output
-            .status
-            .code()
-            .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
-    );
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
-/// the system cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl` on
-/// `PATH`.
-fn curl_program() -> PathBuf {
-    #[cfg(windows)]
-    if let Some(root) = std::env::var_os("SystemRoot") {
-        let system_curl = Path::new(&root).join("System32").join("curl.exe");
-        // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
-        // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
-        // can't-tell as present — keeping absent distinct from unreadable.
-        if system_curl.try_exists().unwrap_or(true) {
-            return system_curl;
-        }
-    }
-    PathBuf::from("curl")
+    let bearer = auth.map(|token| format!("Bearer {token}"));
+    let secret: Vec<(&str, &str)> = bearer
+        .as_deref()
+        .map(|b| ("Authorization", b))
+        .into_iter()
+        .collect();
+    crate::http::get(url, &[("Accept", accept)], &secret, dest)
 }
 
 /// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but can

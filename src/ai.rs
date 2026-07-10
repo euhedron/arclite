@@ -263,6 +263,93 @@ pub(crate) fn known_backends() -> Vec<&'static str> {
     BACKENDS.iter().map(|(name, _)| *name).collect()
 }
 
+/// The providers' model-listing endpoints and Anthropic's pinned API version (the value the API
+/// docs' own example pins) — named here as each URL's one home.
+const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
+const ANTHROPIC_API_VERSION: &str = "2023-06-01";
+const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
+
+/// Anthropic's model listing (claude's provider): `x-api-key` + the pinned `anthropic-version`,
+/// newest first per the API's contract; `limit=1000` (the documented maximum) makes truncation
+/// practically impossible, and `has_more` is still surfaced rather than assumed false.
+fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
+    let (key, key_source) = provider_key(
+        "ANTHROPIC_API_KEY",
+        settings.api_key_anthropic.as_deref(),
+        "api_keys.anthropic",
+    )?;
+    #[derive(Deserialize)]
+    struct Entry {
+        id: String,
+        display_name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        data: Vec<Entry>,
+        #[serde(default)]
+        has_more: bool,
+    }
+    let body = crate::http::get(
+        ANTHROPIC_MODELS_URL,
+        &[("anthropic-version", ANTHROPIC_API_VERSION)],
+        &[("x-api-key", &key)],
+        None,
+    )
+    .context("fetching Anthropic's model list")?;
+    let page: Page = serde_json::from_str(&body).context("parsing Anthropic's model list")?;
+    Ok(ModelListing {
+        models: page
+            .data
+            .into_iter()
+            .map(|e| ModelEntry {
+                id: e.id,
+                display_name: e.display_name,
+            })
+            .collect(),
+        key_source,
+        truncated: page.has_more,
+    })
+}
+
+/// OpenAI's model listing (codex's provider): `Authorization: Bearer`, the whole set in one page.
+/// The API documents no order, so entries sort newest first by `created`; the ids are the API org's
+/// models — for a ChatGPT-subscription codex login that account's lineup may differ, and the listing's
+/// key provenance is disclosed so the report says whose account it reflects.
+fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
+    let (key, key_source) = provider_key(
+        "OPENAI_API_KEY",
+        settings.api_key_openai.as_deref(),
+        "api_keys.openai",
+    )?;
+    #[derive(Deserialize)]
+    struct Entry {
+        id: String,
+        #[serde(default)]
+        created: i64,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        data: Vec<Entry>,
+    }
+    let bearer = format!("Bearer {key}");
+    let body = crate::http::get(OPENAI_MODELS_URL, &[], &[("Authorization", &bearer)], None)
+        .context("fetching OpenAI's model list")?;
+    let mut page: Page = serde_json::from_str(&body).context("parsing OpenAI's model list")?;
+    page.data.sort_by_key(|e| std::cmp::Reverse(e.created));
+    Ok(ModelListing {
+        models: page
+            .data
+            .into_iter()
+            .map(|e| ModelEntry {
+                id: e.id,
+                display_name: None,
+            })
+            .collect(),
+        key_source,
+        truncated: false,
+    })
+}
+
 /// The claude backend's default model. Update when a newer model supersedes it; the run reports the
 /// resolved id the response returns.
 const DEFAULT_MODEL: &str = "claude-opus-4-8";
@@ -292,6 +379,12 @@ pub trait Backend {
     /// `defaults.codex_model` for codex), or `None` if unset. Required, so model resolution never
     /// branches on the backend name and a new backend must declare its own key rather than inherit one.
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str>;
+
+    /// The provider's live model listing for this backend — `Ok` newest-first, or an error naming
+    /// what's missing (no API key) or what failed. The authoritative enumeration: neither agent CLI
+    /// lists models headlessly, but each provider's `/v1/models` does, keyed by the provider's
+    /// standard env var or a saved user-layer `api_keys.*` setting.
+    fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing>;
 
     /// Resolve the run's model: an explicit `--model` wins; else this backend's configured default
     /// (its [`Backend::configured_model`]); else [`Backend::default_model`].
@@ -345,6 +438,40 @@ pub fn backend(name: &str) -> anyhow::Result<Box<dyn Backend>> {
         })
 }
 
+/// One provider-reported model: its id, and a human display name where the provider gives one.
+pub struct ModelEntry {
+    pub id: String,
+    pub display_name: Option<String>,
+}
+
+/// A provider's model listing plus its provenance: where the key came from (disclosed, so the report
+/// says whose account the list reflects) and whether pagination truncated it (disclosed, never silent).
+pub struct ModelListing {
+    pub models: Vec<ModelEntry>,
+    pub key_source: String,
+    pub truncated: bool,
+}
+
+/// Resolve a provider API key: the standard env var wins (a session override), else the saved
+/// user-layer setting; neither → an error naming both ways to supply one.
+fn provider_key(
+    env_var: &str,
+    saved: Option<&str>,
+    setting_key: &str,
+) -> anyhow::Result<(String, String)> {
+    if let Ok(key) = std::env::var(env_var)
+        && !key.is_empty()
+    {
+        return Ok((key, format!("{env_var} (environment)")));
+    }
+    if let Some(key) = saved {
+        return Ok((key.to_owned(), format!("{setting_key} (user settings)")));
+    }
+    anyhow::bail!(
+        "no API key for the model listing — set {env_var}, or save one with `arc config set --user {setting_key} <key>`"
+    )
+}
+
 /// The Claude Code CLI backend — `claude -p` with a controlled, isolated context: an explicit model,
 /// no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory` is set — no ambient
 /// memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls). So by default the
@@ -358,6 +485,10 @@ impl Backend for ClaudeBackend {
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
         settings.default_model.as_deref()
+    }
+
+    fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
+        anthropic_models(settings)
     }
 
     fn synthesize(
@@ -573,6 +704,10 @@ impl Backend for CodexBackend {
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
         settings.default_codex_model.as_deref()
+    }
+
+    fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
+        openai_models(settings)
     }
 
     /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).

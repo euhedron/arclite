@@ -89,6 +89,12 @@ enum Msg {
     },
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
+    /// A model-listing fetch finished for the named setting: the ids + a truncation flag, or the
+    /// failure to show. Folds in only if that setting's fetch is still the open edit.
+    ModelsFetched {
+        setting: String,
+        result: Result<(Vec<String>, bool), String>,
+    },
 }
 
 /// Which section is on screen. The cockpit opens on [`Route::Home`] (a launchpad), not a section — the
@@ -437,6 +443,28 @@ impl App {
         }
     }
 
+    /// Fetch a provider's model listing on a worker thread for the config picker; the result returns
+    /// as [`Msg::ModelsFetched`] and folds in only if that setting's fetch is still the open edit —
+    /// Esc abandons it, and a later edit outranks it (a stale listing must not dress a newer edit).
+    fn spawn_models_fetch(&self, backend: String, setting: String) {
+        let tx = self.tx.clone();
+        let cwd = self.cwd.clone();
+        thread::spawn(move || {
+            let result = (|| {
+                let settings = crate::settings::Settings::load(Path::new(&cwd))
+                    .map_err(|e| format!("{e:#}"))?;
+                let listing = crate::ai::backend(&backend)
+                    .and_then(|b| b.list_models(&settings))
+                    .map_err(|e| format!("{e:#}"))?;
+                Ok((
+                    listing.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
+                    listing.truncated,
+                ))
+            })();
+            let _ = tx.send(Msg::ModelsFetched { setting, result });
+        });
+    }
+
     /// Open the usage view, loading the run-log rollup. Re-loaded on each entry (so a run since shows),
     /// mirroring `open_config`; the same `usage::rollup` backs `arc usage`, so the two can't drift.
     fn open_usage(&mut self) {
@@ -613,21 +641,32 @@ enum ConfigView {
     Error(String),
 }
 
-/// One config row as the view holds it: the key, its resolved display value, and — when the key's
-/// value space is a closed, enumerable set — the options a picker selects among.
+/// One config row as the view holds it: the key, its resolved display value, and its value space —
+/// closed (picker), remote (provider-fetched model listing), or open (text).
 struct ConfigRow {
     key: String,
     value: String,
-    options: Option<Vec<String>>,
+    space: crate::commands::config::ValueSpace,
 }
 
 /// An in-progress edit of one setting. Closed-set keys (backend, logging, effort, ruleset) get a
-/// picker over their valid values; open ones — a model id (not headlessly enumerable), a dollar
-/// amount, a comma-list — edit as free text.
+/// picker over their valid values; the model keys fetch the provider's listing first (`Fetching`,
+/// then a picker with a free-entry row); open ones — a dollar amount, a comma-list, a secret — edit
+/// as free text.
 enum ConfigEdit {
     Text(String),
-    Pick { options: Vec<String>, index: usize },
+    Pick {
+        options: Vec<String>,
+        index: usize,
+    },
+    /// The provider's model listing is being fetched on a worker thread; folds into a `Pick` (or a
+    /// `Text` with the failure on the info line) via [`Msg::ModelsFetched`].
+    Fetching,
 }
+
+/// The picker row that drops into free-text entry — offered where the enumerated values don't bound
+/// the space (a model listing: any id the provider accepts remains valid beyond it).
+const OTHER_OPTION: &str = "(type a model id…)";
 
 /// Load the config view's state: the `arc config list` projection with the cursor at `selected`
 /// (clamped), not editing. One loader for opening the view and re-resolving it after a save, so the
@@ -642,7 +681,7 @@ fn load_config_view(cwd: &str, selected: usize) -> ConfigView {
                 .map(|v| ConfigRow {
                     key: v.key.to_owned(),
                     value: v.value.unwrap_or_else(|| crate::settings::UNSET.to_owned()),
-                    options: v.options,
+                    space: v.space,
                 })
                 .collect(),
             layers: r.layers,
@@ -980,6 +1019,41 @@ fn update(app: &mut App, msg: Msg) {
         Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => handle_key(app, key),
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
         Msg::UpdateChecked(newer) => app.update = newer,
+        Msg::ModelsFetched { setting, result } => {
+            // Fold in only if this setting's fetch is still the open edit — Esc may have abandoned
+            // it, or the cursor moved on to another setting (a stale listing is dropped, not applied).
+            if app.route == Route::Config
+                && let Some(ConfigView::Loaded {
+                    values,
+                    selected,
+                    editing,
+                    error,
+                    ..
+                }) = app.config.as_mut()
+                && matches!(editing, Some(ConfigEdit::Fetching))
+                && values.get(*selected).is_some_and(|row| row.key == setting)
+            {
+                match result {
+                    Ok((ids, truncated)) => {
+                        let current = &values[*selected].value;
+                        let mut options = ids;
+                        options.push(OTHER_OPTION.to_owned());
+                        *editing = Some(ConfigEdit::Pick {
+                            index: options.iter().position(|o| o == current).unwrap_or(0),
+                            options,
+                        });
+                        // Truncation is a fact the picker can't show — the info line can.
+                        *error =
+                            truncated.then(|| "the provider reports more pages exist".to_owned());
+                    }
+                    Err(e) => {
+                        // Degrade to free text with the reason on the info line — entry stays open.
+                        *editing = Some(ConfigEdit::Text(String::new()));
+                        *error = Some(e);
+                    }
+                }
+            }
+        }
         Msg::LaunchPreview { verb, result } => {
             // Fold the dry-run's outcome into the gate only if the open launch is still the one it was
             // computed for — cancelled (`launch` is `None`) or replaced by another verb's launch, the
@@ -1409,6 +1483,7 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                         format!("◂ {} ▸", options[*index])
                     }
                     Some(ConfigEdit::Text(buffer)) if i == *selected => format!("{buffer}█"),
+                    Some(ConfigEdit::Fetching) if i == *selected => "fetching models…".to_owned(),
                     _ => r.value.clone(),
                 };
                 let row = Row::new([r.key.clone(), cell]);
@@ -1586,39 +1661,53 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
 /// a picker over its valid values when the key's set is closed, else a text input prefilled with the
 /// current value (an unset one starts empty). Esc is handled one level up.
 fn handle_config_key(app: &mut App, code: KeyCode) {
-    let Some(ConfigView::Loaded {
+    // A remote space's fetch is staged out of the view borrow — it spawns a worker off `app`.
+    let mut fetch: Option<(String, String)> = None;
+    if let Some(ConfigView::Loaded {
         values,
         selected,
         editing,
         error,
         ..
     }) = app.config.as_mut()
-    else {
-        return;
-    };
-    let last = values.len().saturating_sub(1);
-    match code {
-        KeyCode::Up => *selected = selected.saturating_sub(1),
-        KeyCode::Down => *selected = (*selected + 1).min(last),
-        KeyCode::Home => *selected = 0,
-        KeyCode::End => *selected = last,
-        KeyCode::Enter => {
-            let row = &values[*selected];
-            *editing = Some(match &row.options {
-                Some(options) => ConfigEdit::Pick {
-                    // Start on the current value when it's among the options, else the first.
-                    index: options.iter().position(|o| *o == row.value).unwrap_or(0),
-                    options: options.clone(),
-                },
-                None => ConfigEdit::Text(if row.value == crate::settings::UNSET {
-                    String::new()
-                } else {
-                    row.value.clone()
-                }),
-            });
-            *error = None;
+    {
+        let last = values.len().saturating_sub(1);
+        match code {
+            KeyCode::Up => *selected = selected.saturating_sub(1),
+            KeyCode::Down => *selected = (*selected + 1).min(last),
+            KeyCode::Home => *selected = 0,
+            KeyCode::End => *selected = last,
+            KeyCode::Enter => {
+                use crate::commands::config::ValueSpace;
+                let row = &values[*selected];
+                *editing = Some(match &row.space {
+                    ValueSpace::Closed(options) => ConfigEdit::Pick {
+                        // Start on the current value when it's among the options, else the first.
+                        index: options.iter().position(|o| *o == row.value).unwrap_or(0),
+                        options: options.clone(),
+                    },
+                    ValueSpace::Remote { backend } => {
+                        fetch = Some(((*backend).to_owned(), row.key.clone()));
+                        ConfigEdit::Fetching
+                    }
+                    // A secret's mask (like an unset value) must not prefill the buffer.
+                    ValueSpace::Open => ConfigEdit::Text(
+                        if row.value == crate::settings::UNSET
+                            || row.value == crate::settings::SET_MASK
+                        {
+                            String::new()
+                        } else {
+                            row.value.clone()
+                        },
+                    ),
+                });
+                *error = None;
+            }
+            _ => {}
         }
-        _ => {}
+    }
+    if let Some((backend, setting)) = fetch {
+        app.spawn_models_fetch(backend, setting);
     }
 }
 
@@ -1641,6 +1730,9 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
             *editing = None;
             *error = None;
         } else if let Some(edit) = editing.as_mut() {
+            // Picking the free-entry row swaps the picker for a text input — staged out of the
+            // match's borrow of the picker's own fields.
+            let mut switch_to_text = false;
             match edit {
                 ConfigEdit::Text(buffer) => match code {
                     KeyCode::Enter => {
@@ -1658,14 +1750,23 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
                     }
                     KeyCode::Down | KeyCode::Right => *index = (*index + 1) % options.len(),
                     KeyCode::Enter => {
-                        save = Some((
-                            values[*selected].key.clone(),
-                            options[*index].clone(),
-                            *selected,
-                        ));
+                        if options[*index] == OTHER_OPTION {
+                            switch_to_text = true;
+                        } else {
+                            save = Some((
+                                values[*selected].key.clone(),
+                                options[*index].clone(),
+                                *selected,
+                            ));
+                        }
                     }
                     _ => {}
                 },
+                // Awaiting the listing; Esc (handled above) is the only meaningful key.
+                ConfigEdit::Fetching => {}
+            }
+            if switch_to_text {
+                *edit = ConfigEdit::Text(String::new());
             }
         }
     }
@@ -2004,6 +2105,10 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                     editing: Some(ConfigEdit::Text(_)),
                     ..
                 }) => "type value · enter save · esc cancel",
+                Some(ConfigView::Loaded {
+                    editing: Some(ConfigEdit::Fetching),
+                    ..
+                }) => "esc cancel",
                 _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
             },
             Route::Status | Route::Usage => "/ commands · esc back · q quit",

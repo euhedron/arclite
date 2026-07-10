@@ -26,6 +26,12 @@ pub struct Settings {
     /// beside `defaults`/`rulesets` rather than under the scalar defaults). Filtered out of every
     /// resolved ruleset, with the filtering disclosed wherever rules are reported.
     pub disabled_rules: Vec<String>,
+    /// Saved provider API keys for the model listings (`api_keys.anthropic` / `api_keys.openai`) —
+    /// **user layer only**: a project's settings.json is tracked, and a tracked file must never hold
+    /// a secret (the loader rejects a project-layer key outright). The standard env vars
+    /// (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) take precedence when set.
+    pub api_key_anthropic: Option<String>,
+    pub api_key_openai: Option<String>,
     /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
@@ -39,6 +45,14 @@ struct Raw {
     rulesets: BTreeMap<String, RawRuleset>,
     #[serde(default)]
     disabled_rules: Option<Vec<String>>,
+    #[serde(default)]
+    api_keys: Option<RawApiKeys>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawApiKeys {
+    anthropic: Option<String>,
+    openai: Option<String>,
 }
 
 /// Scalar command defaults as written in `settings.json`. Each key is a typed field here (+ a merge
@@ -76,13 +90,13 @@ impl Settings {
     pub fn load(repo: &Path) -> anyhow::Result<Self> {
         let mut settings = Settings::default();
         if let Some(path) = Self::user_path() {
-            settings.merge(&path)?;
+            settings.merge(&path, true)?;
         }
-        settings.merge(&Self::project_path(repo))?;
+        settings.merge(&Self::project_path(repo), false)?;
         Ok(settings)
     }
 
-    fn merge(&mut self, path: &Path) -> anyhow::Result<()> {
+    fn merge(&mut self, path: &Path, user_layer: bool) -> anyhow::Result<()> {
         // A missing file is fine — this layer is optional.
         let Some(text) = crate::read_optional(path).with_context(|| read_error(path))? else {
             return Ok(());
@@ -130,6 +144,18 @@ impl Settings {
         // one that omits it leaves the earlier layer's in place.
         if let Some(disabled) = raw.disabled_rules {
             self.disabled_rules = disabled;
+        }
+        // API keys load from the user layer only: a project's settings.json is tracked, and a tracked
+        // file must never hold a secret — rejected loudly, not skipped, so a committed key is caught
+        // the first time anything loads settings rather than lingering.
+        if let Some(keys) = raw.api_keys {
+            anyhow::ensure!(
+                user_layer,
+                "api_keys found in {} — API keys belong in the user layer (~/.arc/settings.json), never a repo's tracked settings",
+                path.display()
+            );
+            overlay(&mut self.api_key_anthropic, keys.anthropic);
+            overlay(&mut self.api_key_openai, keys.openai);
         }
         for (id, rs) in raw.rulesets {
             let sources = rs.sources.iter().map(|s| resolve(dir, s)).collect();
@@ -199,6 +225,10 @@ pub(crate) const NO_LAYERS: &str = "built-in defaults (no .arc/settings.json act
 /// The display sentinel for a settable default with no configured value — shown by `arc config list`,
 /// `arc config get`, and the TUI config view, single-sourced here so the three can't drift.
 pub(crate) const UNSET: &str = "(unset)";
+
+/// The display sentinel for a *secret* setting that is configured — presence is shown, the value
+/// never is (not in `config list`/`get`, not in the TUI, not in a `set` echo).
+pub(crate) const SET_MASK: &str = "(set)";
 
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
 /// relative to the settings file's own directory `dir` (so a repo's ruleset referencing `rules`

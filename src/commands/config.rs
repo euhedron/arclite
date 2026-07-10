@@ -14,15 +14,26 @@ struct Setting {
     key: &'static str,
     read: fn(&Settings) -> Option<String>,
     parse: fn(&str) -> anyhow::Result<serde_json::Value>,
-    /// The closed set of valid values, when the key has an enumerable one (the TUI picks among them);
-    /// `None` for open values — a model id (not headlessly enumerable), a dollar amount, a comma-list
-    /// — which edit as free text. Enumerations come from the same single sources the validators use.
-    options: fn(&Settings) -> Option<Vec<String>>,
+    /// The key's value space: a closed enumerable set (the TUI picks among them, from the same
+    /// single sources the validators use), a provider-fetched remote listing (the model keys), or
+    /// open — a dollar amount, a comma-list, a secret — edited as free text.
+    space: fn(&Settings) -> ValueSpace,
 }
 
-/// `options` for the open-valued settings (free text).
-fn no_options(_: &Settings) -> Option<Vec<String>> {
-    None
+/// A settable key's value space — how an editor should offer values.
+pub(crate) enum ValueSpace {
+    /// Free text; any (validated) value.
+    Open,
+    /// A closed set: exactly these values are valid.
+    Closed(Vec<String>),
+    /// An open space whose current values the named backend's provider API lists live (model ids) —
+    /// fetched on demand; free entry stays valid beyond the listing.
+    Remote { backend: &'static str },
+}
+
+/// `space` for the open-valued settings (free text).
+fn open_space(_: &Settings) -> ValueSpace {
+    ValueSpace::Open
 }
 
 /// `parse` for the plain-string settings.
@@ -35,7 +46,9 @@ const SETTINGS: &[Setting] = &[
         key: "defaults.model",
         read: |s| s.default_model.clone(),
         parse: parse_string,
-        options: no_options,
+        // "claude"/"codex" here are the registry names the fetch resolves via `ai::backend` — a
+        // rename fails loudly there, never silently detaches the picker from its provider.
+        space: |_| ValueSpace::Remote { backend: "claude" },
     },
     Setting {
         key: "defaults.backend",
@@ -44,8 +57,8 @@ const SETTINGS: &[Setting] = &[
             crate::ai::validate_backend(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
         },
-        options: |_| {
-            Some(
+        space: |_| {
+            ValueSpace::Closed(
                 crate::ai::known_backends()
                     .iter()
                     .map(|b| (*b).to_owned())
@@ -58,9 +71,13 @@ const SETTINGS: &[Setting] = &[
         read: |s| s.default_ruleset.clone(),
         parse: parse_string,
         // The defined rulesets are the meaningful values; none defined -> free text (a future one).
-        options: |s| {
+        space: |s| {
             let ids = s.ruleset_ids();
-            (!ids.is_empty()).then_some(ids)
+            if ids.is_empty() {
+                ValueSpace::Open
+            } else {
+                ValueSpace::Closed(ids)
+            }
         },
     },
     Setting {
@@ -71,7 +88,7 @@ const SETTINGS: &[Setting] = &[
                 v.parse::<bool>().context("expected `true` or `false`")?,
             ))
         },
-        options: |_| Some(vec!["true".to_owned(), "false".to_owned()]),
+        space: |_| ValueSpace::Closed(vec!["true".to_owned(), "false".to_owned()]),
     },
     Setting {
         key: "defaults.max_budget_usd",
@@ -81,13 +98,13 @@ const SETTINGS: &[Setting] = &[
             crate::settings::validate_budget(cap)?;
             Ok(serde_json::Value::from(cap))
         },
-        options: no_options,
+        space: open_space,
     },
     Setting {
         key: "defaults.codex_model",
         read: |s| s.default_codex_model.clone(),
         parse: parse_string,
-        options: no_options,
+        space: |_| ValueSpace::Remote { backend: "codex" },
     },
     Setting {
         key: "defaults.codex_reasoning_effort",
@@ -96,8 +113,8 @@ const SETTINGS: &[Setting] = &[
             crate::ai::validate_reasoning_effort(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
         },
-        options: |_| {
-            Some(
+        space: |_| {
+            ValueSpace::Closed(
                 crate::ai::CODEX_REASONING_EFFORTS
                     .iter()
                     .map(|e| (*e).to_owned())
@@ -120,9 +137,47 @@ const SETTINGS: &[Setting] = &[
                     .collect(),
             ))
         },
-        options: no_options,
+        space: open_space,
+    },
+    // The api_keys rows: user-layer only (`set_value` elevates + the loader rejects a project-layer
+    // key) and masked — list/get/the TUI show presence, never the secret. An empty value unsets.
+    Setting {
+        key: "api_keys.anthropic",
+        read: |s| {
+            s.api_key_anthropic
+                .as_ref()
+                .map(|_| crate::settings::SET_MASK.to_owned())
+        },
+        parse: parse_secret,
+        space: open_space,
+    },
+    Setting {
+        key: "api_keys.openai",
+        read: |s| {
+            s.api_key_openai
+                .as_ref()
+                .map(|_| crate::settings::SET_MASK.to_owned())
+        },
+        parse: parse_secret,
+        space: open_space,
     },
 ];
+
+/// `parse` for the secret settings: a single-line value stores as a string; an empty value parses to
+/// JSON `null`, which [`set_value`] treats as "remove the key" — the unset path for secrets.
+fn parse_secret(value: &str) -> anyhow::Result<serde_json::Value> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    Ok(serde_json::Value::String(v.to_owned()))
+}
+
+/// Whether `key` may only live in the user layer — the secrets: a project's settings.json is
+/// tracked, and a tracked file must never hold one.
+pub(crate) fn user_layer_only(key: &str) -> bool {
+    key.starts_with("api_keys.")
+}
 
 /// Look up a settable key, or error listing the known set — so `get` and `set` validate one way.
 fn setting(key: &str) -> anyhow::Result<&'static Setting> {
@@ -158,7 +213,7 @@ struct Listed {
 pub(crate) struct ResolvedSetting {
     pub key: &'static str,
     pub value: Option<String>,
-    pub options: Option<Vec<String>>,
+    pub space: ValueSpace,
 }
 
 /// The resolved settings plus the active layers — the projection `arc config list` and the TUI's
@@ -178,7 +233,7 @@ pub(crate) fn resolved(repo: &std::path::Path) -> anyhow::Result<ResolvedSetting
             .map(|st| ResolvedSetting {
                 key: st.key,
                 value: (st.read)(&s),
-                options: (st.options)(&s),
+                space: (st.space)(&s),
             })
             .collect(),
         layers: s.active_display(),
@@ -235,6 +290,9 @@ pub(crate) fn set_value(
     user: bool,
 ) -> anyhow::Result<std::path::PathBuf> {
     let setting = setting(key)?;
+    // Secrets are elevated to the user layer regardless of the flag: a project's settings.json is
+    // tracked, and a tracked file must never hold one.
+    let user = user || user_layer_only(key);
     let path = if user {
         Settings::user_path().context("cannot determine the home directory for the user layer")?
     } else {
@@ -261,9 +319,16 @@ pub(crate) fn set_value(
             .entry(*part)
             .or_insert_with(|| serde_json::json!({}));
     }
-    node.as_object_mut()
-        .with_context(|| format!("the root of {} is not a JSON object", path.display()))?
-        .insert((*leaf).to_owned(), typed);
+    let object = node
+        .as_object_mut()
+        .with_context(|| format!("the root of {} is not a JSON object", path.display()))?;
+    if typed.is_null() {
+        // A null from the parse means "unset" — remove the leaf (writing a literal null would read
+        // as set-but-empty).
+        object.remove(*leaf);
+    } else {
+        object.insert((*leaf).to_owned(), typed);
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
@@ -276,9 +341,19 @@ pub(crate) fn set_value(
 /// The `config set` CLI: write via [`set_value`] and report where.
 fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     let path = set_value(std::path::Path::new("."), key, value, user)?;
-    let human = format!("set {key} = {value}  ({})", path.display());
+    // A secret's value is never echoed — not to the terminal, not into a --json consumer's log.
+    let shown = if user_layer_only(key) {
+        if value.trim().is_empty() {
+            crate::settings::UNSET
+        } else {
+            crate::settings::SET_MASK
+        }
+    } else {
+        value
+    };
+    let human = format!("set {key} = {shown}  ({})", path.display());
     emit(
-        &serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() }),
+        &serde_json::json!({ "key": key, "value": shown, "path": path.display().to_string() }),
         &human,
         global.json,
     )
