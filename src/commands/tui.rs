@@ -2200,15 +2200,43 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         LaunchStage::Failed { error } => (format!("launch {verb} · failed"), error.clone()),
     };
 
-    let lines: Vec<Line> = body.lines().map(Line::from).collect();
-    let height = (lines.len() as u16 + BORDER).min(area.height); // border + body; the footer holds the hint
+    // This modal is the spend-authorization surface, so nothing in it may be *silently* clipped:
+    // long lines wrap (the estimate stays whole on a narrow terminal), and when the wrapped body
+    // still outruns the terminal's height, the shortfall is disclosed on the modal's last line
+    // rather than the tail just vanishing.
+    let inner_width = (LAUNCH_WIDTH.min(area.width)).saturating_sub(BORDER) as usize;
+    let wrapped_rows: u16 = body
+        .lines()
+        .map(|l| (l.chars().count().max(1)).div_ceil(inner_width.max(1)) as u16)
+        .sum();
+    let height = (wrapped_rows + BORDER).min(area.height); // border + body; the footer holds the hint
     let rect = centered(area, LAUNCH_WIDTH, height);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
     let block = Block::bordered().title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
-    frame.render_widget(Paragraph::new(lines), inner);
+    if wrapped_rows > inner.height {
+        let [body_area, disclosure] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(inner);
+        frame.render_widget(
+            Paragraph::new(body.as_str()).wrap(Wrap { trim: false }),
+            body_area,
+        );
+        frame.render_widget(
+            Line::from(format!(
+                "… {} more line(s) — enlarge the terminal for the full preview",
+                wrapped_rows - inner.height
+            ))
+            .yellow(),
+            disclosure,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(body.as_str()).wrap(Wrap { trim: false }),
+            inner,
+        );
+    }
 }
 
 /// `text` cut to at most `max` characters with a trailing `…` when it can't fit whole — truncation
