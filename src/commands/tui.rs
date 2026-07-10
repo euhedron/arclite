@@ -81,12 +81,18 @@ enum Msg {
     Input(Event),
     /// The refresh tick: re-read live state.
     Tick,
-    /// A launch's dry-run finished on a worker thread: which verb it previewed (the launch it may fold
-    /// into must still be for that verb — a late preview must not dress a newer launch), and its
-    /// preview text or an error to show.
+    /// A launch's dry-run finished on a worker thread: the generation that spawned it (the open
+    /// launch must still be on that generation — a late preview must not dress a newer or re-shaped
+    /// launch), and its preview text or an error to show.
     LaunchPreview {
-        verb: &'static str,
+        generation: u64,
         result: Result<String, String>,
+    },
+    /// A launch's model-listing fetch finished (the first `m` press spawns it): generation-guarded
+    /// like the preview, carrying the ids or the failure for the modal's notice line.
+    LaunchModels {
+        generation: u64,
+        result: Result<Vec<String>, String>,
     },
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
@@ -287,6 +293,9 @@ struct App {
     palette: Option<Palette>,
     /// The in-flight launch (dry-run → gate), or `None`. When present it overlays everything.
     launch: Option<Launch>,
+    /// Monotonic launch generation — each (re)spawned preview or listing carries the value current
+    /// at spawn, and results fold in only while it still matches (see [`Launch::generation`]).
+    launch_generation: u64,
     should_quit: bool,
     /// A clone of the loop's `mpsc` sender, handed to launch worker threads so a dry-run reports back.
     tx: mpsc::Sender<Msg>,
@@ -333,6 +342,7 @@ impl App {
             status: Snapshot::read(),
             palette: None,
             launch: None,
+            launch_generation: 0,
             should_quit: false,
             tx,
             cwd,
@@ -352,18 +362,146 @@ impl App {
     /// which reports the preview back via [`Msg::LaunchPreview`]. The dry-run spends nothing.
     fn start_launch(&mut self, verb: Command) {
         self.palette = None;
+        // The `r` cycle's options, captured at gate-open; an unloadable settings file just means no
+        // ruleset cycling (the run itself resolves settings independently and would surface the error).
+        let rulesets = crate::settings::Settings::load(Path::new(&self.cwd))
+            .map(|s| s.ruleset_ids())
+            .unwrap_or_default();
+        self.launch_generation += 1;
         self.launch = Some(Launch {
             verb,
             stage: LaunchStage::Preparing,
+            backend: None,
+            model: None,
+            ruleset: None,
+            rulesets,
+            models: ModelsState::Unfetched,
+            generation: self.launch_generation,
         });
+        self.spawn_preview();
+    }
+
+    /// (Re-)run the gate's dry-run with the launch's current shaped args, tagged with the launch's
+    /// generation so an outdated preview can't dress newer parameters.
+    fn spawn_preview(&mut self) {
+        let Some(launch) = self.launch.as_mut() else {
+            return;
+        };
+        launch.stage = LaunchStage::Preparing;
+        let generation = launch.generation;
+        let name = launch.verb.name();
+        let args = launch.shaped_args();
         let tx = self.tx.clone();
-        let name = verb.name();
         thread::spawn(move || {
             let _ = tx.send(Msg::LaunchPreview {
-                verb: name,
-                result: dry_run_preview(name),
+                generation,
+                result: dry_run_preview(name, &args),
             });
         });
+    }
+
+    /// Invalidate the launch's in-flight results (a fresh generation) and re-preview — every shaping
+    /// change routes through here, so what the gate shows always reflects the args it would fire.
+    fn reshape_launch(&mut self) {
+        self.launch_generation += 1;
+        if let Some(launch) = self.launch.as_mut() {
+            launch.generation = self.launch_generation;
+        }
+        self.spawn_preview();
+    }
+
+    /// Cycle the launch's backend override through the registry (ending back at the configured
+    /// default). A shaped model belongs to the old backend, so it drops with the fetched listing.
+    fn cycle_launch_backend(&mut self) {
+        {
+            let Some(launch) = self.launch.as_mut() else {
+                return;
+            };
+            let backends: Vec<String> = crate::ai::known_backends()
+                .iter()
+                .map(|b| (*b).to_owned())
+                .collect();
+            launch.backend = cycle(&backends, launch.backend.as_deref());
+            launch.model = None;
+            launch.models = ModelsState::Unfetched;
+        }
+        self.reshape_launch();
+    }
+
+    /// Cycle the launch's ruleset override through the settings' defined rulesets (ending back at
+    /// the configured default). A no-op when none are defined.
+    fn cycle_launch_ruleset(&mut self) {
+        {
+            let Some(launch) = self.launch.as_mut() else {
+                return;
+            };
+            if launch.rulesets.is_empty() {
+                return;
+            }
+            let rulesets = launch.rulesets.clone();
+            launch.ruleset = cycle(&rulesets, launch.ruleset.as_deref());
+        }
+        self.reshape_launch();
+    }
+
+    /// Cycle the launch's model override through the provider listing — fetched on the first press
+    /// (the arrival takes the first step), retried from a failure, stepped once fetched.
+    fn cycle_launch_model(&mut self) {
+        enum Act {
+            Step,
+            Fetch {
+                generation: u64,
+                backend: Option<String>,
+            },
+            Wait,
+        }
+        let act = {
+            let Some(launch) = self.launch.as_mut() else {
+                return;
+            };
+            match &launch.models {
+                ModelsState::Fetched(ids) => {
+                    let ids = ids.clone();
+                    launch.model = cycle(&ids, launch.model.as_deref());
+                    Act::Step
+                }
+                ModelsState::Fetching => Act::Wait, // already on its way; its arrival steps
+                ModelsState::Unfetched | ModelsState::Failed(_) => {
+                    launch.models = ModelsState::Fetching;
+                    Act::Fetch {
+                        generation: launch.generation,
+                        backend: launch.backend.clone(),
+                    }
+                }
+            }
+        };
+        match act {
+            Act::Step => self.reshape_launch(),
+            Act::Wait => {}
+            Act::Fetch {
+                generation,
+                backend,
+            } => {
+                let cwd = self.cwd.clone();
+                let tx = self.tx.clone();
+                thread::spawn(move || {
+                    // The listing follows the backend the run would use: the shaped override, else
+                    // the same configured-default resolution the run itself performs.
+                    let result = (|| {
+                        let settings = crate::settings::Settings::load(Path::new(&cwd))
+                            .map_err(|e| format!("{e:#}"))?;
+                        let name = backend
+                            .or_else(|| settings.default_backend.clone())
+                            .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
+                        let listing = crate::ai::backend(&name)
+                            .and_then(|b| b.list_models(&settings))
+                            .map_err(|e| format!("{e:#}"))?;
+                        Ok(listing.models.into_iter().map(|m| m.id).collect())
+                    })();
+                    let _ = tx.send(Msg::LaunchModels { generation, result });
+                });
+            }
+        }
     }
 
     /// Confirm the previewed launch: spawn the real run (no `--dry-run`) as a background process and
@@ -373,12 +511,13 @@ impl App {
     /// thread reaps it, and if the cockpit exits first the run is orphaned and finishes on its own.
     /// A no-op unless the gate is at the confirm stage (Enter while still preparing waits).
     fn confirm_launch(&mut self) {
-        let Some(verb) = self.launch.as_ref().and_then(|l| {
-            matches!(l.stage, LaunchStage::Confirming { .. }).then_some(l.verb.name())
+        let Some((verb, shaped)) = self.launch.as_ref().and_then(|l| {
+            matches!(l.stage, LaunchStage::Confirming { .. })
+                .then(|| (l.verb.name(), l.shaped_args()))
         }) else {
             return;
         };
-        let spawned = launch_command(verb).and_then(|mut cmd| {
+        let spawned = launch_command(verb, &shaped).and_then(|mut cmd| {
             cmd.stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -605,20 +744,74 @@ impl RulesView {
     }
 }
 
-/// An in-flight launch: which verb, and how far along (preview → confirm → fired in the background,
-/// or failed).
+/// An in-flight launch: which verb, how far along (preview → confirm → fired in the background, or
+/// failed), and the shaped parameter overrides riding it.
 struct Launch {
     verb: Command,
     stage: LaunchStage,
+    /// Shaped overrides — `--backend`/`--model`/`--ruleset` — appended to both the dry-run and the
+    /// confirmed run from one builder ([`Launch::shaped_args`]), so the previewed command is exactly
+    /// the fired one. `None` = the configured default applies (the preview echoes what resolved).
+    backend: Option<String>,
+    model: Option<String>,
+    ruleset: Option<String>,
+    /// The ruleset ids defined in settings when the gate opened — the `r` cycle's option set (empty
+    /// = no rulesets to cycle; the key is a no-op and the footer omits it).
+    rulesets: Vec<String>,
+    /// The provider model listing for the launch's current backend, fetched on the first `m` press
+    /// and reset when the backend cycles (a model id belongs to a backend).
+    models: ModelsState,
+    /// Stale-async guard: previews and model listings tag the generation that spawned them and fold
+    /// in only while it still matches — a re-shape mid-flight outranks the older results it obsoleted.
+    generation: u64,
+}
+
+impl Launch {
+    /// The shaped overrides as the argv fragment — one builder shared by the dry-run and the fire,
+    /// the gate's preview-equals-run guarantee extended to shaped parameters.
+    fn shaped_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(backend) = &self.backend {
+            args.extend(["--backend".to_owned(), backend.clone()]);
+        }
+        if let Some(model) = &self.model {
+            args.extend(["--model".to_owned(), model.clone()]);
+        }
+        if let Some(ruleset) = &self.ruleset {
+            args.extend(["--ruleset".to_owned(), ruleset.clone()]);
+        }
+        args
+    }
+}
+
+/// The launch gate's model-listing state — fetched lazily (the first `m` press), per backend.
+enum ModelsState {
+    Unfetched,
+    Fetching,
+    /// The fetch failed (no key, network, …) — shown on the modal's notice line; `m` retries.
+    Failed(String),
+    Fetched(Vec<String>),
+}
+
+/// The next override in a cycle that ends back at `None` (the configured default): `None` steps to
+/// the first option, the last option steps back to `None` — so cycling always returns to "unset".
+fn cycle(options: &[String], current: Option<&str>) -> Option<String> {
+    match current {
+        None => options.first().cloned(),
+        Some(current) => match options.iter().position(|o| o == current) {
+            Some(i) if i + 1 < options.len() => Some(options[i + 1].clone()),
+            _ => None,
+        },
+    }
 }
 
 /// How far a [`Launch`] has progressed.
 enum LaunchStage {
     /// The dry-run is running on a worker thread; awaiting its preview.
     Preparing,
-    /// The preview is ready — the cost gate shows it for confirm/cancel.
+    /// The preview is ready — the cost gate shows it for confirm/cancel (or `b`/`m`/`r` re-shaping).
     Confirming { preview: String },
-    /// The dry-run failed; show why, and let the user dismiss.
+    /// The dry-run failed; show why, and let the user dismiss (or re-shape and retry).
     Failed { error: String },
 }
 
@@ -801,13 +994,14 @@ fn scrolled(scroll: u16, delta: i32) -> u16 {
         .clamp(0, i32::from(u16::MAX)) as u16
 }
 
-/// The base `arc run <verb> .` command both the dry-run preview and the confirmed launch build on —
-/// one definition so the previewed run can't drift from the real one (the gate's preview-equals-run
-/// guarantee). The caller appends `--dry-run` (preview) or null stdio (launch). Errs if the running
-/// `arc` binary can't be located.
-fn launch_command(verb: &str) -> std::io::Result<std::process::Command> {
+/// The base `arc run <verb> . <shaped…>` command both the dry-run preview and the confirmed launch
+/// build on — one definition so the previewed run can't drift from the real one (the gate's
+/// preview-equals-run guarantee, shaped args included). The caller appends `--dry-run` (preview) or
+/// null stdio (launch). Errs if the running `arc` binary can't be located.
+fn launch_command(verb: &str, shaped: &[String]) -> std::io::Result<std::process::Command> {
     let mut cmd = std::process::Command::new(std::env::current_exe()?);
     cmd.args([crate::cli::NAME_RUN, verb, "."]);
+    cmd.args(shaped);
     Ok(cmd)
 }
 
@@ -815,8 +1009,8 @@ fn launch_command(verb: &str) -> std::io::Result<std::process::Command> {
 /// header (params + estimate) a human dry-run prints before the prompt — for the gate, or an error
 /// string. Zero spend (`--dry-run`); read from the `--json` payload's `preview` field — the
 /// machine-readable channel — not parsed out of the human layout (prefer-machine-readable-tool-output).
-fn dry_run_preview(verb: &str) -> Result<String, String> {
-    let output = launch_command(verb)
+fn dry_run_preview(verb: &str, shaped: &[String]) -> Result<String, String> {
+    let output = launch_command(verb, shaped)
         .map_err(|e| format!("can't locate the arc binary: {e}"))?
         .args(["--dry-run", "--json"])
         .output()
@@ -1055,19 +1249,37 @@ fn update(app: &mut App, msg: Msg) {
                 }
             }
         }
-        Msg::LaunchPreview { verb, result } => {
-            // Fold the dry-run's outcome into the gate only if the open launch is still the one it was
-            // computed for — cancelled (`launch` is `None`) or replaced by another verb's launch, the
-            // stale preview is dropped rather than dressing a newer pending action in an older one's
-            // parameters. Verb identity suffices today because a launch is fully determined by its verb
-            // (`launch_command` takes nothing else); shaped launches will need a per-launch id.
+        Msg::LaunchPreview { generation, result } => {
+            // Fold the dry-run's outcome into the gate only if the launch that spawned it is still
+            // current: cancelled (`launch` is `None`), replaced, or re-shaped since (a newer
+            // generation), the stale preview is dropped rather than dressing newer parameters in an
+            // older command's estimate.
             if let Some(launch) = app.launch.as_mut()
-                && launch.verb.name() == verb
+                && launch.generation == generation
             {
                 launch.stage = match result {
                     Ok(preview) => LaunchStage::Confirming { preview },
                     Err(error) => LaunchStage::Failed { error },
                 };
+            }
+        }
+        Msg::LaunchModels { generation, result } => {
+            // Same guard as the preview; the fetch began as a cycle press, so a successful arrival
+            // takes that first step (which re-previews with the newly shaped model).
+            let mut fetched = false;
+            if let Some(launch) = app.launch.as_mut()
+                && launch.generation == generation
+            {
+                match result {
+                    Ok(ids) => {
+                        launch.models = ModelsState::Fetched(ids);
+                        fetched = true;
+                    }
+                    Err(e) => launch.models = ModelsState::Failed(e),
+                }
+            }
+            if fetched {
+                app.cycle_launch_model();
             }
         }
     }
@@ -1086,6 +1298,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             KeyCode::Enter => app.confirm_launch(),
             KeyCode::Esc => app.launch = None,
             KeyCode::Char('c') if ctrl => app.launch = None,
+            // Shaping: cycle a parameter and re-preview, so what the gate confirms is exactly what
+            // it fires. Works from any stage — re-shaping a failed preview is the retry.
+            KeyCode::Char('b') => app.cycle_launch_backend(),
+            KeyCode::Char('m') => app.cycle_launch_model(),
+            KeyCode::Char('r') => app.cycle_launch_ruleset(),
             _ => {}
         }
         return;
@@ -2074,10 +2291,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     let hints = if let Some(launch) = &app.launch {
         // The gate's keys by stage (the modal shows no hint — this footer is it): Enter fires the run
-        // at the confirm stage; Esc cancels a pending launch or dismisses a failed preview.
+        // at the confirm stage; b/m/r re-shape (and re-preview); Esc cancels or dismisses. The
+        // ruleset key shows only when rulesets exist to cycle.
         match &launch.stage {
             LaunchStage::Preparing => "esc cancel",
-            LaunchStage::Confirming { .. } => "enter run · esc cancel",
+            LaunchStage::Confirming { .. } => {
+                if launch.rulesets.is_empty() {
+                    "enter run · b backend · m model · esc cancel"
+                } else {
+                    "enter run · b backend · m model · r ruleset · esc cancel"
+                }
+            }
             LaunchStage::Failed { .. } => "esc dismiss",
         }
     } else if app.palette.is_some() {
@@ -2200,6 +2424,15 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         LaunchStage::Failed { error } => (format!("launch {verb} · failed"), error.clone()),
     };
 
+    // The model-listing state rides the modal's own notice line (dim while fetching, the attention
+    // color on failure) — the shaping keys' feedback, never hidden in a corner.
+    let notice: Option<Line> = match &launch.models {
+        ModelsState::Fetching => Some(Line::from("fetching models…").dim()),
+        ModelsState::Failed(e) => Some(Line::from(format!("models: {e}")).yellow()),
+        ModelsState::Unfetched | ModelsState::Fetched(_) => None,
+    };
+    let notice_rows = u16::from(notice.is_some());
+
     // This modal is the spend-authorization surface, so nothing in it may be *silently* clipped:
     // long lines wrap (the estimate stays whole on a narrow terminal), and when the wrapped body
     // still outruns the terminal's height, the shortfall is disclosed on the modal's last line
@@ -2209,33 +2442,38 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         .lines()
         .map(|l| (l.chars().count().max(1)).div_ceil(inner_width.max(1)) as u16)
         .sum();
-    let height = (wrapped_rows + BORDER).min(area.height); // border + body; the footer holds the hint
+    // border + body + any notice; the footer holds the key hints
+    let height = (wrapped_rows + notice_rows + BORDER).min(area.height);
     let rect = centered(area, LAUNCH_WIDTH, height);
     frame.render_widget(Clear, rect); // punch through whatever's underneath
 
     let block = Block::bordered().title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
-    if wrapped_rows > inner.height {
-        let [body_area, disclosure] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(inner);
-        frame.render_widget(
-            Paragraph::new(body.as_str()).wrap(Wrap { trim: false }),
-            body_area,
-        );
+    let body_avail = inner.height.saturating_sub(notice_rows);
+    let overflow_rows = u16::from(wrapped_rows > body_avail);
+    let [body_area, disclosure, notice_area] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(overflow_rows),
+        Constraint::Length(notice_rows),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(body.as_str()).wrap(Wrap { trim: false }),
+        body_area,
+    );
+    if overflow_rows > 0 {
         frame.render_widget(
             Line::from(format!(
                 "… {} more line(s) — enlarge the terminal for the full preview",
-                wrapped_rows - inner.height
+                wrapped_rows.saturating_sub(body_area.height)
             ))
             .yellow(),
             disclosure,
         );
-    } else {
-        frame.render_widget(
-            Paragraph::new(body.as_str()).wrap(Wrap { trim: false }),
-            inner,
-        );
+    }
+    if let Some(notice) = notice {
+        frame.render_widget(notice, notice_area);
     }
 }
 
@@ -2290,6 +2528,7 @@ mod tests {
             status,
             palette: None,
             launch: None,
+            launch_generation: 0,
             should_quit: false,
             tx,
             cwd: ".".to_owned(),
