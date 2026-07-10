@@ -50,7 +50,8 @@ const VIEWPORT_HEIGHT: u16 = 24;
 
 /// Width of the command-palette popup — wide enough for the longest command name plus its one-line
 /// description without dominating a narrow terminal ([`centered`] clamps it to the available width).
-const PALETTE_WIDTH: u16 = 56;
+/// A description that still can't fit renders [`ellipsize`]d, never clipped silently at the border.
+const PALETTE_WIDTH: u16 = 64;
 
 /// Width of the command-name column in the palette list, so each name's description aligns.
 const PALETTE_NAME_WIDTH: usize = 10;
@@ -1451,9 +1452,11 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
 /// key), then the resolved value taking the row's slack.
 const CONFIG_COLUMN_WIDTHS: [Constraint; 2] = [Constraint::Length(32), Constraint::Min(10)];
 
-/// The config view: every resolved default (after user-then-project layering) and the active settings
-/// layers — the projection `arc config list` prints, shown here. Read-only for now; editing is the
-/// follow-up (likely arrow-key pickers, shared with the launch-config cut).
+/// The config view: every resolved setting (after user-then-project layering) and the active settings
+/// layers — the projection `arc config list` prints — with in-place editing: browsing shows a reversed
+/// cursor row; an open edit un-reverses and bolds it (input mode reads distinctly from cursor mode),
+/// its value cell carrying the picker or the caret. The info line carries the layers, or — in yellow,
+/// so a degraded edit can't pass unnoticed — the last save/fetch failure.
 fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
     let [header, body, layers_line] = Layout::vertical([
         Constraint::Length(LINE),
@@ -1488,7 +1491,11 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                 };
                 let row = Row::new([r.key.clone(), cell]);
                 if i == *selected {
-                    row.style(Style::new().reversed()) // the cursor
+                    if editing.is_some() {
+                        row.style(Style::new().bold()) // input mode — the cell carries the edit
+                    } else {
+                        row.style(Style::new().reversed()) // the cursor
+                    }
                 } else {
                     row
                 }
@@ -1498,9 +1505,10 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                 .block(Block::bordered());
             frame.render_widget(table, body);
 
-            // A rejected edit's error outranks the routine layers fact until the next action.
+            // A rejected edit's error outranks the routine layers fact until the next action — and
+            // renders in the attention color, not dimmed: a degraded edit must not pass unnoticed.
             let info = match error {
-                Some(e) => Line::from(e.clone()).dim(),
+                Some(e) => Line::from(e.clone()).yellow(),
                 None => Line::from(format!(
                     "layers: {}",
                     crate::join_or(layers, crate::settings::NO_LAYERS)
@@ -1881,7 +1889,8 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
     }
     // A failed toggle's error outranks the routine facts until the next action.
     if let Some(notice) = &view.notice {
-        frame.render_widget(Line::from(notice.clone()).dim(), info);
+        // A failed toggle renders in the attention color, not dimmed — it must not pass unnoticed.
+        frame.render_widget(Line::from(notice.clone()).yellow(), info);
         return;
     }
     let disabled = report.rules.iter().filter(|r| r.disabled).count();
@@ -2153,6 +2162,8 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         frame.render_widget(Line::from("no matching command").dim(), list_area);
         return;
     }
+    // The description's budget: the popup's inner width less the selection prefix and name column.
+    let desc_width = (inner.width as usize).saturating_sub(2 + PALETTE_NAME_WIDTH + 1);
     let lines: Vec<Line> = matches
         .iter()
         .enumerate()
@@ -2160,7 +2171,7 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
             let text = format!(
                 "{:<width$} {}",
                 c.name(),
-                c.description(),
+                ellipsize(c.description(), desc_width),
                 width = PALETTE_NAME_WIDTH
             );
             if i == palette.selected {
@@ -2198,6 +2209,16 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// `text` cut to at most `max` characters with a trailing `…` when it can't fit whole — truncation
+/// disclosed, never a silent clip at a widget border.
+fn ellipsize(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
 }
 
 /// A `width`×`height` rect centered within `area` (clamped to fit) — for the palette popup and the

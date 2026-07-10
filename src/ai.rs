@@ -273,11 +273,8 @@ const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 /// newest first per the API's contract; `limit=1000` (the documented maximum) makes truncation
 /// practically impossible, and `has_more` is still surfaced rather than assumed false.
 fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
-    let (key, key_source) = provider_key(
-        "ANTHROPIC_API_KEY",
-        settings.api_key_anthropic.as_deref(),
-        "api_keys.anthropic",
-    )?;
+    let (key, key_source) = anthropic_key(settings)
+        .ok_or_else(|| key_hint(ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_SETTING))?;
     #[derive(Deserialize)]
     struct Entry {
         id: String,
@@ -316,11 +313,8 @@ fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
 /// models — for a ChatGPT-subscription codex login that account's lineup may differ, and the listing's
 /// key provenance is disclosed so the report says whose account it reflects.
 fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
-    let (key, key_source) = provider_key(
-        "OPENAI_API_KEY",
-        settings.api_key_openai.as_deref(),
-        "api_keys.openai",
-    )?;
+    let (key, key_source) =
+        openai_key(settings).ok_or_else(|| key_hint(OPENAI_KEY_ENV, OPENAI_KEY_SETTING))?;
     #[derive(Deserialize)]
     struct Entry {
         id: String,
@@ -385,6 +379,11 @@ pub trait Backend {
     /// lists models headlessly, but each provider's `/v1/models` does, keyed by the provider's
     /// standard env var or a saved user-layer `api_keys.*` setting.
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing>;
+
+    /// Where this backend's provider API key would come from (`Some(source)`) or `None` when no key
+    /// is available — resolved exactly as [`Backend::list_models`] resolves it, so the status doctor
+    /// reports and the listing's behavior can't disagree.
+    fn model_key_source(&self, settings: &Settings) -> Option<String>;
 
     /// Resolve the run's model: an explicit `--model` wins; else this backend's configured default
     /// (its [`Backend::configured_model`]); else [`Backend::default_model`].
@@ -452,23 +451,47 @@ pub struct ModelListing {
     pub truncated: bool,
 }
 
+/// Each provider's key env var and saved-setting key — one home per name, shared by the listing
+/// fetch, the doctor status, and the no-key hint, so the three can't drift.
+const ANTHROPIC_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+const ANTHROPIC_KEY_SETTING: &str = "api_keys.anthropic";
+const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
+const OPENAI_KEY_SETTING: &str = "api_keys.openai";
+
 /// Resolve a provider API key: the standard env var wins (a session override), else the saved
-/// user-layer setting; neither → an error naming both ways to supply one.
-fn provider_key(
-    env_var: &str,
-    saved: Option<&str>,
-    setting_key: &str,
-) -> anyhow::Result<(String, String)> {
+/// user-layer setting. `Some((key, source))` discloses where it came from; `None` = no key — the
+/// same resolution backs the listings and doctor's status line, so they can't disagree.
+fn provider_key(env_var: &str, saved: Option<&str>, setting_key: &str) -> Option<(String, String)> {
     if let Ok(key) = std::env::var(env_var)
         && !key.is_empty()
     {
-        return Ok((key, format!("{env_var} (environment)")));
+        return Some((key, format!("{env_var} (environment)")));
     }
-    if let Some(key) = saved {
-        return Ok((key.to_owned(), format!("{setting_key} (user settings)")));
-    }
-    anyhow::bail!(
+    saved.map(|key| (key.to_owned(), format!("{setting_key} (user settings)")))
+}
+
+/// The no-key error for a model listing — names both ways to supply one.
+fn key_hint(env_var: &str, setting_key: &str) -> anyhow::Error {
+    anyhow::anyhow!(
         "no API key for the model listing — set {env_var}, or save one with `arc config set --user {setting_key} <key>`"
+    )
+}
+
+/// Anthropic's key (claude's provider), resolved per [`provider_key`].
+fn anthropic_key(settings: &Settings) -> Option<(String, String)> {
+    provider_key(
+        ANTHROPIC_KEY_ENV,
+        settings.api_key_anthropic.as_deref(),
+        ANTHROPIC_KEY_SETTING,
+    )
+}
+
+/// OpenAI's key (codex's provider), resolved per [`provider_key`].
+fn openai_key(settings: &Settings) -> Option<(String, String)> {
+    provider_key(
+        OPENAI_KEY_ENV,
+        settings.api_key_openai.as_deref(),
+        OPENAI_KEY_SETTING,
     )
 }
 
@@ -489,6 +512,10 @@ impl Backend for ClaudeBackend {
 
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
         anthropic_models(settings)
+    }
+
+    fn model_key_source(&self, settings: &Settings) -> Option<String> {
+        anthropic_key(settings).map(|(_, source)| source)
     }
 
     fn synthesize(
@@ -708,6 +735,10 @@ impl Backend for CodexBackend {
 
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
         openai_models(settings)
+    }
+
+    fn model_key_source(&self, settings: &Settings) -> Option<String> {
+        openai_key(settings).map(|(_, source)| source)
     }
 
     /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).

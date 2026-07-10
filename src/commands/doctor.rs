@@ -9,8 +9,25 @@ pub(crate) struct Report {
     runtime: Runtime,
     cwd: String,
     tools: Tools,
+    api_keys: ApiKeys,
     logs: Logs,
     gate: Gate,
+}
+
+/// Each backend's provider-API key status — the model listings' prerequisite (`arc models`, the
+/// TUI's model pickers) — surfaced here so a missing key is discovered up front, not at an empty
+/// picker. A settings-load failure is its own state, distinct from "no key configured".
+#[derive(Serialize)]
+struct ApiKeys {
+    statuses: Vec<ApiKeyStatus>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ApiKeyStatus {
+    backend: String,
+    /// Where the key comes from (env var or user-layer setting), or `None` — no key available.
+    source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -228,7 +245,8 @@ fn hook_invokes(body: &str, bin: &str) -> bool {
 
 /// Width of `doctor`'s human-output label column, so the value column aligns — named (like tui's
 /// column-width constants) rather than implied by hand-spaced labels plus a matching bare literal.
-const LABEL_WIDTH: usize = 8;
+/// Must exceed the longest label ("api keys", 8) so every row keeps a gap before its value.
+const LABEL_WIDTH: usize = 10;
 
 /// The `doctor` command.
 pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
@@ -260,6 +278,25 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
                     status: probe(name),
                 })
                 .collect(),
+        },
+        api_keys: match crate::settings::Settings::load(std::path::Path::new(".")) {
+            Ok(settings) => ApiKeys {
+                statuses: crate::ai::known_backends()
+                    .iter()
+                    .map(|&name| ApiKeyStatus {
+                        backend: name.to_owned(),
+                        source: crate::ai::backend(name)
+                            .expect("known_backends yields registered names")
+                            .model_key_source(&settings),
+                    })
+                    .collect(),
+                error: None,
+            },
+            // Unloadable settings must not kill doctor — the report is where that failure belongs.
+            Err(e) => ApiKeys {
+                statuses: Vec::new(),
+                error: Some(format!("{e:#}")),
+            },
         },
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
@@ -316,6 +353,23 @@ pub(crate) fn human(report: &Report) -> String {
         };
         lines.push(row(&b.name, &b.status.display(&absent)));
     }
+    let api_keys_line = if let Some(e) = &report.api_keys.error {
+        format!("settings unreadable: {e}")
+    } else {
+        let statuses = report
+            .api_keys
+            .statuses
+            .iter()
+            .map(|s| format!("{}: {}", s.backend, s.source.as_deref().unwrap_or("(none)")))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if report.api_keys.statuses.iter().any(|s| s.source.is_none()) {
+            format!("{statuses} — model listings need one (see arc models)")
+        } else {
+            statuses
+        }
+    };
+    lines.push(row("api keys", &api_keys_line));
     lines.push(row(
         "logs",
         &format!(
