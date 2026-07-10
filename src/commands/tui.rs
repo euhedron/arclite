@@ -1411,9 +1411,15 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
     }
 }
 
-/// The rules view: the resolved ruleset as a browsable list — cursor over `id ← source` rows, Enter
-/// opens the rule's body to read (scrolled; provenance in the hint) — or the resolution error. Loaded
-/// on entry by [`App::open_rules`]; skipped sources are disclosed in the hint, never dropped silently.
+/// The rules view: the resolved ruleset as a browsable list — cursor over the rule ids, Enter opens a
+/// rule's body to read (scrolled; its full path in the hint) — or the resolution error. Loaded on
+/// entry by [`App::open_rules`]; skipped sources are disclosed in the hint, never dropped silently.
+///
+/// Provenance is shown at the *pool* level (a rule's parent directory), and only when pools differ:
+/// a rule's filename stem is its id, so a row's full path would say the id twice, and one shared pool
+/// repeated per row is noise — it's disclosed once in the hint instead. Several pools get an aligned,
+/// dimmed pool column, so which source won an id stays visible exactly when it can vary. (The CLI's
+/// `arc rules` keeps full per-line paths deliberately — the grep-friendly, agent-first form.)
 fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
     let [header, body, hint] = Layout::vertical([
         Constraint::Length(LIST_HEADER_LINES),
@@ -1456,18 +1462,43 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         Line::from(format!("rules · {}", report.description)).bold(),
         header,
     );
+    // A rule's pool: the directory its file lives in (an ad-hoc root-level file falls back to `.`).
+    let pool = |source: &str| match Path::new(source).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.display().to_string(),
+        _ => ".".to_owned(),
+    };
+    // One pool shared by every rule → per-row provenance is pure repetition; say it once (in the hint).
+    let shared_pool = report.rules.split_first().and_then(|(first, rest)| {
+        let p = pool(&first.source);
+        rest.iter().all(|r| pool(&r.source) == p).then_some(p)
+    });
     if report.rules.is_empty() {
         frame.render_widget(
             Paragraph::new("no rules resolve from the active ruleset").block(Block::bordered()),
             body,
         );
     } else {
+        // With several pools, pad the ids to one column so the dimmed pools align instead of raggedly
+        // trailing each id.
+        let id_width = report
+            .rules
+            .iter()
+            .map(|r| r.id.chars().count())
+            .max()
+            .unwrap_or(0);
         let end = (view.offset + LIST_ROWS).min(report.rules.len());
         let rows: Vec<Line> = report.rules[view.offset..end]
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let line = Line::from(format!("{} ← {}", r.id, r.source));
+                let line = if shared_pool.is_some() {
+                    Line::from(r.id.clone())
+                } else {
+                    Line::from(vec![
+                        Span::from(format!("{:<id_width$}  ", r.id)),
+                        Span::from(pool(&r.source)).dim(),
+                    ])
+                };
                 if view.offset + i == view.selected {
                     line.reversed() // the cursor
                 } else {
@@ -1477,7 +1508,11 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
             .collect();
         frame.render_widget(Paragraph::new(rows), body);
     }
-    let mut hint_text = format!("{} rule(s) · ↑↓ move · enter open", report.rules.len());
+    let mut hint_text = format!("{} rule(s)", report.rules.len());
+    if let Some(pool) = &shared_pool {
+        hint_text.push_str(&format!(" · all from {pool}"));
+    }
+    hint_text.push_str(" · ↑↓ move · enter open");
     if !report.skipped.is_empty() {
         hint_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
     }
