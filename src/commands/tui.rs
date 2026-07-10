@@ -542,17 +542,18 @@ enum ConfigView {
     Error(String),
 }
 
-/// Chrome lines a full-height list view (log, rules) spends around its scrollable body: a title/header
-/// line and a hint line. Named so the views' `Layout`s and [`LIST_ROWS`] derive the body height from
-/// the *same* constants and can't silently disagree if the chrome ever changes (the desync a bare
-/// literal invited).
+/// Chrome lines a list/detail view (log, rules) spends around its boxed body: a title line above and
+/// an information line below — facts only (a count, a path, an id); the key hints live in the global
+/// footer, keeping information and controls apart. Named so the views' `Layout`s and [`LIST_ROWS`]
+/// derive the body height from the *same* constants and can't silently disagree if the chrome changes.
 const LIST_HEADER_LINES: u16 = LINE;
-const LIST_HINT_LINES: u16 = LINE;
+const LIST_INFO_LINES: u16 = LINE;
 
-/// Visible rows in a full-height list view (log, rules) — the inline viewport less the global footer,
-/// the header, and the hint. One source for both the cursor math ([`select_visible`], PageUp/Down) and
-/// the render window, so they can't disagree on how many rows are on screen.
-const LIST_ROWS: usize = (VIEWPORT_HEIGHT - LINE - LIST_HEADER_LINES - LIST_HINT_LINES) as usize;
+/// Visible rows inside a list/detail view's bordered box — the inline viewport less the global footer,
+/// the header, the info line, and the border. One source for both the cursor math ([`select_visible`],
+/// PageUp/Down) and the render window, so they can't disagree on how many rows are on screen.
+const LIST_ROWS: usize =
+    (VIEWPORT_HEIGHT - LINE - LIST_HEADER_LINES - LIST_INFO_LINES - BORDER) as usize;
 
 /// Move a list cursor to `i`, scrolling `offset` the minimum needed to keep the cursor inside the
 /// [`LIST_ROWS`] visible window — the one statement of the keep-visible list math (log + rules lists).
@@ -578,11 +579,13 @@ struct LogView {
     detail: Option<LogDetail>,
 }
 
-/// One run's detail screen: its rendered body (the stored result, or a note when none is kept) and a
-/// scroll offset over it, since a result can run longer than the inline body.
+/// One run's detail screen: its rendered body (the stored result, or a note when none is kept), a
+/// scroll offset over it (a result can outrun the inline body), and the run id for the view's info
+/// line — `None` when the record carries no usable id (the body says why).
 struct LogDetail {
     body: String,
     scroll: u16,
+    id: Option<String>,
 }
 
 impl LogView {
@@ -598,26 +601,35 @@ impl LogView {
         let Some(record) = runs.get(self.selected) else {
             return;
         };
-        let body = match record.get("id").and_then(Value::as_str) {
-            None => {
-                "this run predates the result store (no id), so its result wasn't kept".to_owned()
-            }
+        let (body, id) = match record.get("id").and_then(Value::as_str) {
+            None => (
+                "this run predates the result store (no id), so its result wasn't kept".to_owned(),
+                None,
+            ),
             // The id comes from a log record — a file editable outside the program — so validate it to
             // a safe path segment before it reaches load_stored's path join (as `arc log <id>` does).
-            Some(id) if crate::commands::log::ensure_safe_run_id(id).is_err() => {
+            Some(id) if crate::commands::log::ensure_safe_run_id(id).is_err() => (
                 format!(
                     "the log record's id `{id}` isn't a usable run id (expected a single path segment)"
-                )
-            }
-            Some(id) => match crate::commands::log::load_stored(id) {
-                Ok(Some(stored)) => crate::commands::log::stored_human(&stored),
-                Ok(None) => format!(
-                    "no stored result for `{id}` — it predates the result store, or was run with logging off"
                 ),
-                Err(e) => format!("couldn't load the stored result: {e:#}"),
-            },
+                None,
+            ),
+            Some(id) => (
+                match crate::commands::log::load_stored(id) {
+                    Ok(Some(stored)) => crate::commands::log::stored_human(&stored),
+                    Ok(None) => format!(
+                        "no stored result for `{id}` — it predates the result store, or was run with logging off"
+                    ),
+                    Err(e) => format!("couldn't load the stored result: {e:#}"),
+                },
+                Some(id.to_owned()),
+            ),
         };
-        self.detail = Some(LogDetail { body, scroll: 0 });
+        self.detail = Some(LogDetail {
+            body,
+            scroll: 0,
+            id,
+        });
     }
 
     /// Scroll the open detail by `delta` rows. A no-op while the list (not a detail) is showing.
@@ -1412,19 +1424,19 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
 }
 
 /// The rules view: the resolved ruleset as a browsable list — cursor over the rule ids, Enter opens a
-/// rule's body to read (scrolled; its full path in the hint) — or the resolution error. Loaded on
-/// entry by [`App::open_rules`]; skipped sources are disclosed in the hint, never dropped silently.
+/// rule's body to read — or the resolution error. Loaded on entry by [`App::open_rules`]. Each screen
+/// is a boxed body between the title line and an information line (the list: rule count + any
+/// skipped-source disclosure; an open rule: its full path) — facts only, controls in the global footer.
 ///
-/// Provenance is shown at the *pool* level (a rule's parent directory), and only when pools differ:
-/// a rule's filename stem is its id, so a row's full path would say the id twice, and one shared pool
-/// repeated per row is noise — it's disclosed once in the hint instead. Several pools get an aligned,
-/// dimmed pool column, so which source won an id stays visible exactly when it can vary. (The CLI's
+/// Per-row provenance appears at the *pool* level (a rule's parent directory), and only when pools
+/// differ — that's when which source won an id can vary. A rule's filename stem is its id, so a full
+/// per-row path would say the id twice; with one shared pool the rows are bare ids. (The CLI's
 /// `arc rules` keeps full per-line paths deliberately — the grep-friendly, agent-first form.)
 fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
-    let [header, body, hint] = Layout::vertical([
+    let [header, body, info] = Layout::vertical([
         Constraint::Length(LIST_HEADER_LINES),
         Constraint::Min(0),
-        Constraint::Length(LIST_HINT_LINES),
+        Constraint::Length(LIST_INFO_LINES),
     ])
     .areas(area);
 
@@ -1440,20 +1452,18 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         }
     };
 
-    // Drilled into one rule: its body, scrolled, with the provenance in the hint.
+    // Drilled into one rule: its body, scrolled; the info line carries the rule's full path.
     if let Some(detail) = &view.detail {
         let rule = &report.rules[detail.index];
         frame.render_widget(Line::from(format!("rules · {}", rule.id)).bold(), header);
         frame.render_widget(
             Paragraph::new(rule.body.clone())
+                .block(Block::bordered())
                 .wrap(Wrap { trim: false })
                 .scroll((detail.scroll, 0)),
             body,
         );
-        frame.render_widget(
-            Line::from(format!("{} · ↑↓ scroll · esc back", rule.source)).dim(),
-            hint,
-        );
+        frame.render_widget(Line::from(rule.source.clone()).dim(), info);
         return;
     }
 
@@ -1467,10 +1477,10 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         Some(p) if !p.as_os_str().is_empty() => p.display().to_string(),
         _ => ".".to_owned(),
     };
-    // One pool shared by every rule → per-row provenance is pure repetition; say it once (in the hint).
-    let shared_pool = report.rules.split_first().and_then(|(first, rest)| {
+    // One pool shared by every rule → a per-row pool column would be pure repetition; show bare ids.
+    let one_pool = report.rules.split_first().is_none_or(|(first, rest)| {
         let p = pool(&first.source);
-        rest.iter().all(|r| pool(&r.source) == p).then_some(p)
+        rest.iter().all(|r| pool(&r.source) == p)
     });
     if report.rules.is_empty() {
         frame.render_widget(
@@ -1491,7 +1501,7 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let line = if shared_pool.is_some() {
+                let line = if one_pool {
                     Line::from(r.id.clone())
                 } else {
                     Line::from(vec![
@@ -1506,17 +1516,13 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
                 }
             })
             .collect();
-        frame.render_widget(Paragraph::new(rows), body);
+        frame.render_widget(Paragraph::new(rows).block(Block::bordered()), body);
     }
-    let mut hint_text = format!("{} rule(s)", report.rules.len());
-    if let Some(pool) = &shared_pool {
-        hint_text.push_str(&format!(" · all from {pool}"));
-    }
-    hint_text.push_str(" · ↑↓ move · enter open");
+    let mut info_text = format!("{} rule(s)", report.rules.len());
     if !report.skipped.is_empty() {
-        hint_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
+        info_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
     }
-    frame.render_widget(Line::from(hint_text).dim(), hint);
+    frame.render_widget(Line::from(info_text).dim(), info);
 }
 
 /// The usage view: the run-log spend/token rollup `arc usage` computes, rendered as tables — periods
@@ -1606,10 +1612,10 @@ fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
 /// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
 /// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
-    let [header, body, hint] = Layout::vertical([
+    let [header, body, info] = Layout::vertical([
         Constraint::Length(LIST_HEADER_LINES),
         Constraint::Min(0),
-        Constraint::Length(LIST_HINT_LINES),
+        Constraint::Length(LIST_INFO_LINES),
     ])
     .areas(area);
 
@@ -1625,20 +1631,23 @@ fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
         }
     };
 
-    // Drilled into one run: its rendered result, scrolled.
+    // Drilled into one run: its rendered result, scrolled; the info line carries the run id.
     if let Some(detail) = &log.detail {
         frame.render_widget(Line::from("log · run detail").bold(), header);
         frame.render_widget(
             Paragraph::new(detail.body.clone())
+                .block(Block::bordered())
                 .wrap(Wrap { trim: false })
                 .scroll((detail.scroll, 0)),
             body,
         );
-        frame.render_widget(Line::from("↑↓ scroll · esc back").dim(), hint);
+        if let Some(id) = &detail.id {
+            frame.render_widget(Line::from(id.clone()).dim(), info);
+        }
         return;
     }
 
-    // The list of runs.
+    // The list of runs; the info line carries the count and any unparsed-record disclosure.
     frame.render_widget(Line::from("completed runs").bold(), header);
     if runs.is_empty() {
         frame.render_widget(
@@ -1659,13 +1668,13 @@ fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
                 }
             })
             .collect();
-        frame.render_widget(Paragraph::new(rows), body);
+        frame.render_widget(Paragraph::new(rows).block(Block::bordered()), body);
     }
-    let mut hint_text = format!("{} run(s) · ↑↓ move · enter open", runs.len());
+    let mut info_text = format!("{} run(s)", runs.len());
     if log.unparsed > 0 {
-        hint_text.push_str(&format!(" · {}", crate::log::unparsed_note(log.unparsed)));
+        info_text.push_str(&format!(" · {}", crate::log::unparsed_note(log.unparsed)));
     }
-    frame.render_widget(Line::from(hint_text).dim(), hint);
+    frame.render_widget(Line::from(info_text).dim(), info);
 }
 
 /// The persistent footer — present on every view. Carries the at-a-glance active-run count and the
@@ -1689,12 +1698,28 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.palette.is_some() {
         "↑↓ select · enter run · esc close"
     } else {
+        // The list views' hints swap when drilled into a detail — the same keys move the list but
+        // scroll an opened body. Their info lines carry facts only; every control is named here.
+        const SCROLL: &str = "/ commands · ↑↓ scroll · esc back · q quit";
+        const BROWSE: &str = "/ commands · ↑↓ move · enter open · esc back · q quit";
         match app.route {
             Route::Home => "/ commands · q quit",
-            Route::Doctor => "/ commands · ↑↓ scroll · esc back · q quit",
-            Route::Status | Route::Config | Route::Log | Route::Usage | Route::Rules => {
-                "/ commands · esc back · q quit"
+            Route::Doctor => SCROLL,
+            Route::Log => {
+                if app.log.as_ref().is_some_and(|l| l.detail.is_some()) {
+                    SCROLL
+                } else {
+                    BROWSE
+                }
             }
+            Route::Rules => {
+                if app.rules.as_ref().is_some_and(|r| r.detail.is_some()) {
+                    SCROLL
+                } else {
+                    BROWSE
+                }
+            }
+            Route::Status | Route::Config | Route::Usage => "/ commands · esc back · q quit",
         }
     };
 
