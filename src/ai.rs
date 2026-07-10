@@ -351,6 +351,9 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
             })
             .collect(),
         key_source,
+        // Not a silent default: OpenAI's `/v1/models` is unpaginated by contract — the whole set
+        // arrives in one response, and no `has_more`-style signal exists to read (unlike Anthropic's,
+        // which the sibling surfaces). `false` states that contract.
         truncated: false,
     })
 }
