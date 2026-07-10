@@ -938,33 +938,57 @@ fn synthesize_codex(
         });
     }
     let usage = usage.context("codex produced no `turn.completed` usage event")?;
+    let usage = Usage {
+        // Codex doesn't echo a per-model id in its events, so the reported model is the requested
+        // one (unlike claude, which resolves it from the response's per-model usage).
+        model: req.model.to_owned(),
+        input_tokens: usage.input_tokens,
+        // Codex separates reasoning tokens; fold them into output for an honest total-generated count.
+        output_tokens: usage.output_tokens + usage.reasoning_output_tokens,
+        cache_creation_input_tokens: 0, // codex has no cache-creation concept, only cached reads
+        cache_read_input_tokens: usage.cached_input_tokens,
+        cost_usd: None, // codex reports tokens only — no fabricated dollar cost
+    };
+    // From here the run has demonstrably spent (its usage is in hand), so a failed *result read* — a
+    // missing/empty `-o` artifact, an unreadable one, or structured output that isn't the schema'd
+    // JSON — is carried as a value with that usage, never bailed: the errored-run contract, so the
+    // spend reaches the log even when the result is unusable.
+    let errored = |message: String| Synthesis {
+        text: String::new(),
+        usage: usage.clone(),
+        structured: None,
+        error: Some(message),
+    };
     // The result is codex's `-o` artifact (clean + schema-valid) — its documented result channel, so
-    // an absent/empty one on an otherwise-successful run is surfaced rather than papered over, the way
-    // the claude path bails when its result event is missing.
-    let text = crate::read_optional(&out_path)?
-        .filter(|s| !s.trim().is_empty())
-        .context("codex exited successfully but wrote no result to its `-o` artifact")?;
+    // an absent/empty one on an otherwise-successful run is surfaced rather than papered over.
+    let text = match crate::read_optional(&out_path) {
+        Ok(Some(text)) if !text.trim().is_empty() => text,
+        Ok(_) => {
+            return Ok(errored(
+                "codex exited successfully but wrote no result to its `-o` artifact".to_owned(),
+            ));
+        }
+        Err(e) => {
+            return Ok(errored(format!(
+                "codex's `-o` artifact could not be read: {e}"
+            )));
+        }
+    };
     let structured = if req.json_schema.is_some() {
-        Some(
-            serde_json::from_str(text.trim())
-                .context("codex did not return the expected JSON for the requested schema")?,
-        )
+        match serde_json::from_str(text.trim()) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                return Ok(errored(format!(
+                    "codex did not return the expected JSON for the requested schema: {e}"
+                )));
+            }
+        }
     } else {
         None
     };
     Ok(Synthesis {
         text,
-        usage: Usage {
-            // Codex doesn't echo a per-model id in its events, so the reported model is the requested
-            // one (unlike claude, which resolves it from the response's per-model usage).
-            model: req.model.to_owned(),
-            input_tokens: usage.input_tokens,
-            // Codex separates reasoning tokens; fold them into output for an honest total-generated count.
-            output_tokens: usage.output_tokens + usage.reasoning_output_tokens,
-            cache_creation_input_tokens: 0, // codex has no cache-creation concept, only cached reads
-            cache_read_input_tokens: usage.cached_input_tokens,
-            cost_usd: None, // codex reports tokens only — no fabricated dollar cost
-        },
+        usage,
         structured,
         error: None, // a completed run; failures returned above, carrying their captured usage
     })
