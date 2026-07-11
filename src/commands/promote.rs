@@ -112,11 +112,18 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // A ledger receiving its first entries also receives its explanation: an agent-facing README on
     // what the entries are, how their freshness reads, and the verify/retire lifecycle — the target
     // repo's own agents otherwise have no reason to know `.arc/findings` exists or how to treat it.
+    // Best-effort: the orientation is auxiliary to the findings already written above, so a failed
+    // seed warns rather than reporting the whole (successful) promotion as failed.
     let seeded_readme = if args.dry_run {
         false
     } else {
-        seed_ledger_readme(Path::new(repo))
-            .with_context(|| format!("cannot seed the ledger README under {repo}"))?
+        match seed_ledger_readme(Path::new(repo)) {
+            Ok(seeded) => seeded,
+            Err(e) => {
+                eprintln!("arclite: couldn't seed the ledger README under {repo} ({e})");
+                false
+            }
+        }
     };
 
     let head = format!(
