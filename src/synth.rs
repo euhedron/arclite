@@ -532,6 +532,42 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(changed)
 }
 
+/// The target repo's commit state at run time — `HEAD`'s short sha, suffixed `-dirty` when the
+/// worktree differs from it — anchoring the run record (and any findings promoted from it) to the
+/// code state the run actually judged. `None` outside a git repo or when git can't answer: a run on
+/// a plain directory is legitimate, so provenance is best-effort and its absence is the disclosure
+/// (the record simply carries no `commit`).
+fn repo_commit(root: &Path) -> Option<String> {
+    let head = ai::command("git")
+        .ok()?
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if !head.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    if sha.is_empty() {
+        return None;
+    }
+    // Dirty = any uncommitted change (staged, unstaged, or untracked): the judged code went beyond
+    // HEAD, and a finding anchored to the bare sha would overclaim.
+    let status = ai::command("git")
+        .ok()?
+        .arg("-C")
+        .arg(root)
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if status.status.success() && !status.stdout.is_empty() {
+        Some(format!("{sha}-dirty"))
+    } else {
+        Some(sha)
+    }
+}
+
 /// What a run gathers into context — the shaping levers, grouped so adding one is a field, not a new
 /// positional argument. Built from the run's args at the call site (the CLI↔synth marshal stays there).
 pub struct ContextSpec<'a> {
@@ -797,6 +833,11 @@ struct RunRecord<'a> {
     version: &'static str,
     command: &'a str,
     repo: String,
+    /// The repo's commit at run time (short sha, `-dirty` when the worktree exceeded it) — what the
+    /// run actually judged, carried into promoted findings so their claims stay anchored to a code
+    /// state. Omitted when the target isn't a git repo (absence is the disclosure).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<String>,
     model: &'a str,
     backend: &'a str,
     runs: usize,
@@ -1064,6 +1105,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             version: env!("CARGO_PKG_VERSION"),
             command: opts.command,
             repo: opts.dir.display().to_string(),
+            commit: repo_commit(opts.dir),
             model: &report.model,
             backend: opts.backend,
             runs,

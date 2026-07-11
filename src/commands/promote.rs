@@ -66,6 +66,17 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         })?;
 
     let ledger = crate::findings_open_dir(Path::new(repo));
+    // Provenance the entries carry: the commit the run judged (when the run recorded one) and the
+    // run's timestamp — so a finding's claim stays anchored to a code state and a moment, and a
+    // reader in the target repo can tell whether the repo has moved on since.
+    let commit = record
+        .get("commit")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let recorded = record
+        .get("ts")
+        .and_then(Value::as_u64)
+        .map(crate::commands::log::datetime_utc);
 
     let mut promoted = Vec::new();
     for finding in findings {
@@ -74,8 +85,16 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             // Indicative only — a real write bumps the name on a collision (see `write_entry`).
             crate::findings_entry_path(&ledger, &stem)
         } else {
-            write_entry(&ledger, &stem, finding, &run_id, &command)
-                .with_context(|| format!("cannot write a finding into {}", ledger.display()))?
+            write_entry(
+                &ledger,
+                &stem,
+                finding,
+                &run_id,
+                &command,
+                commit.as_deref(),
+                recorded.as_deref(),
+            )
+            .with_context(|| format!("cannot write a finding into {}", ledger.display()))?
         };
         let id = path
             .file_stem()
@@ -90,6 +109,16 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         });
     }
 
+    // A ledger receiving its first entries also receives its explanation: an agent-facing README on
+    // what the entries are, how their freshness reads, and the verify/retire lifecycle — the target
+    // repo's own agents otherwise have no reason to know `.arc/findings` exists or how to treat it.
+    let seeded_readme = if args.dry_run {
+        false
+    } else {
+        seed_ledger_readme(Path::new(repo))
+            .with_context(|| format!("cannot seed the ledger README under {repo}"))?
+    };
+
     let head = format!(
         "{}{} {} finding(s) from run {run_id} (`arc {command}`) into {}:",
         if args.dry_run { "[dry run] " } else { "" },
@@ -101,10 +130,13 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         promoted.len(),
         crate::display_path(&ledger.display().to_string()),
     );
-    let lines: Vec<String> = promoted
+    let mut lines: Vec<String> = promoted
         .iter()
         .map(|p| format!("  {} · {}", p.id, crate::display_path(&p.path)))
         .collect();
+    if seeded_readme {
+        lines.push("  + seeded the ledger's README.md (first promotion into this repo)".to_owned());
+    }
     let human = format!("{head}\n{}", lines.join("\n"));
 
     let out = PromoteOutput {
@@ -176,20 +208,31 @@ fn write_entry(
     finding: &Value,
     run_id: &str,
     command: &str,
+    commit: Option<&str>,
+    recorded: Option<&str>,
 ) -> std::io::Result<PathBuf> {
     let (path, mut file) = crate::claim_findings_entry(dir, stem)?;
     let id = path
         .file_stem()
         .and_then(|s| s.to_str())
         .expect("a claimed entry path is <id>.md, so its file stem is valid UTF-8");
-    file.write_all(entry_md(finding, id, run_id, command).as_bytes())?;
+    file.write_all(entry_md(finding, id, run_id, command, commit, recorded).as_bytes())?;
     Ok(path)
 }
 
-/// One ledger entry in the seeded format: provenance frontmatter, the finding rendered losslessly as
-/// the Claim, and the curation sections (Why/Next Action/Resolution) left blank for a human or agent
-/// to fill on review — a promoted `system_run` finding is a starting point, not a finished writeup.
-fn entry_md(finding: &Value, id: &str, run_id: &str, command: &str) -> String {
+/// One ledger entry in the seeded format: provenance frontmatter (including the commit the producing
+/// run judged and when — the anchors a reader needs to tell whether the repo has moved on), the
+/// finding rendered losslessly as the Claim, and the curation sections (Why/Next Action/Resolution)
+/// left blank for a human or agent to fill on review — a promoted `system_run` finding is a starting
+/// point, not a finished writeup. The `commit`/`recorded` lines appear only when the run carried them.
+fn entry_md(
+    finding: &Value,
+    id: &str,
+    run_id: &str,
+    command: &str,
+    commit: Option<&str>,
+    recorded: Option<&str>,
+) -> String {
     let claim = finding
         .as_object()
         .into_iter()
@@ -200,19 +243,80 @@ fn entry_md(finding: &Value, id: &str, run_id: &str, command: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let commit_line = commit.map_or_else(String::new, |c| format!("commit: {c}\n"));
+    let recorded_line = recorded.map_or_else(String::new, |r| format!("recorded: {r}\n"));
+    let against = commit.map_or_else(String::new, |c| format!(" against commit `{c}`"));
     format!(
         "---\n\
          id: {id}\n\
          status: open\n\
          origin_kind: system_run\n\
          system_run_id: {run_id}\n\
-         ---\n\n\
+         {commit_line}{recorded_line}---\n\n\
          ## Claim\n{claim}\n\n\
-         ## Evidence\nPromoted from `arc {command}` run `{run_id}` — see `arc log {run_id}` for the full run and its note.\n\n\
+         ## Evidence\nPromoted from `arc {command}` run `{run_id}`{against} — see `arc log {run_id}` for the full run and its note.\n\n\
          ## Why It Matters\n\n\
          ## Next Action\n\n\
          ## Resolution\n"
     )
+}
+
+/// The agent-facing explanation seeded into a ledger's first promotion — what the entries are, how
+/// their freshness reads, and the lifecycle — kept general (it lands in arbitrary repos), and
+/// self-dated with the arc that wrote it: a generated orientation must say when it was true and
+/// yield to the installed `arc`, never read as canon after arc evolves past it.
+fn ledger_readme() -> String {
+    format!(
+        "\
+# Findings Ledger
+
+Findings this repository carries forward, written by `arc promote` from logged runs (possibly run
+from outside this repo) and moved to `resolved/` by `arc retire`. The system owns the entries:
+react to one, fix the code, or retire it — don't hand-edit the files.
+
+Each entry's frontmatter:
+
+- `status` — `open` until retired.
+- `system_run_id` — the producing run; `arc log <id>` re-shows its full context and note.
+- `commit` — the commit the run judged; a `-dirty` suffix means the worktree had changes beyond it.
+  The claim is about that state — if the repo has moved on, re-check before acting.
+- `recorded` — when the run happened.
+
+Re-checking: `arc run verify <repo>` judges every open finding against the current code
+(`reproduces` / `resolved` / `indeterminate`), and `arc retire <verify-run-id>` moves the resolved
+ones out. A newer entry about the same issue supersedes an older one — trust recency.
+
+---
+
+Seeded by `arc` v{} on {}, at this ledger's first promotion. A generated orientation, not canon:
+arc and this format may have evolved since — where they disagree, the installed `arc` (`arc --help`)
+is authoritative. Edit or delete freely; arc never rewrites this file.
+",
+        env!("CARGO_PKG_VERSION"),
+        crate::commands::log::datetime_utc(crate::log::now_secs()),
+    )
+}
+
+/// Seed [`ledger_readme`] into `<repo>/.arc/findings/` when absent, returning whether it was written.
+/// Never overwrites — a repo's own curated README wins; present-but-unreadable propagates rather than
+/// masquerading as already-seeded.
+fn seed_ledger_readme(repo: &Path) -> std::io::Result<bool> {
+    let path = crate::findings_open_dir(repo)
+        .parent()
+        .expect("the open ledger always sits inside .arc/findings")
+        .join("README.md");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            file.write_all(ledger_readme().as_bytes())?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]

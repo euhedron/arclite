@@ -163,8 +163,9 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 }
 
 /// A UNIX timestamp as `YYYY-MM-DD HH:MM UTC` — UTC because it's exact without a timezone
-/// dependency, and labeled so it can't be misread as local time.
-fn datetime_utc(secs: u64) -> String {
+/// dependency, and labeled so it can't be misread as local time. Shared with `promote`, which stamps
+/// it into ledger entries as `recorded:`.
+pub(crate) fn datetime_utc(secs: u64) -> String {
     let (y, m, d) =
         civil_from_days(i64::try_from(secs / SECS_PER_DAY).expect("fits until year ~25e12"));
     let rem = secs % SECS_PER_DAY;
@@ -300,7 +301,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
         when,
         field(&run, "version")
     );
-    // Identity: command, repo, the backend/model that produced it, and the gate verdict if gated.
+    // Identity: command, repo (at its commit, when the run recorded one), and the backend/model.
     meta.push_str(&format!(
         "\n{} · {} · {}/{}",
         field(&run, "command"),
@@ -308,6 +309,9 @@ pub(crate) fn stored_human(v: &Value) -> String {
         field(&run, "backend"),
         field(&run, "model")
     ));
+    if let Some(commit) = run.get("commit").and_then(Value::as_str) {
+        meta.push_str(&format!(" · commit {commit}"));
+    }
     // A run that errored (spent but didn't complete) reports the failure instead of a gate verdict —
     // it never reached the gate, so showing "gate: passed" would misread.
     if let Some(error) = run.get("error").and_then(Value::as_str) {
