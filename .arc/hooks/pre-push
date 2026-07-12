@@ -18,6 +18,22 @@ if [ "$ARC_GATE" = "0" ]; then
     exit 0
 fi
 
+# A tag-only push moves no branch: its commits are already on the remote, gated when they landed, so
+# re-running the gate would only re-sample identical code (each fresh audit is a new judgment — a
+# release tag shouldn't be a lottery ticket on code that already passed). Gate pushes that move a
+# branch ref; the refs arrive on stdin as `<local ref> <local sha> <remote ref> <remote sha>` lines.
+branch_push=0
+while read -r local_ref _rest; do
+    case "$local_ref" in
+    refs/tags/*) ;;
+    *) branch_push=1 ;;
+    esac
+done
+if [ "$branch_push" -eq 0 ]; then
+    echo "arclite gate: tag-only push — its commits were gated when they landed; skipping" >&2
+    exit 0
+fi
+
 # CI parity (blocking, deterministic): the same checks the GitHub `default` pipeline runs, so a push
 # that would turn CI red is blocked here first — before any AI spend. Cheapest check first; on a tree
 # already built locally cargo's cache makes the re-check near-instant. (arclite devs have the Rust
