@@ -243,8 +243,14 @@ pub struct Request<'a> {
     pub reasoning_effort: Option<&'a str>,
 }
 
+/// Each backend's name, named once: the [`BACKENDS`] registry rows, [`DEFAULT_BACKEND`], and every
+/// cross-module reference (the config table's provider-listing rows) derive from these, so a rename
+/// is one edit here — never a scattered literal hunt.
+pub(crate) const CLAUDE: &str = "claude";
+pub(crate) const CODEX: &str = "codex";
+
 /// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
-pub const DEFAULT_BACKEND: &str = "claude";
+pub const DEFAULT_BACKEND: &str = CLAUDE;
 
 /// Constructs a backend instance — the factory half of a [`BACKENDS`] registry row.
 type BackendFactory = fn() -> Box<dyn Backend>;
@@ -254,8 +260,8 @@ type BackendFactory = fn() -> Box<dyn Backend>;
 /// not a name list and a `match` arm kept in lockstep (the factory is what a name list alone can't
 /// encode). `doctor` probes, `validate_backend`, and error wording all derive from the name set.
 const BACKENDS: &[(&str, BackendFactory)] = &[
-    ("claude", || Box::new(ClaudeBackend)),
-    ("codex", || Box::new(CodexBackend)),
+    (CLAUDE, || Box::new(ClaudeBackend)),
+    (CODEX, || Box::new(CodexBackend)),
 ];
 
 /// The known backend names, derived from the [`BACKENDS`] registry.

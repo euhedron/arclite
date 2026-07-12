@@ -46,9 +46,9 @@ const SETTINGS: &[Setting] = &[
         key: "defaults.model",
         read: |s| s.default_model.clone(),
         parse: parse_string,
-        // "claude"/"codex" here are the registry names the fetch resolves via `ai::backend` — a
-        // rename fails loudly there, never silently detaches the picker from its provider.
-        space: |_| ValueSpace::Remote { backend: "claude" },
+        space: |_| ValueSpace::Remote {
+            backend: crate::ai::CLAUDE,
+        },
     },
     Setting {
         key: "defaults.backend",
@@ -104,7 +104,9 @@ const SETTINGS: &[Setting] = &[
         key: "defaults.codex_model",
         read: |s| s.default_codex_model.clone(),
         parse: parse_string,
-        space: |_| ValueSpace::Remote { backend: "codex" },
+        space: |_| ValueSpace::Remote {
+            backend: crate::ai::CODEX,
+        },
     },
     Setting {
         key: "defaults.codex_reasoning_effort",
