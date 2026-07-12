@@ -40,24 +40,33 @@ pub(crate) fn resolved(
     let resolution = super::resolve_rule_sources(rules_override, ruleset, &settings)?;
     let (rules, skipped) = crate::rules::load_sources(&resolution.sources)?;
     let rel = |p: &Path| p.strip_prefix(&root).unwrap_or(p).display().to_string();
+    // The disabling judgment comes from the one statement of it — the same partition synthesis
+    // filters with — never a reimplemented membership check that could drift from what runs actually
+    // exclude. The report shows both halves (a disabled rule must stay visible to be re-enabled),
+    // re-merged in id order; a configured id that disabled nothing is stale, surfaced as unmatched.
+    let (active, disabled) = crate::rules::partition_disabled(rules, &settings.disabled_rules);
     let disabled_unmatched = settings
         .disabled_rules
         .iter()
-        .filter(|id| !rules.iter().any(|r| &r.id == *id))
+        .filter(|id| !disabled.iter().any(|r| &r.id == *id))
         .cloned()
         .collect();
+    let mut entries: Vec<RuleEntry> = active
+        .into_iter()
+        .map(|r| (r, false))
+        .chain(disabled.into_iter().map(|r| (r, true)))
+        .map(|(r, disabled)| RuleEntry {
+            disabled,
+            id: r.id,
+            source: rel(&r.source),
+            body: r.body,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(Report {
         description: resolution.description.clone(),
         sources: resolution.sources.iter().map(|p| rel(p)).collect(),
-        rules: rules
-            .into_iter()
-            .map(|r| RuleEntry {
-                disabled: settings.disabled_rules.contains(&r.id),
-                id: r.id,
-                source: rel(&r.source),
-                body: r.body,
-            })
-            .collect(),
+        rules: entries,
         disabled_unmatched,
         skipped: skipped.iter().map(|p| rel(p)).collect(),
         layers: settings.active.iter().map(|p| rel(p)).collect(),
