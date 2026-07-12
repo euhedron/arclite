@@ -89,10 +89,11 @@ enum Msg {
         result: Result<String, String>,
     },
     /// A launch's model-listing fetch finished (the first `m` press spawns it): generation-guarded
-    /// like the preview, carrying the ids or the failure for the modal's notice line.
+    /// like the preview, carrying the ids + the provider's truncation flag (disclosed like the
+    /// sibling [`Msg::ModelsFetched`]) or the failure — either way the modal's notice line.
     LaunchModels {
         generation: u64,
-        result: Result<Vec<String>, String>,
+        result: Result<(Vec<String>, bool), String>,
     },
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
@@ -362,11 +363,14 @@ impl App {
     /// which reports the preview back via [`Msg::LaunchPreview`]. The dry-run spends nothing.
     fn start_launch(&mut self, verb: Command) {
         self.palette = None;
-        // The `r` cycle's options, captured at gate-open; an unloadable settings file just means no
-        // ruleset cycling (the run itself resolves settings independently and would surface the error).
-        let rulesets = crate::settings::Settings::load(Path::new(&self.cwd))
-            .map(|s| s.ruleset_ids())
-            .unwrap_or_default();
+        // The `r` cycle's options, captured at gate-open. Absent settings are genuinely "no rulesets
+        // to cycle", but an *unreadable* settings file must not be read as that — the failure rides
+        // the gate's notice line (the run itself re-resolves settings and errors the same way).
+        let (rulesets, settings_error) = match crate::settings::Settings::load(Path::new(&self.cwd))
+        {
+            Ok(s) => (s.ruleset_ids(), None),
+            Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+        };
         self.launch_generation += 1;
         self.launch = Some(Launch {
             verb,
@@ -375,6 +379,7 @@ impl App {
             model: None,
             ruleset: None,
             rulesets,
+            settings_error,
             models: ModelsState::Unfetched,
             generation: self.launch_generation,
         });
@@ -460,7 +465,7 @@ impl App {
                 return;
             };
             match &launch.models {
-                ModelsState::Fetched(ids) => {
+                ModelsState::Fetched { ids, .. } => {
                     let ids = ids.clone();
                     launch.model = cycle(&ids, launch.model.as_deref());
                     Act::Step
@@ -496,7 +501,9 @@ impl App {
                         let listing = crate::ai::backend(&name)
                             .and_then(|b| b.list_models(&settings))
                             .map_err(|e| format!("{e:#}"))?;
-                        Ok(listing.models.into_iter().map(|m| m.id).collect())
+                        let truncated = listing.truncated;
+                        let ids = listing.models.into_iter().map(|m| m.id).collect();
+                        Ok((ids, truncated))
                     })();
                     let _ = tx.send(Msg::LaunchModels { generation, result });
                 });
@@ -758,6 +765,9 @@ struct Launch {
     /// The ruleset ids defined in settings when the gate opened — the `r` cycle's option set (empty
     /// = no rulesets to cycle; the key is a no-op and the footer omits it).
     rulesets: Vec<String>,
+    /// A settings load failure at gate-open, shown on the notice line — an unreadable settings file
+    /// must not masquerade as "no rulesets defined" (absent settings are simply empty options).
+    settings_error: Option<String>,
     /// The provider model listing for the launch's current backend, fetched on the first `m` press
     /// and reset when the backend cycles (a model id belongs to a backend).
     models: ModelsState,
@@ -790,7 +800,12 @@ enum ModelsState {
     Fetching,
     /// The fetch failed (no key, network, …) — shown on the modal's notice line; `m` retries.
     Failed(String),
-    Fetched(Vec<String>),
+    /// The listing, with the provider's truncation flag — a truncated cycle is disclosed on the
+    /// notice line like every other surface (`arc models`, the config picker), never silent.
+    Fetched {
+        ids: Vec<String>,
+        truncated: bool,
+    },
 }
 
 /// The next override in a cycle that ends back at `None` (the configured default): `None` steps to
@@ -1271,8 +1286,8 @@ fn update(app: &mut App, msg: Msg) {
                 && launch.generation == generation
             {
                 match result {
-                    Ok(ids) => {
-                        launch.models = ModelsState::Fetched(ids);
+                    Ok((ids, truncated)) => {
+                        launch.models = ModelsState::Fetched { ids, truncated };
                         fetched = true;
                     }
                     Err(e) => launch.models = ModelsState::Failed(e),
@@ -2424,14 +2439,21 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         LaunchStage::Failed { error } => (format!("launch {verb} · failed"), error.clone()),
     };
 
-    // The model-listing state rides the modal's own notice line (dim while fetching, the attention
-    // color on failure) — the shaping keys' feedback, never hidden in a corner.
-    let notice: Option<Line> = match &launch.models {
-        ModelsState::Fetching => Some(Line::from("fetching models…").dim()),
-        ModelsState::Failed(e) => Some(Line::from(format!("models: {e}")).yellow()),
-        ModelsState::Unfetched | ModelsState::Fetched(_) => None,
-    };
-    let notice_rows = u16::from(notice.is_some());
+    // The shaping keys' feedback rides the modal's own notice lines (dim while fetching, the
+    // attention color on a failure or an incomplete option set) — never hidden in a corner.
+    let mut notices: Vec<Line> = Vec::new();
+    if let Some(e) = &launch.settings_error {
+        notices.push(Line::from(format!("settings: {e}")).yellow());
+    }
+    match &launch.models {
+        ModelsState::Fetching => notices.push(Line::from("fetching models…").dim()),
+        ModelsState::Failed(e) => notices.push(Line::from(format!("models: {e}")).yellow()),
+        ModelsState::Fetched {
+            truncated: true, ..
+        } => notices.push(Line::from("models: the provider reports more pages exist").yellow()),
+        ModelsState::Unfetched | ModelsState::Fetched { .. } => {}
+    }
+    let notice_rows = notices.len() as u16;
 
     // This modal is the spend-authorization surface, so nothing in it may be *silently* clipped:
     // long lines wrap (the estimate stays whole on a narrow terminal), and when the wrapped body
@@ -2472,8 +2494,8 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
             disclosure,
         );
     }
-    if let Some(notice) = notice {
-        frame.render_widget(notice, notice_area);
+    if !notices.is_empty() {
+        frame.render_widget(Paragraph::new(notices), notice_area);
     }
 }
 
