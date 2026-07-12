@@ -38,10 +38,14 @@ pub(crate) fn get(
         );
     }
     let mut cmd = Command::new(curl_program());
+    // stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the returned
+    // error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
+    // writing there directly would corrupt the display.
     cmd.args(["--fail", "--silent", "--show-error"])
         .args(["--user-agent", "arclite"])
         .arg(url)
-        .stdout(Stdio::piped());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if follow_redirects {
         cmd.arg("--location");
     }
@@ -67,14 +71,19 @@ pub(crate) fn get(
         }
     }
     let output = child.wait_with_output().context("waiting for curl")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "curl could not GET {url} (exit {})",
-        output
-            .status
-            .code()
-            .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
-    );
+    if !output.status.success() {
+        let reason = String::from_utf8_lossy(&output.stderr);
+        let reason = reason.trim();
+        anyhow::bail!(
+            "curl could not GET {url} (exit {}){}{}",
+            output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+            if reason.is_empty() { "" } else { ": " },
+            reason,
+        );
+    }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
