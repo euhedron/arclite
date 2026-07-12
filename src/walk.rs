@@ -17,7 +17,7 @@ pub const SCOPE_NOTE: &str = "gitignore-aware (the repo's `.gitignore` and `.git
 /// explicitly, keeping the note's "the repo's `.gitignore` excluded" claim true for subdir walks
 /// (first broken in the wild by a gitignored `__pycache__` riding an `--include` of a Python
 /// package). When `dir` *is* the repo root the chain is empty and this is the plain rooted walk.
-pub fn configured(repo_root: &Path, dir: &Path) -> ignore::Walk {
+pub fn configured(repo_root: &Path, dir: &Path) -> anyhow::Result<ignore::Walk> {
     let mut builder = WalkBuilder::new(dir);
     builder
         .hidden(false)
@@ -28,32 +28,44 @@ pub fn configured(repo_root: &Path, dir: &Path) -> ignore::Walk {
     if dir != repo_root && dir.starts_with(repo_root) {
         for ancestor in dir.ancestors().skip(1) {
             let gitignore = ancestor.join(".gitignore");
-            if gitignore.is_file() {
-                // A malformed or unreadable chain file degrades to a less-filtered walk —
-                // over-inclusion (visible in the disclosed context sizes), never data loss —
-                // matching the walker's own leniency for the ignore files it reads in-walk.
-                builder.add_ignore(gitignore);
+            // Absent is the normal case (skip); present joins the chain; unreadable must not
+            // collapse into absent (the `optional`/`try_is_dir` standard) — a permission-denied
+            // root `.gitignore` silently yielding an unfiltered walk would be a silent scope
+            // change, so it surfaces instead. A *malformed* pattern line inside a readable file
+            // stays inert (git's own tolerance, matching the walker's in-walk leniency).
+            match std::fs::metadata(&gitignore) {
+                Ok(m) if m.is_file() => {
+                    builder.add_ignore(gitignore);
+                }
+                Ok(_) => {} // a directory named `.gitignore` is not an ignore file
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "cannot read {} (needed for the walk's ignore chain): {e}",
+                        gitignore.display()
+                    ));
+                }
             }
             if ancestor == repo_root {
                 break;
             }
         }
     }
-    builder.build()
+    Ok(builder.build())
 }
 
 /// Walk `dir` within `repo_root` (gitignore-aware — see [`configured`]) into its entries plus a
 /// count of walk errors (permission denied, I/O, cycles, …). Errors are counted, never silently
 /// dropped — so callers can surface a partial scan instead of pretending the missing entries never
 /// existed.
-pub fn entries(repo_root: &Path, dir: &Path) -> (Vec<ignore::DirEntry>, usize) {
+pub fn entries(repo_root: &Path, dir: &Path) -> anyhow::Result<(Vec<ignore::DirEntry>, usize)> {
     let mut entries = Vec::new();
     let mut errors = 0usize;
-    for result in configured(repo_root, dir) {
+    for result in configured(repo_root, dir)? {
         match result {
             Ok(entry) => entries.push(entry),
             Err(_) => errors += 1,
         }
     }
-    (entries, errors)
+    Ok((entries, errors))
 }

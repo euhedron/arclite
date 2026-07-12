@@ -214,15 +214,15 @@ fn missing_label(label: &str) -> String {
 /// Walk a directory gitignore-aware within `root` (the repo's ignore chain applies even below the
 /// root — see [`crate::walk::configured`]), returning its files (sorted; `.git` skipped) and the
 /// count of walk errors (unreadable entries) so callers can surface them, not drop them.
-fn walk_files(root: &Path, dir: &Path) -> (Vec<PathBuf>, usize) {
-    let (entries, errors) = crate::walk::entries(root, dir);
+fn walk_files(root: &Path, dir: &Path) -> anyhow::Result<(Vec<PathBuf>, usize)> {
+    let (entries, errors) = crate::walk::entries(root, dir)?;
     let mut files: Vec<PathBuf> = entries
         .into_iter()
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
         .map(ignore::DirEntry::into_path)
         .collect();
     files.sort();
-    (files, errors)
+    Ok((files, errors))
 }
 
 /// Expand each `--include` path (a file *or* a directory) into context text, applying the optional
@@ -237,14 +237,14 @@ fn gather_includes(
     excluder: &ignore::gitignore::Gitignore,
     seen: &mut Vec<PathBuf>,
     sources: &mut Vec<String>,
-) -> String {
+) -> anyhow::Result<String> {
     let mut ctx = String::new();
     let mut walked_dir = false;
     for path in paths {
         let is_dir = path.is_dir();
         walked_dir |= is_dir;
         let (files, walk_errors) = if is_dir {
-            walk_files(root, path)
+            walk_files(root, path)?
         } else {
             (vec![path.clone()], 0)
         };
@@ -306,7 +306,7 @@ fn gather_includes(
     if walked_dir {
         sources.push(format!("walked directories: {}", crate::walk::SCOPE_NOTE));
     }
-    ctx
+    Ok(ctx)
 }
 
 /// Render the rules from `rule_sources` as a context block, recording which rule ids were included —
@@ -694,7 +694,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         &excluder,
         &mut seen,
         &mut sources,
-    ));
+    )?);
     text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
