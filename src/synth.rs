@@ -556,7 +556,9 @@ fn repo_commit(root: &Path) -> Option<String> {
         return None;
     }
     // Dirty = any uncommitted change (staged, unstaged, or untracked): the judged code went beyond
-    // HEAD, and a finding anchored to the bare sha would overclaim.
+    // HEAD, and a finding anchored to the bare sha would overclaim. A status that *fails* leaves
+    // dirtiness undetermined — the anchor is dropped entirely (absence is this function's
+    // disclosure) rather than presented as a clean commit.
     let status = ai::command("git")
         .ok()?
         .arg("-C")
@@ -564,10 +566,13 @@ fn repo_commit(root: &Path) -> Option<String> {
         .args(["status", "--porcelain"])
         .output()
         .ok()?;
-    if status.status.success() && !status.stdout.is_empty() {
-        Some(format!("{sha}-dirty"))
-    } else {
+    if !status.status.success() {
+        return None;
+    }
+    if status.stdout.is_empty() {
         Some(sha)
+    } else {
+        Some(format!("{sha}-dirty"))
     }
 }
 
