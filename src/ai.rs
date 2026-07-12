@@ -699,7 +699,9 @@ fn synthesize_claude(
     // as a *success* is a genuine contradiction — but its usage is real, billed spend, so it too is
     // carried as an errored run (loudly naming the contradiction) rather than bailed and lost.
     if !status.success() && synthesis.error.is_none() {
-        synthesis.error = Some(format!("claude exited with {status} despite a success result"));
+        synthesis.error = Some(format!(
+            "claude exited with {status} despite a success result"
+        ));
     }
     Ok(synthesis)
 }
