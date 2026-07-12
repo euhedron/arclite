@@ -53,7 +53,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             .with_context(|| format!("cannot access the run's repository ({repo})"))?,
         "the run's repository ({repo}) no longer exists — nothing to promote into"
     );
-    // Findings are the structured `results`; a prose run (no `--structured`) has none to promote.
+    // Findings are the structured `results`; a prose verb's run (summarize) has none to promote.
     let findings = stored
         .get("structured")
         .and_then(|s| s.get(crate::synth::RESULTS_KEY))
@@ -61,7 +61,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .filter(|items| !items.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "run `{run_id}` has no structured findings to promote — re-run the verb with `--structured` (or `--fail-on-findings`)"
+                "run `{run_id}` has no structured findings to promote — its verb produces none (summarize), it predates always-structured output, or it errored before returning results"
             )
         })?;
 
@@ -240,16 +240,9 @@ fn entry_md(
     commit: Option<&str>,
     recorded: Option<&str>,
 ) -> String {
-    let claim = finding
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(k, v)| {
-            let val = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
-            format!("- **{k}:** {val}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    // The same rendering the run's own output uses (synth::item_bullets), so a finding reads
+    // identically in the terminal and in the ledger it was promoted into.
+    let claim = crate::synth::item_bullets(finding);
     let commit_line = commit.map_or_else(String::new, |c| format!("commit: {c}\n"));
     let recorded_line = recorded.map_or_else(String::new, |r| format!("recorded: {r}\n"));
     let against = commit.map_or_else(String::new, |c| format!(" against commit `{c}`"));

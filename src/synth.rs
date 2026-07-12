@@ -142,7 +142,8 @@ pub struct SynthOptions<'a> {
     /// Load the agent's ambient project memory — claude's CLAUDE.md + auto-memory, codex's AGENTS.md —
     /// instead of isolating (default: isolate).
     pub ambient_memory: bool,
-    /// JSON Schema for structured output (`--structured`), or `None` for free-form prose.
+    /// JSON Schema for structured output (set whenever the verb declares a shape), or `None` for a
+    /// prose verb's free-form narrative.
     pub schema: Option<&'a str>,
     /// When `Some(field)` (from `--fail-on-findings`), block — exit non-zero — if the structured
     /// output's `field` array is non-empty. `None` = no gating (default). Decoupled policy: the
@@ -813,7 +814,7 @@ struct SynthOutput<'a> {
     output: Option<String>,
     /// Path of the run log this run was appended to, if logging was on (disclosed every run).
     log: Option<String>,
-    /// Schema-validated structured result, if `--structured` was used.
+    /// Schema-validated structured result, present whenever the verb declares a shape.
     structured: Option<serde_json::Value>,
     /// An agent-reported failure (the run spent but didn't complete); absent on a normal completion.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -902,12 +903,42 @@ struct DryRunOutput<'a> {
 /// and the stored-run replay, so they can't diverge. A `serde_json::Value` always re-serializes
 /// (string keys), so the pretty-print is infallible — asserted, as in [`combine_runs`].
 pub(crate) fn body_display(structured: Option<&serde_json::Value>, text: &str) -> String {
-    match structured {
-        Some(value) if !value.is_null() => {
-            serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes")
-        }
-        _ => text.to_owned(),
+    let Some(value) = structured.filter(|v| !v.is_null()) else {
+        // No structure — a prose verb (summarize), where the narrative text *is* the product.
+        return text.to_owned();
+    };
+    // The typed results are canonical and the human view derives from them — each item's fields as
+    // labelled lines, then the run's `note` — never a second, driftable prose account. A structured
+    // value outside the results envelope falls back to pretty JSON so nothing is hidden (infallible:
+    // a `serde_json::Value` always re-serializes, asserted as in [`combine_runs`]).
+    let (Some(results), Some(note)) = (
+        value.get(RESULTS_KEY).and_then(serde_json::Value::as_array),
+        value.get(NOTE_KEY).and_then(serde_json::Value::as_str),
+    ) else {
+        return serde_json::to_string_pretty(value).expect("a serde_json::Value re-serializes");
+    };
+    let mut out = format!("{} result(s)", results.len());
+    for item in results {
+        out.push_str("\n\n");
+        out.push_str(&item_bullets(item));
     }
+    out.push_str(&format!("\n\nnote: {note}"));
+    out
+}
+
+/// One structured item's fields as `- **key:** value` lines — the human rendering of a typed result,
+/// shared by the run output ([`body_display`]) and promote's ledger entries, so a finding reads the
+/// same in the terminal, the TUI, and the ledger.
+pub(crate) fn item_bullets(item: &serde_json::Value) -> String {
+    item.as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| {
+            let val = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+            format!("- **{k}:** {val}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.

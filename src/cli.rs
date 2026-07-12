@@ -358,16 +358,11 @@ pub struct SynthArgs {
     /// deliberately apply your own ambient standards.
     #[arg(long)]
     pub ambient_memory: bool,
-    /// Emit the command's structured output instead of prose, where the command defines one: a
-    /// schema-validated `results` array plus a required `note` — the run's overall read, so an
-    /// empty list is a judged outcome, not silence. Commands without a structured mode reject the
-    /// flag. Compose with `--json` for machine consumption.
-    #[arg(long)]
-    pub structured: bool,
     /// Gate on the command's results: exit non-zero if its structured `results` array is
     /// non-empty — for enforcement in git hooks/CI, where a hook blocks on exit status alone. Opt-in;
-    /// implies `--structured`; rejected by commands with no structured mode (e.g. `summarize`). Off by
-    /// default — no command gates unless asked.
+    /// requires a verb with structured output, which every verb but `summarize` produces by default
+    /// (a schema-validated `results` array + `note` — the canonical output the human view derives
+    /// from; `--json` carries it for machines). A prose verb rejects the flag. Off by default.
     #[arg(long)]
     pub fail_on_findings: bool,
     /// Order the results from most to least significant (priority/severity/relevance). Applies to

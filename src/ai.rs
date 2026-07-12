@@ -25,8 +25,8 @@ pub struct Usage {
 pub struct Synthesis {
     pub text: String,
     pub usage: Usage,
-    /// Schema-validated structured output — present only when a `--json-schema` was requested
-    /// (i.e. `--structured`). Read this for the typed result instead of parsing `text`.
+    /// Schema-validated structured output — present whenever the verb declares a shape (every verb
+    /// but summarize). Read this for the typed result instead of parsing `text`.
     pub structured: Option<serde_json::Value>,
     /// An agent-reported failure (e.g. a tripped `--max-budget-usd` cap → `error_max_budget_usd`): the
     /// run *ran and spent* — so `usage` holds the real, billed spend — but did not complete. Carried as
@@ -631,8 +631,8 @@ fn synthesize_claude(
     if let Some(cap) = req.max_budget_usd {
         cmd.arg("--max-budget-usd").arg(cap.to_string());
     }
-    // Structured output (`--structured`): the result returns as a schema-validated `structured_output`
-    // object, never scraped from prose.
+    // Structured output (a verb-declared shape): the result returns as a schema-validated
+    // `structured_output` object, never scraped from prose.
     if let Some(schema) = req.json_schema {
         cmd.arg("--json-schema").arg(schema);
     }

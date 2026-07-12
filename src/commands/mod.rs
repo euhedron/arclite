@@ -50,8 +50,10 @@ const RANKED_NOTE: &str =
 const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 
 /// Appended after the command's item-shape note: every structured run also returns a required
-/// top-level `note`, so an empty `results` is a judged outcome rather than silence.
-const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty.";
+/// top-level `note`, so an empty `results` is a judged outcome rather than silence. The note also
+/// carries what a prose report would have said around the findings — notably anything weighed but
+/// deliberately not raised — so the structured channel loses none of the judgment's edges.
+const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty — plus anything you weighed but deliberately did not raise, so the judgment's edges stay visible.";
 
 /// Render a command's kind taxonomy ([`Structure`]'s `kinds`) as a labelled list — `- label:
 /// description` per line — for the command to weave into its own prompt. (Why one declaration serves
@@ -148,31 +150,35 @@ pub fn run_synthesis(
     )?;
     let mut prompt = build_prompt(&ctx.text);
     prompt.push_str(GROUNDING);
-    // --structured emits the command's typed output; --fail-on-findings additionally gates on it.
-    // Both require the command to define a structure, so the flag is rejected — not silently
-    // ignored — when a command has none.
-    let want_structured = args.structured || args.fail_on_findings;
-    let (schema, gate) = if want_structured {
-        let s = structure.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "`{command}` has no structured output mode — drop --structured/--fail-on-findings"
-            )
-        })?;
+    // A verb that declares a structured shape always produces it: the typed `results` are the
+    // canonical output everything downstream acts on (the gate, promote, multi-run union, ranking),
+    // and the human view derives from them — prose-as-product remains only for verbs without a
+    // structure (summarize), where narrative is the deliverable. --fail-on-findings additionally
+    // gates on the results; it still requires a structure, so a prose verb rejects it rather than
+    // silently ignoring it.
+    let gate = if args.fail_on_findings {
+        anyhow::ensure!(
+            structure.is_some(),
+            "`{command}` has no structured output to gate on — drop --fail-on-findings"
+        );
+        // Gate on the `results` array the schemas produce — the key single-sourced in synth.
+        Some(crate::synth::RESULTS_KEY)
+    } else {
+        None
+    };
+    let schema = if let Some(s) = &structure {
         prompt.push_str(STRUCTURED_NOTE);
         prompt.push_str(s.note);
         prompt.push_str(NOTE_INSTRUCTION);
-        // Gate on the `results` array the schemas produce — the key single-sourced in synth.
-        let gate = args.fail_on_findings.then_some(crate::synth::RESULTS_KEY);
         // --kinds adds a free-string `kind` to each item — not enum-locked (the schema side of the
         // prompt instruction kinds_note adds below).
-        let schema = if args.kinds {
+        Some(if args.kinds {
             synth::with_kind(&s.schema)
         } else {
             s.schema.clone()
-        };
-        (Some(schema), gate)
+        })
     } else {
-        (None, None)
+        None
     };
     // --kinds and --ranked shape the output in any mode (a prompt note; structured runs also carry
     // it in the `kind` field / array order above) — neither requires structured output.
