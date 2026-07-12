@@ -33,15 +33,18 @@ fn starter_settings() -> String {
 }
 
 /// Starter pre-push gate — a minimal composition the repo edits to taste. The binary name comes from
-/// [`crate::cli::binary_name`] (the single source `doctor` detects the hook by) rather than a literal,
-/// so a rename can't desync the scaffolded hook from arc's own detection.
+/// [`crate::cli::binary_name`] (the single source `doctor` detects the hook by) and the verbs from
+/// their [`crate::cli`] name constants, rather than literals, so a rename can't desync the
+/// scaffolded hook from the actual command line.
 fn starter_hook() -> String {
     format!(
         "#!/bin/sh\n\
          # arclite gate (pre-push). Edit the command(s) below to taste; skip once with `ARC_GATE=0 git push`.\n\
          if [ \"$ARC_GATE\" = \"0\" ]; then exit 0; fi\n\
-         {} run audit --fail-on-findings\n",
-        crate::cli::binary_name()
+         {} {} {} --fail-on-findings\n",
+        crate::cli::binary_name(),
+        crate::cli::NAME_RUN,
+        crate::cli::NAME_AUDIT
     )
 }
 
