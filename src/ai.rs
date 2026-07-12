@@ -487,7 +487,7 @@ fn provider_key(env_var: &str, saved: Option<&str>, setting_key: &str) -> Option
 /// The no-key error for a model listing — names both ways to supply one.
 fn key_hint(env_var: &str, setting_key: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "no API key for the model listing — set {env_var}, or save one with `arc config set --user {setting_key} <key>`"
+        "no API key for the model listing — set {env_var}, or save one with `arc config set {setting_key} <key>` (auto-saved to the user layer)"
     )
 }
 
@@ -900,9 +900,8 @@ fn synthesize_codex(
         "failed to launch `codex` — is the Codex CLI installed and on PATH?",
         |kind, event, _raw| match kind {
             "turn.completed" => {
-                // Capture the raw usage object; parse it after the stream so a *malformed* usage
-                // surfaces as a parse error rather than being swallowed to None and misreported as an
-                // absent event (the honest ground-truth-usage contract — cf. parse_result's loud bails).
+                // Capture the raw usage object; the strict parse happens after the stream (below),
+                // where a malformed object can bail loudly.
                 usage_raw = event.get("usage").cloned();
                 if let Some(p) = progress.as_mut() {
                     p.record_turn(0); // codex tool-call accounting is coarser than claude's; turns only
