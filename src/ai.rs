@@ -693,12 +693,13 @@ fn synthesize_claude(
         (None, false) => bail!("claude exited with {}: {}", status, stderr.trim()),
         (None, true) => bail!("claude produced no `result` event"),
     };
-    let synthesis = parse_result(&result_line, req.model)?;
+    let mut synthesis = parse_result(&result_line, req.model)?;
     // A non-zero exit whose payload parsed as an error is the expected failed-run shape — the failure
-    // is carried in `synthesis.error` (with its real usage) for logging. Only a non-zero exit that
-    // parsed as a *success* is a genuine contradiction worth bailing on.
+    // is carried in `synthesis.error` (with its real usage) for logging. A non-zero exit that parsed
+    // as a *success* is a genuine contradiction — but its usage is real, billed spend, so it too is
+    // carried as an errored run (loudly naming the contradiction) rather than bailed and lost.
     if !status.success() && synthesis.error.is_none() {
-        bail!("claude exited with {} despite a success result", status);
+        synthesis.error = Some(format!("claude exited with {status} despite a success result"));
     }
     Ok(synthesis)
 }
