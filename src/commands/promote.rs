@@ -232,6 +232,11 @@ fn write_entry(
 /// finding rendered losslessly as the Claim, and the curation sections (Why/Next Action/Resolution)
 /// left blank for a human or agent to fill on review — a promoted `system_run` finding is a starting
 /// point, not a finished writeup. The `commit`/`recorded` lines appear only when the run carried them.
+/// The frontmatter status line as promote authors it and retire rewrites it — one statement of the
+/// format, so an entry-format change can't silently turn retire's replacement into a no-op.
+pub(crate) const STATUS_OPEN: &str = "status: open";
+pub(crate) const STATUS_RESOLVED: &str = "status: resolved";
+
 fn entry_md(
     finding: &Value,
     id: &str,
@@ -249,7 +254,7 @@ fn entry_md(
     format!(
         "---\n\
          id: {id}\n\
-         status: open\n\
+         {STATUS_OPEN}\n\
          origin_kind: system_run\n\
          system_run_id: {run_id}\n\
          {commit_line}{recorded_line}---\n\n\

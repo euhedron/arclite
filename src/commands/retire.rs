@@ -181,7 +181,13 @@ fn move_entry(
 /// Resolution section, so the moved entry is self-describing and carries durable provenance (the run
 /// id, not an agent-recorded timestamp — see `.arc/findings/README.md`).
 fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
-    let restatused = body.replacen("status: open", "status: resolved", 1);
+    // The status line comes from promote's constants — the one statement of the entry format — so
+    // the search string can't drift from what promote actually wrote.
+    let restatused = body.replacen(
+        super::promote::STATUS_OPEN,
+        super::promote::STATUS_RESOLVED,
+        1,
+    );
     let note = if reason.is_empty() {
         format!("Resolved per verify run `{run_id}`.")
     } else {
