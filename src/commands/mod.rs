@@ -97,6 +97,13 @@ pub fn run_synthesis(
         crate::synth::MAX_RUNS,
         args.runs
     );
+    // verify auto-loads the open ledger framed for re-checking — the opposite framing of
+    // --findings' "surface new issues beyond these" — so the flag is rejected rather than
+    // silently overridden.
+    anyhow::ensure!(
+        !(args.findings && command == crate::cli::NAME_VERIFY),
+        "`{command}` already re-checks the open findings ledger — drop --findings"
+    );
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
@@ -145,7 +152,7 @@ pub fn run_synthesis(
             exclude: &args.exclude,
             scan: !args.no_scan,
             findings: args.findings,
-            // verify auto-loads the open ledger framed for re-checking (no explicit --findings needed)
+            // verify auto-loads the open ledger framed for re-checking (--findings rejected above)
             recheck_findings: command == crate::cli::NAME_VERIFY,
         },
     )?;

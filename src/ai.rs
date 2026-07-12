@@ -894,7 +894,7 @@ fn synthesize_codex(
     // codex runs read-only with no tools here (--sandbox read-only, no MCP configured).
     let mut usage_raw: Option<serde_json::Value> = None;
     let mut failure: Option<String> = None;
-    let (status, stderr) = drive(
+    let driven = drive(
         cmd,
         req.prompt,
         "failed to launch `codex` — is the Codex CLI installed and on PATH?",
@@ -933,7 +933,7 @@ fn synthesize_codex(
             }
             _ => {}
         },
-    )?;
+    );
     // Parse whatever usage the stream reported before the run ended, however it ended — a malformed
     // object surfaces as a parse error rather than being swallowed to zeros (the honest ground-truth
     // contract, cf. parse_result's loud bails).
@@ -941,6 +941,24 @@ fn synthesize_codex(
         .map(serde_json::from_value)
         .transpose()
         .context("codex's `usage` object was malformed")?;
+    // A transport-level failure (a broken stream read, a failed wait) after usage was captured is
+    // still a run that spent: carry it as an errored run with that usage, like every other
+    // failure-after-spend. With no usage in hand nothing is known to have been spent, so the
+    // launch-style hard bail stands.
+    let (status, stderr) = match driven {
+        Ok(driven) => driven,
+        Err(e) => {
+            if let Some(usage) = usage {
+                return Ok(Synthesis {
+                    text: String::new(),
+                    usage: usage.into_usage(req.model),
+                    structured: None,
+                    error: Some(format!("codex's stream failed after spend: {e:#}")),
+                });
+            }
+            return Err(e);
+        }
+    };
     // A run that failed after spending still gets its cost recorded: carry the failure as a value with
     // the captured usage (the claude contract — [`Synthesis::error`]), so the caller logs an *errored*
     // run instead of losing the spend on a bail. No captured usage → an all-zeros record: the honest
