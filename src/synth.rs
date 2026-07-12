@@ -1404,6 +1404,9 @@ fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
         total.output_tokens += u.output_tokens;
         total.cache_creation_input_tokens += u.cache_creation_input_tokens;
         total.cache_read_input_tokens += u.cache_read_input_tokens;
+        // The `zip` fold rests on a fan-out being single-backend (all-`Some` cost on claude,
+        // all-`None` on codex): one `None` among `Some`s would collapse real spend to `None`, so a
+        // future mixed-backend union must sum cost differently, not reuse this.
         total.cost_usd = total.cost_usd.zip(u.cost_usd).map(|(a, b)| a + b);
     }
     total

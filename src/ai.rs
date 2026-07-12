@@ -804,6 +804,24 @@ struct CodexUsage {
     reasoning_output_tokens: u64,
 }
 
+impl CodexUsage {
+    /// The one CodexUsage → [`Usage`] mapping — the errored and success returns both report through
+    /// it. Codex doesn't echo a per-model id in its events, so the reported model is the requested
+    /// one (unlike claude, which resolves it from the response's per-model usage).
+    fn into_usage(self, model: &str) -> Usage {
+        Usage {
+            model: model.to_owned(),
+            input_tokens: self.input_tokens,
+            // Codex separates reasoning tokens; fold them into output for an honest total-generated
+            // count.
+            output_tokens: self.output_tokens + self.reasoning_output_tokens,
+            cache_creation_input_tokens: 0, // codex has no cache-creation concept, only cached reads
+            cache_read_input_tokens: self.cached_input_tokens,
+            cost_usd: None, // codex reports tokens only — no fabricated dollar cost
+        }
+    }
+}
+
 /// A per-run temp directory for codex's file-based `--output-schema`/`-o`, removed on drop. Unique
 /// per call so concurrent `--runs N` codex runs can't collide on the schema/output files.
 struct CodexTemp(PathBuf);
@@ -936,33 +954,16 @@ fn synthesize_codex(
         None
     };
     if let Some(error) = error {
-        let usage = usage.unwrap_or_default();
         return Ok(Synthesis {
             text: String::new(),
-            usage: Usage {
-                model: req.model.to_owned(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens + usage.reasoning_output_tokens,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: usage.cached_input_tokens,
-                cost_usd: None,
-            },
+            usage: usage.unwrap_or_default().into_usage(req.model),
             structured: None,
             error: Some(error),
         });
     }
-    let usage = usage.context("codex produced no `turn.completed` usage event")?;
-    let usage = Usage {
-        // Codex doesn't echo a per-model id in its events, so the reported model is the requested
-        // one (unlike claude, which resolves it from the response's per-model usage).
-        model: req.model.to_owned(),
-        input_tokens: usage.input_tokens,
-        // Codex separates reasoning tokens; fold them into output for an honest total-generated count.
-        output_tokens: usage.output_tokens + usage.reasoning_output_tokens,
-        cache_creation_input_tokens: 0, // codex has no cache-creation concept, only cached reads
-        cache_read_input_tokens: usage.cached_input_tokens,
-        cost_usd: None, // codex reports tokens only — no fabricated dollar cost
-    };
+    let usage = usage
+        .context("codex produced no `turn.completed` usage event")?
+        .into_usage(req.model);
     // From here the run has demonstrably spent (its usage is in hand), so a failed *result read* — a
     // missing/empty `-o` artifact, an unreadable one, or structured output that isn't the schema'd
     // JSON — is carried as a value with that usage, never bailed: the errored-run contract, so the

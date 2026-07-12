@@ -20,14 +20,15 @@ use anyhow::Context;
 use crate::cli::{GlobalArgs, SynthArgs};
 use crate::synth::{self, SynthOptions};
 
-/// An optional structured-output mode a command can offer: a JSON Schema the model's result is
-/// validated against (returned as `structured_output`), plus a note describing its item shape
-/// (appended to the shared [`STRUCTURED_NOTE`] framing).
+/// A command's structured output: a JSON Schema the model's result is validated against (returned
+/// as `structured_output`), plus a note describing its item shape (appended to the shared
+/// [`STRUCTURED_NOTE`] framing).
 /// The schema is the shared `results`-array envelope ([`crate::synth::results_schema`]) wrapping the
-/// command's own item shape — so commands declare only what differs. Used only when `--structured`
-/// is passed; commands without one reject the flag. The gate, `--ranked`, `--kinds`, and multi-run
-/// aggregation all treat the `results` array uniformly; `--fail-on-findings` blocks when it's
-/// non-empty.
+/// command's own item shape — so commands declare only what differs. A verb that declares one always
+/// produces it — the typed result is the substrate, human text a rendering of it — and only
+/// `summarize` declares none (its whole point is prose). The gate, `--ranked`, `--kinds`, and
+/// multi-run aggregation all treat the `results` array uniformly; `--fail-on-findings` blocks when
+/// it's non-empty.
 pub struct Structure {
     pub schema: String,
     pub note: &'static str,
@@ -81,8 +82,8 @@ fn kinds_note(has_taxonomy: bool) -> &'static str {
 
 /// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
 /// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
-/// the granted dir, cost reporting, or structured output. `structure` is the command's optional
-/// structured-output mode (see [`Structure`]); `--structured` activates it, or errors if absent.
+/// the granted dir, cost reporting, or structured output. `structure` is the command's structured
+/// output (see [`Structure`]), always active when declared; `--fail-on-findings` requires one.
 pub fn run_synthesis(
     args: &SynthArgs,
     global: &GlobalArgs,
