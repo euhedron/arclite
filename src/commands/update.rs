@@ -302,11 +302,15 @@ fn curl_get(
     crate::http::get(url, &[("Accept", accept)], &secret, true, dest)
 }
 
-/// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but can
-/// be renamed, so the running image is moved to a `.old` sidecar and the new binary takes its place (the
-/// running process keeps the renamed image; the next launch uses the replacement; the `.old` is cleaned
-/// on a later run). On Unix a rename over the path replaces it while the running process keeps the old
-/// inode.
+/// Suffix of the backup the Windows swap leaves beside the exe — named once so [`install`] (which
+/// writes it) and [`clean_stale_backup`] (which must delete exactly that name) cannot disagree.
+const BACKUP_SUFFIX: &str = ".old";
+
+/// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but
+/// can be renamed, so the running image is moved to a [`BACKUP_SUFFIX`] sidecar and the new binary
+/// takes its place (the running process keeps the renamed image; the next launch uses the
+/// replacement; the backup is cleaned on a later run). On Unix a rename over the path replaces it
+/// while the running process keeps the old inode.
 fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
@@ -326,7 +330,7 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
     }
     #[cfg(windows)]
     {
-        let backup = sidecar(exe, ".old");
+        let backup = sidecar(exe, BACKUP_SUFFIX);
         // A Windows rename fails if the destination exists, so remove any leftover backup first —
         // surfacing a real failure (e.g. a stale backup still locked by a running old process) rather
         // than letting the later rename fail opaquely; an absent backup (the normal case) is fine.
@@ -362,7 +366,7 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Remove a `.old` backup a prior Windows `--apply` left behind. Absent is the normal case (silent); a
+/// Remove a [`BACKUP_SUFFIX`] backup a prior Windows `--apply` left behind. Absent is the normal case (silent); a
 /// present-but-undeletable backup (the prior binary may still be running) is benign and retried on a
 /// later run, but it's surfaced — matching the codebase's warn-on-cleanup-failure standard — rather
 /// than swallowed. A no-op on Unix, which replaces the binary atomically and never writes a backup.
@@ -376,7 +380,7 @@ fn clean_stale_backup() {
             return;
         }
     };
-    let backup = sidecar(&exe, ".old");
+    let backup = sidecar(&exe, BACKUP_SUFFIX);
     if let Err(e) = std::fs::remove_file(&backup)
         && e.kind() != std::io::ErrorKind::NotFound
     {
@@ -461,7 +465,7 @@ mod tests {
         assert_eq!(std::fs::read(&exe).unwrap(), b"NEW"); // the new binary is in place
         assert!(!new.exists()); // the temp download was consumed by the rename
         #[cfg(windows)]
-        assert_eq!(std::fs::read(sidecar(&exe, ".old")).unwrap(), b"OLD"); // old moved aside
+        assert_eq!(std::fs::read(sidecar(&exe, BACKUP_SUFFIX)).unwrap(), b"OLD"); // old moved aside
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
