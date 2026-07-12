@@ -86,7 +86,7 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
 
     // Respect .gitignore, include dotfiles, but never descend into .git internals.
     // Walk errors (permission denied, I/O, …) are counted and reported, not swallowed.
-    let (entries, mut walk_errors) = crate::walk::entries(&root);
+    let (entries, mut walk_errors) = crate::walk::entries(&root, &root);
 
     for entry in entries {
         if entry.depth() == 0 {

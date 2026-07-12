@@ -211,10 +211,11 @@ fn missing_label(label: &str) -> String {
     format!("{label} (missing — skipped)")
 }
 
-/// Walk a directory gitignore-aware, returning its files (sorted; `.git` skipped) and the
+/// Walk a directory gitignore-aware within `root` (the repo's ignore chain applies even below the
+/// root — see [`crate::walk::configured`]), returning its files (sorted; `.git` skipped) and the
 /// count of walk errors (unreadable entries) so callers can surface them, not drop them.
-fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
-    let (entries, errors) = crate::walk::entries(dir);
+fn walk_files(root: &Path, dir: &Path) -> (Vec<PathBuf>, usize) {
+    let (entries, errors) = crate::walk::entries(root, dir);
     let mut files: Vec<PathBuf> = entries
         .into_iter()
         .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
@@ -230,6 +231,7 @@ fn walk_files(dir: &Path) -> (Vec<PathBuf>, usize) {
 /// each one it adds — so overlapping inputs (an explicit file also under an included dir, or a
 /// `--changed` file under one) aren't read or billed twice. Dirs are walked gitignore-aware.
 fn gather_includes(
+    root: &Path,
     paths: &[PathBuf],
     max: Option<usize>,
     excluder: &ignore::gitignore::Gitignore,
@@ -242,7 +244,7 @@ fn gather_includes(
         let is_dir = path.is_dir();
         walked_dir |= is_dir;
         let (files, walk_errors) = if is_dir {
-            walk_files(path)
+            walk_files(root, path)
         } else {
             (vec![path.clone()], 0)
         };
@@ -686,6 +688,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         .build()
         .map_err(|e| anyhow::anyhow!("compiling --exclude patterns: {e}"))?;
     text.push_str(&gather_includes(
+        &root,
         &includes,
         max,
         &excluder,
