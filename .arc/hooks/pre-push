@@ -34,7 +34,7 @@ if [ "$branch_push" -eq 0 ]; then
     exit 0
 fi
 
-# CI parity (blocking, deterministic): the same checks the GitHub `default` pipeline runs, so a push
+# CI parity (blocking, deterministic): the same checks the GitHub Actions CI workflow runs, so a push
 # that would turn CI red is blocked here first — before any AI spend. Cheapest check first; on a tree
 # already built locally cargo's cache makes the re-check near-instant. (arclite devs have the Rust
 # toolchain; this is arclite's own hook, not the generic `arc init --hook` scaffold.)
