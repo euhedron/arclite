@@ -272,8 +272,42 @@ pub const EVOLVE: Verb = Verb {
     prompt: evolve_prompt,
 };
 
+// ---- aggregate ----
+
+/// The `aggregate` structured-output item: one merged, cross-run item. Recurrence is read off
+/// `sources` (its length, or the distinct repos its runs targeted, via the run records) — derived
+/// by the consumer, never model-emitted as a separate count that could disagree with the list.
+const AGGREGATE_ITEM: &str = r#"{"type":"object","properties":{"statement":{"type":"string"},"sources":{"type":"array","items":{"type":"string"}},"covered_by":{"type":"string"}},"required":["statement","sources","covered_by"]}"#;
+
+fn aggregate_prompt(ctx: &str) -> String {
+    format!(
+        "You are aggregating the results of prior runs — included in the context below, each under \
+         its run id with the command and repository it examined. Judge which items ACROSS the runs \
+         express the same underlying principle or issue in substance: wording will differ, so match \
+         meaning, never phrasing.\n\n\
+         {ctx}\n\
+         Merge each group of same-substance items into one: state it once, as sharply as the best \
+         of its sources (or sharper), and record every run it drew from. An item appearing in only \
+         one run is kept as-is with its single source — recurrence is signal for the reader, not a \
+         filter. Where the context also carries active rules, an item an existing rule already \
+         expresses is marked covered rather than re-proposed as new. Order the merged items \
+         most-shared first."
+    )
+}
+
+pub const AGGREGATE: Verb = Verb {
+    name: cli::NAME_AGGREGATE,
+    about: cli::VERB_AGGREGATE,
+    structured: Some(Structured {
+        item: AGGREGATE_ITEM,
+        note: "one object per merged item: `statement` (the single sharpest statement of the shared substance), `sources` (the run ids it drew from), and `covered_by` (the id of an active rule in context that already expresses it, or an empty string when none does).",
+        kinds: &[], // no fixed taxonomy; the aggregated runs' own kinds carry through their items
+    }),
+    prompt: aggregate_prompt,
+};
+
 /// Every synthesis verb, in palette presentation order — the registry the TUI's `run` sub-menu derives
 /// from, so a new verb appears there automatically rather than needing a parallel hand-kept list.
 pub const ALL: &[&Verb] = &[
-    &AUDIT, &CRITIQUE, &VERIFY, &SUGGEST, &SUMMARIZE, &EXTRACT, &EVOLVE,
+    &AUDIT, &CRITIQUE, &VERIFY, &SUGGEST, &SUMMARIZE, &EXTRACT, &EVOLVE, &AGGREGATE,
 ];

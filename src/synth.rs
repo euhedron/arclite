@@ -395,6 +395,48 @@ fn gather_findings(
     Ok(format!("\n{framing}\n{}\n", crate::rules::render(&entries)))
 }
 
+/// Render prior runs' stored structured results (`--from`, the aggregate verb) as a context block:
+/// each run under its id with the command + repo it examined, its items rendered one by one — the
+/// raw material of a cross-run merge. Every named run must exist and carry structured results;
+/// anything less is an error naming the id, because an aggregate silently missing a source would
+/// judge a different question than the one asked.
+fn gather_runs(ids: &[String], sources: &mut Vec<String>) -> anyhow::Result<String> {
+    let mut text = String::from("\nResults of the prior runs to aggregate:\n");
+    for id in ids {
+        let id = crate::commands::log::resolve_id(id)?;
+        let stored = crate::commands::log::load_stored(&id)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "no stored result for run `{id}` — aggregate reads each named run's stored results \
+                 (runs predating the store, or made with logging off, aren't kept)"
+            )
+        })?;
+        let run = crate::commands::log::stored_run(&stored);
+        let command = run.get("command").and_then(|v| v.as_str()).unwrap_or("?");
+        let repo = run.get("repo").and_then(|v| v.as_str()).unwrap_or("?");
+        let items = stored
+            .get("structured")
+            .and_then(|s| s.get(RESULTS_KEY))
+            .and_then(|r| r.as_array())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "run `{id}` has no structured results to aggregate (`arc log {id}` shows what it holds)"
+                )
+            })?;
+        text.push_str(&format!(
+            "\n## run {id} — `arc run {command}` on {repo} ({} result(s))\n",
+            items.len()
+        ));
+        for item in items {
+            text.push_str(&format!("\n{}\n", item_bullets(item)));
+        }
+        sources.push(format!(
+            "run {id} (`{command}` on {repo}, {} result(s))",
+            items.len()
+        ));
+    }
+    Ok(text)
+}
+
 /// Read `path` (capped at `max`) and, on success, append its body to `text` under `label` and record
 /// the source label. `Ok(true)` = read and appended, `Ok(false)` = absent, `Err` = present but
 /// unreadable (the [`read_file`]/[`crate::read_optional`] distinction); the caller surfaces a miss
@@ -598,6 +640,9 @@ pub struct ContextSpec<'a> {
     /// Auto-load the open findings ledger framed for *re-checking* (the verify verb), distinct from
     /// `findings`, which loads it framed for hunting *beyond* what's already known.
     pub recheck_findings: bool,
+    /// Logged run ids (`--from`, the aggregate verb) whose stored structured results become context —
+    /// the material a cross-run merge judges. Empty for every other verb.
+    pub from_runs: &'a [String],
 }
 
 /// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
@@ -615,6 +660,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         scan,
         findings,
         recheck_findings,
+        from_runs,
     } = spec;
     // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
     // (scan=false) drops both — and the walk itself — so a diff-scoped run's cost tracks the diff, not a
@@ -716,6 +762,9 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
+    }
+    if !from_runs.is_empty() {
+        text.push_str(&gather_runs(from_runs, &mut sources)?);
     }
 
     let mut excluded = if includes.is_empty() {

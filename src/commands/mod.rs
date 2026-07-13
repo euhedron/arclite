@@ -104,6 +104,20 @@ pub fn run_synthesis(
         !(args.findings && command == crate::cli::NAME_VERIFY),
         "`{command}` already re-checks the open findings ledger — drop --findings"
     );
+    // --from feeds prior runs' results as context; only aggregate consumes it, and its judgment —
+    // sameness ACROSS runs — needs at least two. Both mismatches rejected before spend, never
+    // silently ignored.
+    if command == crate::cli::NAME_AGGREGATE {
+        anyhow::ensure!(
+            args.from.len() >= 2,
+            "`{command}` merges results across runs — name at least two with --from <run-id>"
+        );
+    } else {
+        anyhow::ensure!(
+            args.from.is_empty(),
+            "--from feeds prior runs to `aggregate` — `{command}` doesn't consume it"
+        );
+    }
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
@@ -154,6 +168,7 @@ pub fn run_synthesis(
             findings: args.findings,
             // verify auto-loads the open ledger framed for re-checking (--findings rejected above)
             recheck_findings: command == crate::cli::NAME_VERIFY,
+            from_runs: &args.from,
         },
     )?;
     let mut prompt = build_prompt(&ctx.text);

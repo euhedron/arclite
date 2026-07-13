@@ -65,6 +65,8 @@ pub(crate) const NAME_VERIFY: &str = "verify";
 pub(crate) const VERB_VERIFY: &str = "Re-check open findings against the current code";
 pub(crate) const NAME_EVOLVE: &str = "evolve";
 pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
+pub(crate) const NAME_AGGREGATE: &str = "aggregate";
+pub(crate) const VERB_AGGREGATE: &str = "Merge prior runs' results by shared substance";
 
 /// The set of arclite subcommands.
 // Parsed once at startup and dispatched immediately — never held in a collection or a hot path — so
@@ -108,7 +110,8 @@ pub enum Command {
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
     // substrate, kept distinct from the deterministic commands above — `run` names the step that
     // spends AI, mirroring arclite's deterministic-until-synthesis spine.
-    /// Run an AI synthesis verb: audit, critique, verify, suggest, summarize, extract, or evolve.
+    /// Run an AI synthesis verb: audit, critique, verify, suggest, summarize, extract, evolve, or
+    /// aggregate.
     #[command(name = NAME_RUN)]
     Run(RunArgs),
 }
@@ -139,6 +142,8 @@ pub enum RunVerb {
     Verify(SynthArgs),
     #[command(name = NAME_EVOLVE, about = VERB_EVOLVE)]
     Evolve(SynthArgs),
+    #[command(name = NAME_AGGREGATE, about = VERB_AGGREGATE)]
+    Aggregate(SynthArgs),
 }
 
 #[derive(Debug, Args)]
@@ -348,6 +353,11 @@ pub struct SynthArgs {
     /// re-reports less. Default: off. No ledger → no effect.
     #[arg(long)]
     pub findings: bool,
+    /// Feed a logged run's stored structured results into context (repeatable; a unique id prefix
+    /// works). Consumed only by the `aggregate` verb, which needs at least two — sameness across
+    /// runs is the judgment. Other verbs reject it.
+    #[arg(long, value_name = "RUN_ID")]
+    pub from: Vec<String>,
     /// Also write the synthesis to `<DIR>/<command>.md` — a self-describing generated doc (the
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]
