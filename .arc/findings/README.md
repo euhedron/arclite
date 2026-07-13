@@ -50,6 +50,8 @@ Then use short sections:
 
 Keep raw transcripts, full model outputs, and speculative brainstorming out of this directory. Link to run ids or summarize the relevant evidence instead.
 
+Ground the Claim/Evidence in the concrete mechanism — the file, line, and construct — wherever one exists: `arc run verify` judges an entry by whether the cited mechanism still exists in the current code, so a mechanism-grounded entry stays in the automated verify/retire lifecycle regardless of its `origin_kind`, while a behavior-only claim ("the site does X when…") can only come back `indeterminate`. (Proven 2026-07-12: four hand-authored `agent_session` entries about a deployed site verified `reproduces` because each cited the code behind the behavior.)
+
 ## Open Edges
 
 - The directory name, frontmatter keys, and lifecycle are not canon.
