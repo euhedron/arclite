@@ -491,7 +491,7 @@ pub struct Context {
 /// backing `--changed`. `Ok(vec)` lists them (empty = genuinely clean tree); `Err(reason)`
 /// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
 /// as a clean "no changes" result.
-fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
     let output = ai::command("git")
         .map_err(|e| format!("could not prepare git: {e:#}"))?
         .arg("-C")
@@ -518,21 +518,28 @@ fn changed_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let text = String::from_utf8_lossy(&output.stdout);
     let mut records = text.split('\0');
     let mut changed = Vec::new();
+    let mut deleted = 0usize;
     while let Some(record) = records.next() {
         if record.is_empty() {
             continue; // -z output ends in a NUL, so the final split is empty
         }
-        if let Some(path) = record
+        let status = record.as_bytes();
+        // A deletion ('D' in the index or worktree status column) has no content to feed context, so
+        // exclude and count it — disclosed by the caller as a deletion rather than later surfacing as
+        // a "missing — skipped" path indistinguishable from a typo'd `--include`.
+        if matches!(status.first(), Some(b'D')) || matches!(status.get(1), Some(b'D')) {
+            deleted += 1;
+        } else if let Some(path) = record
             .get(PORCELAIN_PATH_OFFSET..)
             .filter(|p| !p.is_empty())
         {
             changed.push(root.join(path));
         }
-        if matches!(record.as_bytes().first(), Some(b'R' | b'C')) {
+        if matches!(status.first(), Some(b'R' | b'C')) {
             records.next(); // a rename/copy carries its original path in the next record — discard it
         }
     }
-    Ok(changed)
+    Ok((changed, deleted))
 }
 
 /// The target repo's commit state at run time — `HEAD`'s short sha, suffixed `-dirty` when the
@@ -672,12 +679,18 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     // --changed: scope to git-changed files — same group as --include, not special to any command.
     // A git failure aborts loudly rather than silently passing as a clean tree.
     if changed {
-        let files = changed_files(&root)
+        let (files, deleted) = changed_files(&root)
             .map_err(|reason| anyhow::anyhow!("--changed could not consult git: {reason}"))?;
-        sources.push(if files.is_empty() {
-            "changed: no git changes found".to_owned()
-        } else {
-            format!("changed: {} git-changed file(s)", files.len())
+        sources.push(match (files.is_empty(), deleted) {
+            (true, 0) => "changed: no git changes found".to_owned(),
+            (true, d) => format!("changed: {d} deleted file(s) — nothing readable to include"),
+            (false, 0) => format!("changed: {} git-changed file(s)", files.len()),
+            (false, d) => {
+                format!(
+                    "changed: {} git-changed file(s) ({d} deleted, skipped)",
+                    files.len()
+                )
+            }
         });
         includes.extend(files);
     }
