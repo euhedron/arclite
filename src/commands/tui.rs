@@ -1044,11 +1044,15 @@ fn dry_run_preview(verb: &str, shaped: &[String]) -> Result<String, String> {
 }
 
 /// What the live status reflects at one instant: the in-flight runs, how many registry entries couldn't
-/// be read, the reference time for ages, and any error reading the registry — surfaced, never hidden.
-/// Re-read every tick so both the status view *and* the global footer's count stay current.
+/// be read, how many stale markers the read pruned, the reference time for ages, and any error reading
+/// the registry — surfaced, never hidden. Re-read every tick so both the status view *and* the global
+/// footer's count stay current.
 struct Snapshot {
     active: Vec<ActiveRun>,
     unreadable: usize,
+    /// Stale markers (dead-pid corpses of hard-killed runs) this read pruned — disclosed in the view,
+    /// since each was showing as an active run until now.
+    pruned: usize,
     now: u64,
     error: Option<String>,
     /// The recently-completed tail (newest-first column cells + the total completed-run count, one
@@ -1064,9 +1068,10 @@ impl Snapshot {
         let now = crate::log::now_secs();
         let recent = recent_completed(now);
         match crate::runs::active() {
-            Ok((active, unreadable)) => Self {
-                active,
-                unreadable: unreadable.len(),
+            Ok(registry) => Self {
+                active: registry.runs,
+                unreadable: registry.unreadable.len(),
+                pruned: registry.pruned.len(),
                 now,
                 error: None,
                 recent,
@@ -1074,6 +1079,7 @@ impl Snapshot {
             Err(e) => Self {
                 active: Vec::new(),
                 unreadable: 0,
+                pruned: 0,
                 now,
                 error: Some(format!("{e:#}")),
                 recent,
@@ -1638,6 +1644,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 " · {}",
                 crate::runs::unreadable_entries(snap.unreadable)
             ));
+        }
+        if snap.pruned > 0 {
+            title.push_str(&format!(" · {}", crate::runs::pruned_entries(snap.pruned)));
         }
         let table = Table::new(rows, STATUS_COLUMN_WIDTHS)
             .header(
@@ -2533,6 +2542,7 @@ mod tests {
         Snapshot {
             active: Vec::new(),
             unreadable: 0,
+            pruned: 0,
             now: 100,
             error: None,
             recent: Ok(RecentTail {

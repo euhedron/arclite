@@ -130,22 +130,71 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
     Some(active)
 }
 
+/// The registry as one read sees it: the live runs, entries that couldn't be read or parsed, and
+/// the stale markers this read pruned (hard-killed runs' corpses — see [`active`]).
+pub struct Registry {
+    pub runs: Vec<ActiveRun>,
+    pub unreadable: Vec<PathBuf>,
+    pub pruned: Vec<PathBuf>,
+}
+
+/// Whether process `pid` is alive, probed with the platform's own tool. Unix: `kill -0`, judged by
+/// exit code alone — no output parsing, so locales can't skew it; a nonzero exit means no such
+/// process *or* a recycled pid now owned by another user, and either way it is not this user's
+/// in-flight arc run. Windows: `tasklist` filtered to the pid, matched on the pid appearing as its
+/// own whitespace-separated token (the no-match notice carries no bare pid; token match so 123
+/// can't match 1234). `None` when the probe itself couldn't run — can't-tell, which callers must
+/// treat as alive: wrongly keeping a dead run's marker over-reports it, wrongly pruning a live
+/// run's hides real in-flight spend, so an inconclusive probe must not green-light deletion.
+fn process_alive(pid: u32) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        let status = crate::ai::command("kill")
+            .ok()?
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?;
+        Some(status.success())
+    }
+    #[cfg(windows)]
+    {
+        let output = crate::ai::command("tasklist")
+            .ok()?
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Some(text.split_whitespace().any(|tok| tok == pid.to_string()))
+    }
+}
+
 /// The runs currently recorded in the registry, for `arc status`, plus any `.json` entries that
 /// couldn't be read or parsed (returned, not dropped, so `arc status` surfaces them). A missing
 /// registry is not an error — nothing is in flight; a genuine read failure (of the directory or an
 /// entry) is — [`crate::read_optional`]'s absent-vs-failed distinction, applied to a directory
-/// listing. A marker normally clears on exit; a hard-killed process can leave a stale one.
-pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
+/// listing. A marker normally clears on exit; a hard-killed process leaves a stale one (`Drop`
+/// never ran), so each marker's pid is probed and a confirmed-dead one is pruned — removed
+/// best-effort (a failed removal just re-prunes on the next read) and disclosed in `pruned`,
+/// never reported as an active run. An inconclusive probe keeps the marker (see [`process_alive`]).
+pub fn active() -> anyhow::Result<Registry> {
+    let mut registry = Registry {
+        runs: Vec::new(),
+        unreadable: Vec::new(),
+        pruned: Vec::new(),
+    };
     let Some(dir) = dir() else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(registry);
     };
     let Some(entries) = crate::read_dir_optional(&dir)
         .with_context(|| format!("cannot read the run registry {}", dir.display()))?
     else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(registry);
     };
-    let mut runs = Vec::new();
-    let mut unreadable = Vec::new();
     for entry in entries {
         let path = entry
             .with_context(|| format!("cannot read an entry in the run registry {}", dir.display()))?
@@ -159,14 +208,30 @@ pub fn active() -> anyhow::Result<(Vec<ActiveRun>, Vec<PathBuf>)> {
         // propagated (one bad marker shouldn't fail `arc status`).
         match crate::read_optional(&path) {
             Ok(Some(text)) => match serde_json::from_str::<ActiveRun>(&text) {
-                Ok(run) => runs.push(run),
-                Err(_) => unreadable.push(path), // present but unparseable — a real problem
+                Ok(run) => {
+                    if process_alive(run.pid) == Some(false) {
+                        let _ = std::fs::remove_file(&path);
+                        registry.pruned.push(path);
+                    } else {
+                        registry.runs.push(run);
+                    }
+                }
+                Err(_) => registry.unreadable.push(path), // present but unparseable — a real problem
             },
             Ok(None) => {} // the marker raced away as the run finished — benign, not a failure
-            Err(_) => unreadable.push(path),
+            Err(_) => registry.unreadable.push(path),
         }
     }
-    Ok((runs, unreadable))
+    Ok(registry)
+}
+
+/// Human phrasing for pruned stale markers — shared by `arc status` and the TUI, like
+/// [`unreadable_entries`].
+pub fn pruned_entries(count: usize) -> String {
+    format!(
+        "pruned {count} stale marker{} (process gone — a hard-killed run)",
+        if count == 1 { "" } else { "s" }
+    )
 }
 
 /// Human phrasing for a count of registry entries that couldn't be read or parsed — the singular/plural

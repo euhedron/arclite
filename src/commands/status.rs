@@ -3,7 +3,11 @@ use crate::output::emit;
 
 /// The `status` command.
 pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let (active, unreadable) = crate::runs::active()?;
+    let crate::runs::Registry {
+        runs: active,
+        unreadable,
+        pruned,
+    } = crate::runs::active()?;
     let now = crate::log::now_secs();
     let mut lines = Vec::new();
     if active.is_empty() {
@@ -35,10 +39,16 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             lines.push(format!("  {}", path.display()));
         }
     }
+    // Disclose what this read cleaned up — a pruned marker is a run that once showed here, so its
+    // disappearance is stated, never silent.
+    if !pruned.is_empty() {
+        lines.push(crate::runs::pruned_entries(pruned.len()));
+    }
     let human = lines.join("\n");
     let payload = serde_json::json!({
         "active": &active,
         "unreadable": unreadable.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "pruned": pruned.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
     });
     emit(&payload, &human, global.json)
 }
