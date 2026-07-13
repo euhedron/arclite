@@ -60,8 +60,9 @@ const PALETTE_NAME_WIDTH: usize = 10;
 /// lines ([`centered`] clamps it to the terminal; longer lines still truncate at the border).
 const LAUNCH_WIDTH: u16 = 72;
 
-/// Height of the home masthead box: border (2) + its two lines (name+version, then the directory).
-const MASTHEAD_HEIGHT: u16 = 4;
+/// Height of the home masthead box: its border plus its two lines (name+version, then the
+/// directory) — composed from [`BORDER`]/[`LINE`] like every other height in this file, not a bare 4.
+const MASTHEAD_HEIGHT: u16 = BORDER + 2 * LINE;
 
 /// Height of a single-row text line — a header, hint, footer, or input. Named so the rows a view
 /// reserves for these (and [`LIST_ROWS`]) stay single-sourced with the `Constraint::Length` splits
@@ -1616,6 +1617,23 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
 
     frame.render_widget(Line::from("live status").bold(), header);
 
+    // Registry-health disclosures (unreadable entries, pruned stale markers) — built once and shown
+    // whether or not runs are in flight, so a prune or an unreadable marker is never hidden by an
+    // empty active list. (The empty branch used to drop them, buried only in the running-table's
+    // title — the exact gap a critique + suggest pair on this file independently flagged.)
+    let mut notes = Vec::new();
+    if snap.unreadable > 0 {
+        notes.push(crate::runs::unreadable_entries(snap.unreadable));
+    }
+    if snap.pruned > 0 {
+        notes.push(crate::runs::pruned_entries(snap.pruned));
+    }
+    let disclosure = if notes.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", notes.join(" · "))
+    };
+
     if let Some(err) = &snap.error {
         frame.render_widget(
             Paragraph::new(format!("run registry unreadable: {err}")).block(Block::bordered()),
@@ -1623,7 +1641,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         );
     } else if snap.active.is_empty() {
         frame.render_widget(
-            Paragraph::new("no runs in flight").block(Block::bordered()),
+            Paragraph::new(format!("no runs in flight{disclosure}")).block(Block::bordered()),
             active_area,
         );
     } else {
@@ -1638,22 +1656,12 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 r.output_chars.to_string(),
             ])
         });
-        let mut title = format!("{} running", snap.active.len());
-        if snap.unreadable > 0 {
-            title.push_str(&format!(
-                " · {}",
-                crate::runs::unreadable_entries(snap.unreadable)
-            ));
-        }
-        if snap.pruned > 0 {
-            title.push_str(&format!(" · {}", crate::runs::pruned_entries(snap.pruned)));
-        }
         let table = Table::new(rows, STATUS_COLUMN_WIDTHS)
             .header(
                 Row::new(["command", "repo", "model", "age", "turns", "tools", "chars"])
                     .style(Style::new().bold()),
             )
-            .block(Block::bordered().title(title));
+            .block(Block::bordered().title(format!("{} running{disclosure}", snap.active.len())));
         frame.render_widget(table, active_area);
     }
 
