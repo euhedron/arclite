@@ -116,7 +116,9 @@ fn shim_target(path: &Path) -> anyhow::Result<Option<PathBuf>> {
 struct ClaudeJson {
     result: Option<String>,
     is_error: Option<bool>,
-    /// Names the failure on an error payload (e.g. `error_max_budget_usd`), where `result` is absent.
+    /// Names the failure on an error payload (e.g. `error_max_budget_usd`). Not always meaningful:
+    /// a quota-limit refusal arrives as `is_error` with subtype `"success"` and the real message in
+    /// `result` (confirmed by exercise), so error detail must not read `subtype` alone.
     subtype: Option<String>,
     total_cost_usd: Option<f64>,
     usage: Option<ClaudeUsage>,
@@ -190,13 +192,18 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 .sum(),
             cost_usd: parsed.total_cost_usd,
         };
-        // Prefer the human-readable `errors` detail; fall back to the `subtype` code, then a placeholder.
-        let detail = if parsed.errors.is_empty() {
+        // Prefer human-readable detail — the `errors` list, then a `result` message (a quota-limit
+        // refusal carries its message there, under subtype "success") — before the bare `subtype`
+        // code, then a placeholder. An errored run's `arc log` entry shows this string; a run that
+        // errored as "success" would read as a contradiction and hide the actual cause.
+        let detail = if !parsed.errors.is_empty() {
+            parsed.errors.join("; ")
+        } else if let Some(msg) = parsed.result.filter(|r| !r.trim().is_empty()) {
+            msg
+        } else {
             parsed
                 .subtype
                 .unwrap_or_else(|| "no detail in the payload".to_owned())
-        } else {
-            parsed.errors.join("; ")
         };
         return Ok(Synthesis {
             text: String::new(),
@@ -838,11 +845,24 @@ struct CodexTemp(PathBuf);
 impl CodexTemp {
     fn new() -> anyhow::Result<Self> {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("arclite-codex-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("cannot create codex temp dir {}", dir.display()))?;
-        Ok(Self(dir))
+        loop {
+            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("arclite-codex-{}-{n}", std::process::id()));
+            // create_dir, not create_dir_all: an existing directory — a leftover from a dead process
+            // whose pid was reused, since Drop's cleanup is best-effort — must not be adopted, or its
+            // stale out.txt could be read back as this run's result. On collision, take the next name;
+            // success guarantees the directory is freshly created and empty.
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("cannot create codex temp dir {}", dir.display())
+                    });
+                }
+            }
+        }
     }
 }
 

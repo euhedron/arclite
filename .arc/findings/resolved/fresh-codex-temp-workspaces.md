@@ -1,6 +1,6 @@
 ---
 id: fresh-codex-temp-workspaces
-status: open
+status: resolved
 origin_kind: agent_session
 system_run_id:
 ---
@@ -27,3 +27,4 @@ Generated result artifacts should be freshly owned by the current run. Best-effo
 Create an exclusive fresh temp directory or remove any existing candidate before use with collision handling. The important property is that a successful `CodexTemp::new` guarantees no stale `out.txt` can already exist.
 
 ## Resolution
+Resolved per verify run `1784073475-45629-412407000`: `CodexTemp::new` now uses exclusive `std::fs::create_dir` and retries on `AlreadyExists`, so it does not adopt a leftover directory before `synthesize_codex` reads `out.txt`.
