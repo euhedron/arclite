@@ -131,6 +131,12 @@ pub fn run_synthesis(
         .or_else(|| settings.default_backend.clone())
         .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
     let backend = crate::ai::backend(&backend_name)?;
+    // Validate an explicit cap at the boundary — the same rule `config set` and the settings loader
+    // apply — so a zero/negative/non-finite value is rejected before any spend rather than riding
+    // into the backend as a nonsense "safety" cap.
+    if let Some(cap) = args.max_budget_usd {
+        crate::settings::validate_budget(cap).context("invalid --max-budget-usd")?;
+    }
     // Reject, before any spend, a requested capability this backend can't honor — surfaced as an
     // error, never silently dropped.
     backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;

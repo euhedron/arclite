@@ -141,9 +141,10 @@ pub struct Registry {
 /// Whether process `pid` is alive, probed with the platform's own tool. Unix: `kill -0`, judged by
 /// exit code alone — no output parsing, so locales can't skew it; a nonzero exit means no such
 /// process *or* a recycled pid now owned by another user, and either way it is not this user's
-/// in-flight arc run. Windows: `tasklist` filtered to the pid, matched on the pid appearing as its
-/// own whitespace-separated token (the no-match notice carries no bare pid; token match so 123
-/// can't match 1234). `None` when the probe itself couldn't run — can't-tell, which callers must
+/// in-flight arc run. Windows: `tasklist` filtered to the pid in its machine-readable CSV mode
+/// (`/FO CSV`), matched on the pid as the quoted second column — a stable field position, not the
+/// human table's presentation whitespace (and the no-match notice isn't CSV, so it can't match).
+/// `None` when the probe itself couldn't run — can't-tell, which callers must
 /// treat as alive: wrongly keeping a dead run's marker over-reports it, wrongly pruning a live
 /// run's hides real in-flight spend, so an inconclusive probe must not green-light deletion.
 fn process_alive(pid: u32) -> Option<bool> {
@@ -162,14 +163,20 @@ fn process_alive(pid: u32) -> Option<bool> {
     {
         let output = crate::ai::command("tasklist")
             .ok()?
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
             .output()
             .ok()?;
         if !output.status.success() {
             return None;
         }
+        // CSV rows are `"Image Name","PID",...` — the pid is the quoted second field. The
+        // no-match case prints a prose notice, which contains no such quoted field.
+        let needle = format!("\"{pid}\"");
         let text = String::from_utf8_lossy(&output.stdout);
-        Some(text.split_whitespace().any(|tok| tok == pid.to_string()))
+        Some(
+            text.lines()
+                .any(|line| line.split(',').nth(1) == Some(needle.as_str())),
+        )
     }
 }
 

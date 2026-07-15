@@ -37,7 +37,7 @@ pub(crate) fn get(
             "the {name} credential must be a single line with no quotes, backslashes, or newlines"
         );
     }
-    let mut cmd = Command::new(curl_program());
+    let mut cmd = Command::new(curl_program()?);
     // stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the returned
     // error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
     // writing there directly would corrupt the display.
@@ -90,16 +90,26 @@ pub(crate) fn get(
 /// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
 /// the system cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl` on
 /// `PATH`.
-fn curl_program() -> PathBuf {
+fn curl_program() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
-    if let Some(root) = std::env::var_os("SystemRoot") {
+    {
+        // The trusted binary resolves via SystemRoot; with it unset the explicit path can't be built
+        // at all, and a bare PATH `curl` could be any shadowing binary — so that anomaly errors
+        // rather than silently downgrading the trust anchor.
+        let root = std::env::var_os("SystemRoot").ok_or_else(|| {
+            anyhow::anyhow!(
+                "SystemRoot is unset, so the system curl.exe can't be located — refusing to fall \
+                 back to an arbitrary curl on PATH"
+            )
+        })?;
         let system_curl = Path::new(&root).join("System32").join("curl.exe");
         // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
         // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
-        // can't-tell as present — keeping absent distinct from unreadable.
+        // can't-tell as present — keeping absent distinct from unreadable. Confirmed absence (an older
+        // Windows that ships no curl) is the one case PATH serves, and it's this disclosed line.
         if system_curl.try_exists().unwrap_or(true) {
-            return system_curl;
+            return Ok(system_curl);
         }
     }
-    PathBuf::from("curl")
+    Ok(PathBuf::from("curl"))
 }

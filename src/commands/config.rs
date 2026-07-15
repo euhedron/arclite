@@ -335,8 +335,22 @@ pub(crate) fn set_value(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&root)?))
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    // Stage-then-rename, never write in place: a failed or interrupted write must leave the prior
+    // settings file intact, not truncated mid-JSON (which would fail every later load). The staged
+    // name carries the pid so concurrent setters can't clobber each other's staging; the rename is
+    // the atomic swap, and a failure cleans the staged file (best-effort) with the original untouched.
+    let staged = path.with_file_name(format!(
+        "{}.{}.new",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .expect("the settings path ends in its file name"),
+        std::process::id()
+    ));
+    let body = format!("{}\n", serde_json::to_string_pretty(&root)?);
+    if let Err(e) = std::fs::write(&staged, &body).and_then(|()| std::fs::rename(&staged, &path)) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(anyhow::Error::new(e).context(format!("cannot write {}", path.display())));
+    }
     Ok(path)
 }
 
