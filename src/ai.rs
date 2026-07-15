@@ -233,7 +233,9 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 .sum(),
             cost_usd: parsed.total_cost_usd,
             cost_partial: false,
-            spend_unknown: false,
+            // With no modelUsage entries at all, the zeros are placeholders (nothing was measured);
+            // with entries, the sums are the payload's own numbers.
+            spend_unknown: parsed.model_usage.is_empty(),
         };
         // Prefer human-readable detail — the `errors` list, then a `result` message (a quota-limit
         // refusal carries its message there, under subtype "success") — before the bare `subtype`
@@ -302,7 +304,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             )
         },
     );
-    let any_usage_source = parsed.usage.is_some() || !parsed.model_usage.is_empty();
+    let usage_absent = parsed.usage.is_none();
     let complete = (
         parsed.result,
         parsed.usage,
@@ -327,9 +329,12 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 cache_read_input_tokens,
                 cost_usd: parsed.total_cost_usd,
                 cost_partial: false,
-                // Zeros are placeholders (unknown), not measurements, only when *no* token source
-                // parsed at all; salvaged numbers are real spend.
-                spend_unknown: !any_usage_source,
+                // The authoritative counters went missing, so whatever was salvaged is a *lower
+                // bound*, not a measurement: marked unknown whenever the top-level `usage` block is
+                // absent (modelUsage sums are a fallback view) — and, of course, when nothing
+                // parsed at all. The rollup then counts this run apart instead of misreading it as
+                // an ordinary token-only (codex-style) run.
+                spend_unknown: usage_absent,
             },
             structured: None,
             error: Some(format!(
@@ -647,6 +652,13 @@ pub trait Backend {
         let _ = configured;
         None
     }
+
+    /// Whether this backend reports an authoritative dollar cost on its runs. Default: it does. A
+    /// tokens-only backend (codex) overrides to `false`, so consumers can tell a record that lacks
+    /// cost *by design* from one that lost a cost it should have carried.
+    fn reports_cost(&self) -> bool {
+        true
+    }
 }
 
 /// Select a synthesis backend by name — dispatched from the single [`BACKENDS`] registry.
@@ -772,12 +784,22 @@ enum DriveError {
     AfterSpawn(anyhow::Error),
 }
 
+/// What [`drive`] hands back for a child that ran to exit: its status, captured stderr, and the
+/// prompt write's failure if any — carried as data (not an error) because its meaning depends on
+/// the outcome: under a child-reported failure it's corroborating detail, under a claimed success
+/// it means the result came from a truncated prompt and the caller must not report it unqualified.
+struct Driven {
+    status: std::process::ExitStatus,
+    stderr: String,
+    prompt_write_error: Option<std::io::Error>,
+}
+
 fn drive(
     mut cmd: Command,
     prompt: &str,
     launch_err: &'static str,
     mut on_event: impl FnMut(&str, &serde_json::Value, &str),
-) -> Result<(std::process::ExitStatus, String), DriveError> {
+) -> Result<Driven, DriveError> {
     cmd.current_dir(std::env::temp_dir()) // neutral cwd; the agent's working root is set per-backend
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -788,15 +810,15 @@ fn drive(
         .map_err(DriveError::Launch)?;
     // Write the prompt on its own thread, concurrently with draining stdout/stderr below: writing it
     // all first (a large prompt on a small pipe buffer, notably Windows) deadlocks if the child emits
-    // output before consuming stdin — its output pipe fills while we're blocked writing stdin. The
-    // write result isn't propagated: a broken pipe just means the child exited early (e.g. a budget
-    // rejection), and the run's outcome comes from the result event / stderr / exit status, not from
-    // whether all stdin was written. Dropping stdin when the closure ends signals end-of-input.
+    // output before consuming stdin — its output pipe fills while we're blocked writing stdin.
+    // The write's outcome IS captured (joined below): the prompt is the run's essential input, not
+    // best-effort bookkeeping. EVERY failure is reported — including a broken pipe: the child chose
+    // to stop reading (often a budget rejection whose own error explains itself), but if it then
+    // claims *success*, that success was computed against a truncated prompt and must not stand
+    // unqualified. Dropping stdin when the closure ends signals end-of-input.
     let mut stdin = child.stdin.take().expect("stdin was configured as piped");
     let prompt = prompt.to_owned();
-    let stdin_writer = std::thread::spawn(move || {
-        let _ = stdin.write_all(prompt.as_bytes());
-    });
+    let stdin_writer = std::thread::spawn(move || stdin.write_all(prompt.as_bytes()).err());
     // Drain stderr on its own thread, concurrently with the stdout stream below: a backend that fills
     // the stderr pipe buffer while we're still reading stdout would block writing it — and we'd never
     // reach a post-loop read — a deadlock. Joined after the child exits. A failed drain is *marked* in
@@ -845,10 +867,14 @@ fn drive(
     let stderr = stderr_reader
         .join()
         .expect("the stderr reader thread panicked");
-    stdin_writer
+    let prompt_write_error = stdin_writer
         .join()
         .expect("the stdin writer thread panicked");
-    Ok((status, stderr))
+    Ok(Driven {
+        status,
+        stderr,
+        prompt_write_error,
+    })
 }
 
 /// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
@@ -888,12 +914,12 @@ fn synthesize_claude(
     if let Some(schema) = req.json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
-    // Disable auto-loading of user/project CLAUDE.md + auto-memory. A neutral cwd alone does NOT stop
-    // it — the user-level ~/.claude/CLAUDE.md loads regardless of cwd. This affects only context
-    // loading, not the separate credential store, so auth is unaffected; `--ambient-memory` opts in.
-    // `--setting-sources ""` completes the isolation: without it the user/project settings.json still
-    // loads — hooks and other behavior-shaping config riding under a run arclite states explicitly
-    // (auth is separate and unaffected; confirmed by exercise).
+    // Isolation covers the agent's whole ambient configuration, and `--ambient-memory` re-enables
+    // the whole of it — memory AND settings — which the flag's help says in as many words, so
+    // nothing rides back in undisclosed. Memory: user/project CLAUDE.md + auto-memory (a neutral cwd
+    // alone does NOT stop the user-level one). Settings: `--setting-sources ""`, or hooks and other
+    // behavior-shaping config would load under a run arclite states explicitly. Auth is a separate
+    // store, unaffected either way (confirmed by exercise).
     if !req.ambient_memory {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
@@ -945,7 +971,11 @@ fn synthesize_claude(
     // Launch failures bail (nothing ran, nothing spent); any failure after the child was live —
     // a broken stream read, a failed wait — is a metered run whose spend is unknown, carried as an
     // errored synthesis so it reaches the log (account-for-consumed-cost-on-failure).
-    let (status, stderr) = match driven {
+    let Driven {
+        status,
+        stderr,
+        prompt_write_error,
+    } = match driven {
         Ok(driven) => driven,
         Err(DriveError::Launch(e)) => return Err(e),
         Err(DriveError::AfterSpawn(e)) => {
@@ -998,6 +1028,16 @@ fn synthesize_claude(
             "claude exited with {status} despite a success result"
         ));
     }
+    // A claimed success whose prompt never fully arrived isn't one: the synthesis ran against a
+    // truncated input, so it's carried as errored (its real usage intact). Under an already-failed
+    // run the child's own error stands — the write failure is its side effect, not the story.
+    if let Some(e) = prompt_write_error
+        && synthesis.error.is_none()
+    {
+        synthesis.error = Some(format!(
+            "claude reported success but stopped reading the prompt partway ({e}) — the result reflects a truncated prompt"
+        ));
+    }
     Ok(synthesis)
 }
 
@@ -1017,6 +1057,18 @@ pub(crate) const CODEX_REASONING_EFFORTS: &[&str] =
 /// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.
 pub(crate) fn validate_backend(name: &str) -> anyhow::Result<()> {
     backend(name).map(|_| ())
+}
+
+/// Validate a model id wherever one enters (an explicit `--model`, a configured default): it is
+/// emitted as the value after the child CLI's `--model` option, so an option-shaped id (leading
+/// dash) would escape its value slot into the CLI's argument grammar, and an empty one would leave
+/// the option dangling (guard-values-interpolated-into-commands).
+pub(crate) fn validate_model_id(id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !id.is_empty() && !id.starts_with('-'),
+        "`{id}` doesn't look like a model id — it would escape its `--model` value slot"
+    );
+    Ok(())
 }
 
 /// Validate a configured / `config set` codex reasoning effort against [`CODEX_REASONING_EFFORTS`], so a
@@ -1079,6 +1131,11 @@ impl Backend for CodexBackend {
     /// surfaced and applied — never a hidden cost-shaping knob.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         Some(configured.unwrap_or(CODEX_REASONING_EFFORT).to_owned())
+    }
+
+    /// codex reports token usage but no dollar cost — its records are tokens-only by design.
+    fn reports_cost(&self) -> bool {
+        false
     }
 
     fn synthesize(
@@ -1266,7 +1323,11 @@ fn synthesize_codex(
     // broken stream read, a failed wait — is a metered run: with captured usage it's recorded as
     // that spend; without, as spend-unknown zeros. Either way an errored run reaches the log
     // (account-for-consumed-cost-on-failure), never a bail that loses it.
-    let (status, stderr) = match driven {
+    let Driven {
+        status,
+        stderr,
+        prompt_write_error,
+    } = match driven {
         Ok(driven) => driven,
         Err(DriveError::Launch(e)) => return Err(e),
         Err(DriveError::AfterSpawn(e)) => {
@@ -1355,6 +1416,18 @@ fn synthesize_codex(
     } else {
         None
     };
+    // A claimed success whose prompt never fully arrived isn't one — same contract as the claude
+    // path: the result reflects a truncated input, carried as errored with its real usage.
+    if let Some(e) = prompt_write_error {
+        return Ok(Synthesis {
+            text: String::new(),
+            usage,
+            structured: None,
+            error: Some(format!(
+                "codex completed but stopped reading the prompt partway ({e}) — the result reflects a truncated prompt"
+            )),
+        });
+    }
     Ok(Synthesis {
         text,
         usage,

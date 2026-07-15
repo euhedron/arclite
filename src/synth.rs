@@ -84,6 +84,78 @@ pub(crate) fn results_schema(item: &str) -> String {
     root.to_string()
 }
 
+/// Minimal structural validation of a structured payload against a verb's schema — the local
+/// re-check at the acting boundary: the channel *promised* schema conformance, but gating, logging,
+/// and promotion must not take that promise on faith (a real audit once emitted an extract-shaped
+/// item that slipped the declared schema). Covers every construct arclite's schemas use — `object`
+/// nodes with `properties`/`required`/`additionalProperties: false` (an unexpected key is exactly
+/// the wrong-verb-shape drift this exists to catch), `array` nodes with `items`, `string` leaves,
+/// and `enum` constraints — appending a `path: problem` line per mismatch; constructs beyond that
+/// set are skipped, never guessed at.
+fn validate_against_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    path: &str,
+    problems: &mut Vec<String>,
+) {
+    // `enum` constrains any type — checked first, since a schema may pair it with `type`.
+    if let Some(allowed) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !allowed.contains(value)
+    {
+        problems.push(format!(
+            "{path}: {value} is not one of the schema's allowed values"
+        ));
+        return;
+    }
+    match schema.get("type").and_then(serde_json::Value::as_str) {
+        Some("object") => {
+            let Some(map) = value.as_object() else {
+                problems.push(format!("{path}: expected an object"));
+                return;
+            };
+            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+                for key in required.iter().filter_map(serde_json::Value::as_str) {
+                    if !map.contains_key(key) {
+                        problems.push(format!("{path}: missing required `{key}`"));
+                    }
+                }
+            }
+            let props = schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object);
+            if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                for key in map.keys() {
+                    if !props.is_some_and(|p| p.contains_key(key)) {
+                        problems.push(format!("{path}: unexpected key `{key}`"));
+                    }
+                }
+            }
+            if let Some(props) = props {
+                for (key, sub) in props {
+                    if let Some(v) = map.get(key) {
+                        validate_against_schema(v, sub, &format!("{path}.{key}"), problems);
+                    }
+                }
+            }
+        }
+        Some("array") => {
+            let Some(items) = value.as_array() else {
+                problems.push(format!("{path}: expected an array"));
+                return;
+            };
+            if let Some(item_schema) = schema.get("items") {
+                for (i, item) in items.iter().enumerate() {
+                    validate_against_schema(item, item_schema, &format!("{path}[{i}]"), problems);
+                }
+            }
+        }
+        Some("string") if !value.is_string() => {
+            problems.push(format!("{path}: expected a string"));
+        }
+        _ => {}
+    }
+}
+
 /// Recursively set `additionalProperties: false` on every object node in a JSON Schema — the
 /// closed-object shape OpenAI/codex structured output requires (and claude accepts). One statement,
 /// applied by [`results_schema`] to the whole envelope (and so to each command's embedded item).
@@ -1191,6 +1263,29 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // For an errored synthesis ([`ai::Synthesis::error`]), the gate and `--output` don't apply and the
     // body is the failure itself — but it's still logged below (with its real spend) and exits non-zero.
     let mut errored = synthesis.error;
+    // Re-validate the structured payload against the verb's full schema before anything acts on it
+    // (the gate below, the store, later promotion) — the local check the channel's promise doesn't
+    // replace. A slipped shape joins the errored-run path with its real spend, never a quiet pass —
+    // and a schema-requested run that returned NO structured payload at all is the same contract
+    // failure: its prose must not stand in for the typed result.
+    if let (Some(_), None, None) = (opts.schema, structured.as_ref(), &errored) {
+        errored = Some(
+            "the run returned no structured output for its declared schema — prose can't stand in for the typed result".to_owned(),
+        );
+    }
+    if let (Some(schema), Some(payload), None) = (opts.schema, structured.as_ref(), &errored) {
+        let schema_value: serde_json::Value =
+            serde_json::from_str(schema).expect("a verb's declared schema is valid JSON");
+        let mut problems = Vec::new();
+        validate_against_schema(payload, &schema_value, "$", &mut problems);
+        if !problems.is_empty() {
+            problems.truncate(5); // the first few name the shape drift; a flood adds nothing
+            errored = Some(format!(
+                "the structured result failed the local schema re-check: {}",
+                problems.join("; ")
+            ));
+        }
+    }
     // Count the gated findings. The schema guarantees the field is a present array; a missing one is
     // the channel ignoring the requested schema — but by this point the synthesis has *spent*, so the
     // contract failure joins the errored-run path (logged with its real usage, non-zero exit) rather

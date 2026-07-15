@@ -43,6 +43,9 @@ pub(crate) struct Rollup {
     /// Runs whose spend is *unknown* (the backend returned no usage; recorded zeros are
     /// placeholders) — counted apart from the measured sums, never read as genuine zero.
     pub(crate) spend_unknown: usize,
+    /// Runs from a cost-reporting backend whose record lacks a dollar cost — a lost cost, counted
+    /// apart from the by-design tokens-only (codex) runs so the cost sums' under-count is disclosed.
+    pub(crate) cost_missing: usize,
     /// Present-but-non-numeric usage fields encountered across records (each read as 0) —
     /// disclosed, so a mangled record can't masquerade as real zero consumption.
     pub(crate) malformed_fields: usize,
@@ -78,6 +81,7 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
     let mut tokens_only = 0usize;
     let mut spend_unknown = 0usize;
     let mut malformed_fields = 0usize;
+    let mut cost_missing = 0usize;
     // A record with no timestamp can't be placed in a finite window (it lands in the all-time total
     // only); count it so the windowed sums' omission is disclosed rather than silent.
     let no_timestamp = records
@@ -144,7 +148,18 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
                     Some(cost) => w.cost_usd += cost,
                     None => {
                         if span.is_none() && !unknown {
-                            tokens_only += 1;
+                            // Tokens-only *by design* (the backend reports no dollar cost) is the
+                            // benign codex case; a cost-reporting backend's record with no cost
+                            // LOST one — the cost sums under-count, disclosed apart. The registry
+                            // owns which backend is which (an unknown backend counts as lost —
+                            // can't-tell must not read as by-design).
+                            let by_design = crate::ai::backend(&crate::log::field(r, "backend"))
+                                .is_ok_and(|b| !b.reports_cost());
+                            if by_design {
+                                tokens_only += 1;
+                            } else {
+                                cost_missing += 1;
+                            }
                         }
                     }
                 }
@@ -223,6 +238,11 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
             "{spend_unknown} run(s) include unknown spend (the backend returned no usage for the run or a fan-out member) — their contributions to the sums are lower bounds, not measurements"
         ));
     }
+    if cost_missing > 0 {
+        notes.push(format!(
+            "{cost_missing} run(s) from a cost-reporting backend lack a recorded dollar cost — the cost sums under-count"
+        ));
+    }
     if malformed_fields > 0 {
         notes.push(format!(
             "{malformed_fields} usage field(s) were absent or non-numeric (read as 0) — the sums may under-count"
@@ -244,6 +264,7 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
         tokens_only,
         no_usage,
         spend_unknown,
+        cost_missing,
         malformed_fields,
         no_timestamp,
         unparsed,

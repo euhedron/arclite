@@ -24,12 +24,16 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate the tag as a single safe path segment
+      - uses: actions/checkout@v4
+      - name: Validate the tag — a safe path segment that matches Cargo.toml's version
         env:
           TAG: ${{ github.ref_name }}
         # The tag names release assets and rides into `cp` paths in the upload matrix; `v*` still
         # admits separators and metacharacters (`v1/x`), so require the shape the updater fetches
-        # before anything acts on it. The upload job needs this one, so a bad tag stops everything.
+        # before anything acts on it. And the tag must be `v<Cargo.toml version>` exactly: the
+        # updater treats the tag as the version it installs, so a mismatched tag would publish
+        # binaries that report a different version than their release claims. The upload job needs
+        # this one, so a bad tag stops everything.
         run: |
           case "$TAG" in
           *[!A-Za-z0-9._-]* | "")
@@ -37,6 +41,11 @@ jobs:
             exit 1
             ;;
           esac
+          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$TAG" != "v$CARGO_VERSION" ]; then
+            echo "tag '$TAG' does not match Cargo.toml's version 'v$CARGO_VERSION' — refusing to release a mislabeled binary" >&2
+            exit 1
+          fi
       - name: Create the release (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}

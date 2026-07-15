@@ -67,9 +67,11 @@ if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
 fi
 
 # Launch the gate and each advisory concurrently, each to its own temp file (so their streams don't
-# interleave); collect them in order once all finish.
+# interleave); collect them in order once all finish. --findings feeds the open ledger into the
+# audit so it hunts BEYOND what's already recorded: a finding held open with a curation judgment
+# (or awaiting its fix) is excluded from re-report instead of re-blocking every round.
 gate_out=$(mktemp)
-arc run audit . --include src --fail-on-findings >"$gate_out" 2>&1 &
+arc run audit . --include src --findings --fail-on-findings >"$gate_out" 2>&1 &
 gate_pid=$!
 
 adv_pids=""

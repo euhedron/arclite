@@ -1,6 +1,6 @@
 ---
 id: finding-identifiers-are-silently-truncated-at-a
-status: open
+status: resolved
 origin_kind: system_run
 system_run_id: 1784090217-31798-632772000
 commit: 0d430c6
@@ -24,3 +24,4 @@ The silent half was the real defect: a curator saw a shortened id with no signal
 The silence is fixed — truncation is now reported per promoted entry (human line and `truncated` in the JSON payload). The remaining ask, a *configurable* cap, is deliberately deferred: the constant is named, single-sourced, and documented with its rationale (the `no-hardcoded-magic-values` remediation bar), and no use has yet demanded tuning it. Revisit if description-based entry naming (the README's open item) or a real curation workflow needs longer ids.
 
 ## Resolution
+Resolved per verify run `1784127749-81905-297967000`: Promotion now records truncation per entry through `Promoted.truncated` and marks it in human output; the remaining named 48-character limit is no longer silent.

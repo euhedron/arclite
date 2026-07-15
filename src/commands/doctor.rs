@@ -86,6 +86,9 @@ impl ToolStatus {
 struct Logs {
     path: Option<String>,
     runs: Option<usize>,
+    /// Log lines that didn't parse as records — corruption, counted apart from `runs` and shown
+    /// beside it, never silently folded into the ordinary count.
+    unparsed: Option<usize>,
     /// Why `runs` is absent when the log exists but can't be read — carried in the JSON too, not
     /// only the human view, so the machine-readable output doesn't drop the failure.
     error: Option<String>,
@@ -114,9 +117,37 @@ fn probe(program: &str) -> ToolStatus {
     }
 }
 
+/// Probe the curl arclite's HTTP path actually invokes — resolved by [`crate::http::curl_program`],
+/// the same explicit-system-path selection outbound requests use — so the version doctor reports
+/// belongs to the binary arclite runs, not to whatever different `curl` shadows PATH.
+fn probe_curl() -> ToolStatus {
+    let program = match crate::http::curl_program() {
+        Ok(program) => program,
+        Err(error) => return ToolStatus::Failed(format!("{error:#}")),
+    };
+    let output = match std::process::Command::new(&program)
+        .arg("--version")
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ToolStatus::Absent,
+        Err(error) => return ToolStatus::Failed(error.to_string()),
+    };
+    if !output.status.success() {
+        return ToolStatus::Failed(format!("exited with {}", output.status));
+    }
+    match String::from_utf8_lossy(&output.stdout).lines().next() {
+        Some(line) => ToolStatus::Version(line.trim().to_owned()),
+        None => ToolStatus::Failed("ran but printed no version".to_owned()),
+    }
+}
+
 /// The repo root containing the cwd: `Ok(Some(root))` inside a work tree, `Ok(None)` when git runs and
 /// reports we are not in one (its benign verdict), `Err` when git cannot be run at all or runs but fails
 /// for any other reason — so a broken or absent git is surfaced, not collapsed into "not a repo".
+/// The root is *reused as a filesystem path* (config + hook lookups), so its bytes must round-trip
+/// exactly — a lossily-decoded path would probe somewhere else. Non-UTF-8 is surfaced as an error
+/// (matching resolve_root's boundary rule), never display-mangled into a lookup path.
 /// (`git config --get` outcomes, which need exit 1 separated from >1, use [`crate::git_config_get`].)
 fn git_repo_root() -> anyhow::Result<Option<String>> {
     let output = crate::ai::command("git")?
@@ -125,9 +156,12 @@ fn git_repo_root() -> anyhow::Result<Option<String>> {
         .output()
         .map_err(|e| anyhow::anyhow!("could not run git: {e}"))?;
     if output.status.success() {
-        return Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        ));
+        let root = String::from_utf8(output.stdout).map_err(|_| {
+            anyhow::anyhow!(
+                "the repository root path isn't valid UTF-8 — arclite can't probe it losslessly"
+            )
+        })?;
+        return Ok(Some(root.trim().to_owned()));
     }
     // `rev-parse` exits 128 both for "not a git repository" (git's benign not-in-a-work-tree verdict)
     // and for a genuine fault, collapsing the two onto one exit code — so the message is the only
@@ -283,7 +317,7 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
         tools: Tools {
             cargo: probe("cargo"),
             git: probe("git"),
-            curl: probe("curl"),
+            curl: probe_curl(),
             backends: crate::ai::known_backends()
                 .iter()
                 .map(|&name| BackendTool {
@@ -313,7 +347,8 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
         },
         logs: Logs {
             path: crate::log::path().map(|p| p.display().to_string()),
-            runs: runs.as_ref().ok().copied(),
+            runs: runs.as_ref().ok().map(|&(parsed, _)| parsed),
+            unparsed: runs.as_ref().ok().map(|&(_, unparsed)| unparsed),
             error: runs.as_ref().err().map(std::string::ToString::to_string),
         },
         gate: gate_status(),
@@ -324,9 +359,13 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
 /// TUI doctor view, so the two renderings can't drift.
 pub(crate) fn human(report: &Report) -> String {
     // `log::count` yields Ok or Err, so exactly one of `runs`/`error` is set; assert that invariant
-    // rather than fabricate a fallback for the pairing that can't occur.
+    // rather than fabricate a fallback for the pairing that can't occur. Corrupt lines show beside
+    // the count — a log with damage must not read as simply "N runs".
     let runs_display = match (report.logs.runs, report.logs.error.as_deref()) {
-        (Some(n), _) => format!("{n} runs"),
+        (Some(n), _) => match report.logs.unparsed {
+            Some(u) if u > 0 => format!("{n} runs (+ {u} unparseable line(s))"),
+            _ => format!("{n} runs"),
+        },
         (None, Some(e)) => format!("unreadable: {e}"),
         (None, None) => unreachable!("log::count sets exactly one of logs.runs / logs.error"),
     };

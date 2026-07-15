@@ -41,11 +41,18 @@ fn parse_string(value: &str) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::Value::String(value.to_owned()))
 }
 
+/// `parse` for the model-id settings: the stored value later rides argv as `--model`'s value, so an
+/// option-shaped id is rejected at set time (the run boundary re-checks whatever the settings hold).
+fn parse_model_id(value: &str) -> anyhow::Result<serde_json::Value> {
+    crate::ai::validate_model_id(value)?;
+    Ok(serde_json::Value::String(value.to_owned()))
+}
+
 const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.model",
         read: |s| s.default_model.clone(),
-        parse: parse_string,
+        parse: parse_model_id,
         space: |_| ValueSpace::Remote {
             backend: crate::ai::CLAUDE,
         },
@@ -103,7 +110,7 @@ const SETTINGS: &[Setting] = &[
     Setting {
         key: "defaults.codex_model",
         read: |s| s.default_codex_model.clone(),
-        parse: parse_string,
+        parse: parse_model_id,
         space: |_| ValueSpace::Remote {
             backend: crate::ai::CODEX,
         },

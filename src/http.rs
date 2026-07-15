@@ -97,7 +97,7 @@ pub(crate) fn get(
 /// shadowing MSYS curl would use); on Unix, `/usr/bin/curl` (macOS ships it SIP-protected; Linux
 /// distros install there). PATH is the fallback only when the system binary is *confirmed* absent —
 /// never on an inconclusive probe, and never silently on Windows without `SystemRoot`.
-fn curl_program() -> anyhow::Result<PathBuf> {
+pub(crate) fn curl_program() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     let system_curl = {
         // The trusted binary resolves via SystemRoot; with it unset the explicit path can't be built

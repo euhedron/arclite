@@ -118,14 +118,18 @@ fn apply(
                     .context(format!("cannot stage the update at {}", download_path.display()))
             }
         })?;
-    // Stage the download, then install it. On any failure — a partial download, or an install that
-    // rolled back its own rename — the staging file may remain, so remove it on the error path (warn
-    // if it can't be removed; an absent file is the normal, silent case) and propagate the error.
+    // Stage the download, verify the staged binary *is* the version its release claims (run its
+    // --version and compare — the tag named the target, but only the binary's own report confirms
+    // what was actually built), then install it. On any failure — a partial download, a version
+    // mismatch, or an install that rolled back its own rename — the staging file may remain, so
+    // remove it on the error path (warn if it can't be removed; an absent file is the normal,
+    // silent case) and propagate the error.
     if let Err(e) = download(
         &asset_download_url(asset_id),
         auth.as_deref(),
         &download_path,
     )
+    .and_then(|()| verify_staged_version(&download_path, target))
     .and_then(|()| install(&exe, &download_path))
     {
         if let Err(rm) = std::fs::remove_file(&download_path)
@@ -334,6 +338,37 @@ fn curl_get(
     // the initial API host and never rides the hop to storage. The acknowledged-hop contract lives on
     // http::get's `follow_redirects` parameter (see the module doc).
     crate::http::get(url, &[("Accept", accept)], &secret, true, dest)
+}
+
+/// Confirm the staged binary reports the version its release tag promised, before it replaces the
+/// running arc: run it with `--version` and require the target version in its output. The tag chose
+/// what to download; only the binary's own report confirms what was built — `installed` must never
+/// claim a version the binary doesn't. (Executing the staged file here is not an added trust step:
+/// install would make it *the* arc one rename later.)
+fn verify_staged_version(staged: &Path, target: Version) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(staged, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("making the staged binary runnable ({})", staged.display()))?;
+    }
+    let output = std::process::Command::new(staged)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("running the staged binary ({})", staged.display()))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "the staged binary's --version exited with {}",
+        output.status
+    );
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let expected = version_string(target);
+    anyhow::ensure!(
+        reported.split_whitespace().any(|w| w == expected),
+        "the staged binary reports `{}`, not the release's v{expected} — refusing to install a mislabeled binary",
+        reported.trim()
+    );
+    Ok(())
 }
 
 /// Suffix of the backup the Windows swap leaves beside the exe — named once so [`install`] (which

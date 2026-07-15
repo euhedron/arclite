@@ -2,6 +2,15 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+/// `--runs`' help, naming the applied ceiling from its one definition ([`crate::synth::MAX_RUNS`])
+/// so the documented bound can't drift from the enforced one.
+fn runs_help() -> String {
+    format!(
+        "Run the synthesis N times concurrently (1–{}; a larger value is rejected, never silently capped). Structured `results` are unioned (only byte-identical items collapse); prose outputs concatenate as per-run sections. A per-run --max-budget-usd applies to each, so N runs can spend up to N× it",
+        crate::synth::MAX_RUNS
+    )
+}
+
 /// The exit-code contract, shown under `arc --help` — load-bearing for hooks/CI/agents that branch
 /// on status. The gate code is formatted in from its one definition, [`crate::synth::GATE_BLOCKED_EXIT`].
 fn exit_codes_help() -> String {
@@ -366,10 +375,11 @@ pub struct SynthArgs {
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]
     pub output: Option<PathBuf>,
-    /// Load the agent's ambient project memory into the synthesis (claude: your user/project
-    /// `CLAUDE.md` + auto-memory; codex: the repo's `AGENTS.md`). Default: off — arclite isolates the
-    /// run so the reported context is authoritative and reproducible across machines. Enable to
-    /// deliberately apply your own ambient standards.
+    /// Load the agent's ambient configuration into the synthesis — claude: your user/project
+    /// `CLAUDE.md` + auto-memory AND your user/project settings (hooks included); codex: the repo's
+    /// `AGENTS.md`. Default: off — arclite isolates the run so the reported context is authoritative
+    /// and reproducible across machines. Enable to deliberately apply your own ambient setup; the
+    /// run report shows `memory=ambient` when you do.
     #[arg(long)]
     pub ambient_memory: bool,
     /// Gate on the command's results: exit non-zero if its structured `results` array is
@@ -388,10 +398,8 @@ pub struct SynthArgs {
     /// may suggest a vocabulary; the model may use its own label when none fit. Off by default.
     #[arg(long)]
     pub kinds: bool,
-    /// Run the synthesis N times concurrently. Structured `results` are unioned (only byte-identical
-    /// items collapse); prose outputs are concatenated as per-run sections. Default: 1; bounded to a
-    /// small maximum — a larger value is rejected, never silently capped. A per-run `--max-budget-usd`
-    /// applies to each, so N runs can spend up to N× it.
-    #[arg(long, default_value_t = 1)]
+    // Help derived at runtime so the ceiling it names is the one applied (synth::MAX_RUNS) — a
+    // hand-written "small maximum" would hide the actual bound.
+    #[arg(long, default_value_t = 1, help = runs_help())]
     pub runs: usize,
 }

@@ -1308,26 +1308,40 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel::<Msg>();
 
-    // Input thread: the sole reader of stdin. `event::read` blocks; each event becomes a `Msg`.
-    // A read *failure* is fatal and said so: with input dead every key (q included) is ignored,
-    // so running on would look idle while being uncontrollable — the loop exits with the error
-    // instead (distinguish a broken input stream from a merely quiet one).
+    // Input thread: the sole reader of stdin. It *polls* (with a short timeout) rather than
+    // blocking in `event::read`, so the shutdown flag set at loop exit lets it be JOINED before
+    // terminal restoration — a detached blocking reader would keep owning stdin after the TUI
+    // returned and eat the shell's first keypress. A read/poll *failure* is fatal and said so:
+    // with input dead every key (q included) is ignored, so running on would look idle while
+    // being uncontrollable — the loop exits with the error instead.
+    let input_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let input_tx = tx.clone();
-    thread::spawn(move || {
-        loop {
-            match event::read() {
-                Ok(event) => {
-                    if input_tx.send(Msg::Input(event)).is_err() {
-                        break; // receiver gone — the loop exited
+    let input_thread = {
+        let shutdown = std::sync::Arc::clone(&input_shutdown);
+        thread::spawn(move || {
+            const POLL: Duration = Duration::from_millis(150);
+            while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                match event::poll(POLL) {
+                    Ok(false) => {} // quiet interval — re-check shutdown
+                    Ok(true) => match event::read() {
+                        Ok(event) => {
+                            if input_tx.send(Msg::Input(event)).is_err() {
+                                break; // receiver gone — the loop exited
+                            }
+                        }
+                        Err(e) => {
+                            let _ = input_tx.send(Msg::InputFailed(format!("{e}")));
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = input_tx.send(Msg::InputFailed(format!("{e}")));
+                        break;
                     }
                 }
-                Err(e) => {
-                    let _ = input_tx.send(Msg::InputFailed(format!("{e}")));
-                    break;
-                }
             }
-        }
-    });
+        })
+    };
     // Tick thread: drives the live refresh.
     let tick_tx = tx.clone();
     thread::spawn(move || {
@@ -1356,6 +1370,12 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
             .expect("a sender thread panicked (input/tick hold a sender for the loop's lifetime)");
         update(&mut app, msg);
     }
+    // Stop and JOIN the input reader before the caller restores the terminal: stdin must have no
+    // reader left when the shell gets it back (the poll interval bounds the wait).
+    input_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    input_thread
+        .join()
+        .expect("the input thread panicked while shutting down");
     // An input-stream failure exited the loop; it's an error, not a quit — surfaced after the
     // terminal is restored (the caller prints it), never silently swallowed into a normal exit.
     if let Some(e) = app.input_error {

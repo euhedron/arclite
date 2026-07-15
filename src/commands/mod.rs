@@ -141,6 +141,10 @@ pub fn run_synthesis(
     // error, never silently dropped.
     backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;
     let model = backend.resolve_model(args.model.as_deref(), backend.configured_model(&settings));
+    // The resolved id — whichever of flag/config/default supplied it — rides argv as `--model`'s
+    // value; reject an option-shaped or empty one here, before any spend, rather than let it
+    // escape its value slot in the child CLI's grammar.
+    crate::ai::validate_model_id(&model)?;
     let max_budget_usd =
         backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
     // A configured budget cap the backend can't honor is surfaced, never silently dropped. An explicit
