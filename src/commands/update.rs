@@ -479,38 +479,48 @@ mod tests {
     }
 
     /// The workflow's hand-written asset matrix can't be generated from [`asset_name`] (YAML can't
-    /// call it), so this test is the enforcement that keeps the two homes one: every published
-    /// platform's `asset:` line must be exactly what `asset_name` produces for it, and the count
-    /// must match, so adding a platform to one side without the other fails here — not as a
-    /// download 404 months later.
+    /// call it), so this test is the enforcement that keeps the two homes one: it parses the
+    /// workflow's YAML and reads the actual matrix rows — fields, not raw text a comment could
+    /// satisfy — asserting each platform's `asset` is exactly what `asset_name` produces for its
+    /// target, and that the platform sets match, so adding to one side without the other fails
+    /// here — not as a download 404 months later.
     #[test]
     fn release_workflow_assets_follow_the_one_naming_convention() {
-        let yml = std::fs::read_to_string(concat!(
+        let yml_text = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/.github/workflows/release.yml"
         ))
         .expect("the release workflow exists at its documented path");
-        // The published platforms: (os, arch, exe-suffix) per matrix row, tag as the workflow
-        // interpolates it.
-        let tag = "${{ github.ref_name }}";
-        let platforms = [
-            ("linux", "x86_64", ""),
-            ("macos", "aarch64", ""),
-            ("macos", "x86_64", ""),
-            ("windows", "x86_64", ".exe"),
-        ];
-        for (os, arch, exe) in platforms {
-            let expected = format!("asset: {}", asset_name(tag, os, arch, exe));
-            assert!(
-                yml.contains(&expected),
-                "release.yml is missing `{expected}` — the matrix drifted from asset_name()"
+        let docs =
+            yaml_rust2::YamlLoader::load_from_str(&yml_text).expect("release.yml parses as YAML");
+        let rows = docs[0]["jobs"]["upload"]["strategy"]["matrix"]["include"]
+            .as_vec()
+            .expect("the upload matrix is a list of platform rows");
+        // Each published Rust target's (os, arch, exe-suffix) — the values std::env::consts
+        // reports on that platform, which binary_name uses at run time.
+        let platform = |target: &str| match target {
+            "x86_64-unknown-linux-gnu" => ("linux", "x86_64", ""),
+            "aarch64-apple-darwin" => ("macos", "aarch64", ""),
+            "x86_64-apple-darwin" => ("macos", "x86_64", ""),
+            "x86_64-pc-windows-msvc" => ("windows", "x86_64", ".exe"),
+            other => panic!("release.yml publishes {other}, which this test doesn't pin — add it"),
+        };
+        let tag = "${{ github.ref_name }}"; // as the workflow interpolates it into `asset`
+        assert_eq!(
+            rows.len(),
+            4,
+            "a platform was added or removed — update this test's mapping"
+        );
+        for row in rows {
+            let target = row["target"].as_str().expect("a matrix row has a target");
+            let asset = row["asset"].as_str().expect("a matrix row has an asset");
+            let (os, arch, exe) = platform(target);
+            assert_eq!(
+                asset,
+                asset_name(tag, os, arch, exe),
+                "the {target} asset drifted from asset_name()"
             );
         }
-        assert_eq!(
-            yml.matches("asset: ").count(),
-            platforms.len(),
-            "release.yml publishes a platform this test doesn't pin — add it to the list"
-        );
     }
 
     #[test]

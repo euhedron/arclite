@@ -28,6 +28,7 @@ which = "8"
 
 [dev-dependencies]
 assert_cmd = "2"
+yaml-rust2 = "0.11.0"
 
 [lints.rust]
 unsafe_code = "forbid"
