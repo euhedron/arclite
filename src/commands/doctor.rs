@@ -157,13 +157,11 @@ fn git_repo_root() -> anyhow::Result<Option<String>> {
         })?;
         return Ok(Some(root.trim().to_owned()));
     }
-    // `rev-parse` exits 128 both for "not a git repository" (git's benign not-in-a-work-tree verdict)
-    // and for a genuine fault, collapsing the two onto one exit code — so the message is the only
-    // discriminator git offers. We force `LC_ALL=C` above so that message is stable English rather than
-    // locale-dependent (the justified last resort when a tool exposes no machine-readable signal for the
-    // distinction): the standard not-a-repo line reads as absent; anything else is a broken git we surface.
+    // Exit 128 collapses "not a repo" and genuine faults, so the stderr text discriminates —
+    // matched by the single-sourced [`crate::git_stderr_says_not_a_repo`] (LC_ALL=C above pins the
+    // wording): the standard not-a-repo line reads as absent; anything else is a broken git we surface.
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("not a git repository") {
+    if crate::git_stderr_says_not_a_repo(&stderr) {
         Ok(None)
     } else {
         Err(anyhow::anyhow!(

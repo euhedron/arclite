@@ -36,27 +36,14 @@ struct PromoteOutput {
 
 /// The `promote` command.
 pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let run_id = crate::commands::log::resolve_id(&args.run)?;
-    let Some(stored) = crate::commands::log::load_stored(&run_id)? else {
-        anyhow::bail!(
-            "no stored result for run `{run_id}` — logging was off, or it predates the result store"
-        );
-    };
-    let record = crate::commands::log::stored_run(&stored);
+    let (run_id, stored, record, repo) =
+        crate::commands::log::stored_ledger_run(&args.run, "nothing to promote into")?;
+    let repo = repo.as_str();
     let command = record
         .get("command")
         .and_then(Value::as_str)
         .context("the stored run record has no `command`")?
         .to_owned();
-    let repo = record
-        .get("repo")
-        .and_then(Value::as_str)
-        .context("the stored run record has no `repo`, so its ledger can't be located")?;
-    anyhow::ensure!(
-        crate::try_is_dir(Path::new(repo))
-            .with_context(|| format!("cannot access the run's repository ({repo})"))?,
-        "the run's repository ({repo}) no longer exists — nothing to promote into"
-    );
     // Findings are the structured `results`; a prose verb's run (summarize) has none to promote.
     let findings = stored
         .get("structured")

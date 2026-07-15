@@ -128,6 +128,16 @@ pub(crate) fn git_config_get(dir: &std::path::Path, key: &str) -> anyhow::Result
     }
 }
 
+/// Git's benign not-in-a-repository verdict, read from stderr text — the one home for that fragile
+/// match. `rev-parse` collapses "not a repo" and genuine faults onto one exit code (128), so the
+/// message is the only discriminator git offers (the justified last resort when a tool exposes no
+/// machine-readable signal). Callers must pin `LC_ALL=C` on the probe so these are the words git
+/// actually emits regardless of locale; single-sourced so a change in git's wording is fixed once,
+/// not hunted across files.
+pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
+    stderr.contains("not a git repository")
+}
+
 /// The settings filename inside an `.arc` directory — single-sourced (like [`ARC_DIR`]) so a rename
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";

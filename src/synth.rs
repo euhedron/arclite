@@ -715,12 +715,12 @@ fn repo_commit(root: &Path) -> Option<String> {
     };
     if !head.status.success() {
         // Exit 1 (quiet verification failure) = unborn HEAD: silently un-anchored. Exit 128 with
-        // git's not-a-repository wording = a plain directory: also silently un-anchored. Anything
-        // else — repository corruption, a locked object store — is unreadable, not absent, and
-        // warns before the anchor is dropped.
+        // git's not-a-repository wording (the single-sourced match — LC_ALL=C above pins it) = a
+        // plain directory: also silently un-anchored. Anything else — repository corruption, a
+        // locked object store — is unreadable, not absent, and warns before the anchor is dropped.
         let stderr = String::from_utf8_lossy(&head.stderr);
         let benign = head.status.code() == Some(1)
-            || (head.status.code() == Some(128) && stderr.contains("not a git repository"));
+            || (head.status.code() == Some(128) && crate::git_stderr_says_not_a_repo(&stderr));
         if !benign {
             unreadable(&format!(
                 "git rev-parse failed in a way that isn't \"not a repo\" ({})",

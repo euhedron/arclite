@@ -209,6 +209,35 @@ pub(crate) fn stored_run(stored: &Value) -> Value {
     stored.get("run").cloned().unwrap_or(Value::Null)
 }
 
+/// The ledger commands' shared preamble: resolve a run-id prefix, load the stored result, pull the
+/// run record out, and confirm the record's repository still exists on disk (`gone` phrases what a
+/// vanished repo means for the caller — "nothing to promote into" / "nothing to retire from").
+/// Returns `(run_id, stored, record, repo)`. One implementation, so how a stored run is located and
+/// validated can't drift between `promote` and `retire`.
+pub(crate) fn stored_ledger_run(
+    run_arg: &str,
+    gone: &str,
+) -> anyhow::Result<(String, Value, Value, String)> {
+    let run_id = resolve_id(run_arg)?;
+    let Some(stored) = load_stored(&run_id)? else {
+        bail!(
+            "no stored result for run `{run_id}` — logging was off, or it predates the result store"
+        );
+    };
+    let record = stored_run(&stored);
+    let repo = record
+        .get("repo")
+        .and_then(Value::as_str)
+        .context("the stored run record has no `repo`, so its ledger can't be located")?
+        .to_owned();
+    anyhow::ensure!(
+        crate::try_is_dir(std::path::Path::new(&repo))
+            .with_context(|| format!("cannot access the run's repository ({repo})"))?,
+        "the run's repository ({repo}) no longer exists — {gone}"
+    );
+    Ok((run_id, stored, record, repo))
+}
+
 fn show(id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
     let id = resolve_id(id)?;
     let Some(stored) = load_stored(&id)? else {
