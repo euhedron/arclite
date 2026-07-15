@@ -390,6 +390,15 @@ fn gather_findings(
     if !crate::try_is_dir(&dir)
         .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
     {
+        // Absent = legitimately no ledger (silent). A *present non-directory* squatting on the
+        // ledger path is damage, not absence — a run must not quietly proceed as though the repo
+        // recorded no findings.
+        anyhow::ensure!(
+            !dir.try_exists()
+                .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?,
+            "{} exists but is not a directory — the findings ledger is unreadable, not empty",
+            dir.display()
+        );
         return Ok(String::new());
     }
     let entries = crate::rules::load(&dir)?;

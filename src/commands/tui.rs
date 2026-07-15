@@ -584,7 +584,30 @@ impl App {
                     if failed || !warnings.is_empty() {
                         // The last line is the most recent (and usually most specific) warning.
                         let tail = warnings.lines().last().unwrap_or("").to_owned();
-                        let _ = tx.send(Msg::LaunchExited { verb, failed, tail });
+                        let sent = tx.send(Msg::LaunchExited {
+                            verb: verb.clone(),
+                            failed,
+                            tail: tail.clone(),
+                        });
+                        if sent.is_err() {
+                            // Receiver gone = the TUI exited and released the terminal, so stderr
+                            // is the shell's again — the warning still reaches the user rather
+                            // than dying with the channel (best-effort-side-effects).
+                            #[expect(
+                                clippy::print_stderr,
+                                reason = "the TUI exited (receiver dropped); the terminal is free"
+                            )]
+                            {
+                                eprintln!(
+                                    "arclite: background `{verb}` {}: {tail}",
+                                    if failed {
+                                        "failed"
+                                    } else {
+                                        "finished with warnings"
+                                    }
+                                );
+                            }
+                        }
                     }
                 });
                 self.launch = None;

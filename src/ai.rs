@@ -188,14 +188,22 @@ struct ClaudeUsage {
 pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthesis> {
     let parsed: ClaudeJson =
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
-    // The synthesis model is the modelUsage entry that produced the output — the one with the most
-    // output tokens (the CLI's internal auxiliary models make comparatively tiny calls). Resolved once,
-    // shared by the success and error paths.
-    let model = parsed
-        .model_usage
-        .iter()
-        .max_by_key(|(_, usage)| usage.output_tokens)
-        .map(|(id, _)| id.clone());
+    // The identity that ran, as the payload actually confirms it: one modelUsage entry names the
+    // model outright; several confirm only the *set* that ran (the CLI's auxiliary models bill
+    // small calls), so the set is reported joined — never one member presented as though it alone
+    // produced the synthesis. Resolved once, shared by the success and error paths.
+    let model = match parsed.model_usage.len() {
+        0 => None,
+        1 => parsed.model_usage.keys().next().cloned(),
+        _ => Some(
+            parsed
+                .model_usage
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" + "),
+        ),
+    };
     if parsed.is_error.unwrap_or(false) {
         // A run that ran and *spent* but did not complete (e.g. a tripped --max-budget-usd cap). On an
         // error payload the top-level `usage` block is zeroed (confirmed by exercise) while the real

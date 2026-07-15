@@ -62,17 +62,21 @@ fn findings_entry_candidates<'a>(
     })
 }
 
-/// The path a promote/retire *would* claim for `stem` right now: the first free candidate. For
-/// dry-run previews — same sequence as the claim, probed without creating; indicative, since a
-/// concurrent writer can take the name between preview and run (the preview already says so).
-/// The probe uses `try_exists` semantics: an unreadable candidate is a real error, never read as
-/// "free" (which would preview a name the real claim would refuse).
+/// The path a promote/retire *would* claim for `stem` right now: the first candidate neither on
+/// disk nor in `reserved` — the batch's own earlier predictions, which a dry run must honor the way
+/// the real run's atomic claims would (two colliding slugs preview `x.md` and `x-1.md`, not `x.md`
+/// twice). The chosen path is added to `reserved`. Probes use `try_exists` semantics: an unreadable
+/// candidate is a real error, never read as "free" (which would preview a name the real claim would
+/// refuse). Still indicative under concurrency — an outside writer can take a name between preview
+/// and run.
 pub(crate) fn preview_findings_entry(
     dir: &std::path::Path,
     stem: &str,
+    reserved: &mut std::collections::HashSet<std::path::PathBuf>,
 ) -> std::io::Result<std::path::PathBuf> {
     for path in findings_entry_candidates(dir, stem) {
-        if !path.try_exists()? {
+        if !reserved.contains(&path) && !path.try_exists()? {
+            reserved.insert(path.clone());
             return Ok(path);
         }
     }

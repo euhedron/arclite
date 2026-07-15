@@ -83,12 +83,15 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .map(crate::commands::log::datetime_utc);
 
     let mut promoted = Vec::new();
+    // The dry-run's reservation set: earlier previews in this batch occupy their predicted names,
+    // so colliding slugs preview the suffixed paths the real run's atomic claims would take.
+    let mut reserved = std::collections::HashSet::new();
     for finding in findings {
         let (stem, truncated) = slug(primary_text(finding));
         let path = if args.dry_run {
             // The same collision-aware sequence the real claim walks, probed without writing — the
             // preview names the path a run started now would take (indicative under concurrency).
-            crate::preview_findings_entry(&ledger, &stem)
+            crate::preview_findings_entry(&ledger, &stem, &mut reserved)
                 .with_context(|| format!("cannot probe the ledger at {}", ledger.display()))?
         } else {
             write_entry(
@@ -236,6 +239,26 @@ fn slug(text: &str) -> (String, bool) {
     }
 }
 
+/// Neutralize model-provided text for embedding in a ledger entry. The entry's own `## <section>`
+/// headings are load-bearing structure — the rule renderer keys findings on `## <id>` and retire's
+/// resolution insert locates `## Resolution` — so a model string carrying a line that *starts* like
+/// a heading could redirect those structural reads. Any line-leading `#` is escaped to `\#` (a
+/// literal hash in Markdown); everything else passes through verbatim.
+pub(crate) fn escape_ledger_text(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let body = line.trim_start();
+            if body.starts_with('#') {
+                let indent = &line[..line.len() - body.len()];
+                format!("{indent}\\{body}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Write one finding as a ledger entry, claimed atomically under a collision-free name via
 /// [`crate::claim_findings_entry`]; the frontmatter `id` is set to the name actually claimed, so it
 /// always matches the file stem.
@@ -276,8 +299,9 @@ fn entry_md(
     recorded: Option<&str>,
 ) -> String {
     // The same rendering the run's own output uses (synth::item_bullets), so a finding reads
-    // identically in the terminal and in the ledger it was promoted into.
-    let claim = crate::synth::item_bullets(finding);
+    // identically in the terminal and in the ledger it was promoted into — modulo heading-escaping,
+    // which neutralizes model text at this structural boundary only (the terminal has no headings).
+    let claim = escape_ledger_text(&crate::synth::item_bullets(finding));
     let commit_line = commit.map_or_else(String::new, |c| format!("commit: {c}\n"));
     let recorded_line = recorded.map_or_else(String::new, |r| format!("recorded: {r}\n"));
     let against = commit.map_or_else(String::new, |c| format!(" against commit `{c}`"));

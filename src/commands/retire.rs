@@ -81,6 +81,9 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     let mut retired = Vec::new();
     let mut unmatched = Vec::new();
+    // The dry-run's reservation set — earlier previews in this batch occupy their predicted names,
+    // matching the real run's atomic claims (see promote's twin).
+    let mut reserved = std::collections::HashSet::new();
     for (i, v) in verdicts.iter().enumerate() {
         if v.get("verdict").and_then(Value::as_str) != Some("resolved") {
             continue; // only resolved findings retire; reproduces/indeterminate stay open
@@ -121,7 +124,7 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         let dest = if args.dry_run {
             // The same collision-aware sequence the real claim walks, probed without writing — the
             // preview names the path a run started now would take (indicative under concurrency).
-            crate::preview_findings_entry(&resolved, id)
+            crate::preview_findings_entry(&resolved, id, &mut reserved)
                 .with_context(|| format!("cannot probe the ledger at {}", resolved.display()))?
         } else {
             move_entry(&src, &resolved, id, reason, &run_id).with_context(|| {
@@ -262,6 +265,9 @@ fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
             "arclite: retired entry carries no frontmatter `status:` field to flip — moved as-is"
         );
     }
+    // The reason rode through the model: heading-escape it at this structural boundary, so an
+    // embedded newline + `## …` line can't masquerade as a section of the entry (promote's twin).
+    let reason = super::promote::escape_ledger_text(reason);
     let note = if reason.is_empty() {
         format!("Resolved per verify run `{run_id}`.")
     } else {

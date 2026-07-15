@@ -121,14 +121,14 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
                     }
                     continue;
                 };
-                // An unknown-spend run's zeros are placeholders, not measurements: counted in its
-                // own disclosure, kept out of the token sums and the tokens-only (codex) count it
-                // would otherwise masquerade in.
-                if crate::log::record_spend_unknown(r) {
-                    if span.is_none() {
-                        spend_unknown += 1;
-                    }
-                    continue;
+                // An unknown-spend run's recorded numbers are a *lower bound* (zeros for a fully
+                // unknown single run; the successful members' real tokens for a mixed fan-out).
+                // Those known tokens still sum — discarding them would under-count real spend —
+                // while the record itself is counted into its own disclosure and kept out of the
+                // tokens-only (codex) note it would otherwise masquerade in.
+                let unknown = crate::log::record_spend_unknown(r);
+                if unknown && span.is_none() {
+                    spend_unknown += 1;
                 }
                 let t = crate::log::usage_tokens(usage);
                 if span.is_none() {
@@ -143,7 +143,7 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
                 match crate::log::record_cost(r) {
                     Some(cost) => w.cost_usd += cost,
                     None => {
-                        if span.is_none() {
+                        if span.is_none() && !unknown {
                             tokens_only += 1;
                         }
                     }
@@ -220,7 +220,7 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
     }
     if spend_unknown > 0 {
         notes.push(format!(
-            "{spend_unknown} run(s) consumed an unknown amount (the backend returned no usage) — excluded from the sums, not counted as zero"
+            "{spend_unknown} run(s) include unknown spend (the backend returned no usage for the run or a fan-out member) — their contributions to the sums are lower bounds, not measurements"
         ));
     }
     if malformed_fields > 0 {
