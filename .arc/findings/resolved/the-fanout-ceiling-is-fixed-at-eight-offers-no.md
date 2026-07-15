@@ -1,6 +1,6 @@
 ---
 id: the-fanout-ceiling-is-fixed-at-eight-offers-no
-status: open
+status: resolved
 origin_kind: system_run
 system_run_id: 1784124280-47780-629894000
 commit: 820a32c
@@ -24,3 +24,4 @@ An invisible bound would be a silent default; a wrong bound would cap consensus 
 The visibility half is fixed: `--runs`' help now derives the applied ceiling from `synth::MAX_RUNS` (the one definition), and an over-limit value is rejected naming it. The configurability half is deliberately deferred — the ceiling is concurrency/spend hygiene (eight concurrent agent processes at premium-model prices), documented at its constant, and no use has demanded more. Revisit if a real consensus workflow needs a higher fan-out; until then this stays open as a judgment, not a defect queue item.
 
 ## Resolution
+Resolved per verify run `1784134110-43911-80458000`: runs_help() now derives the ceiling from synth::MAX_RUNS and run_synthesis rejects over-limit values naming the bound, so it is surfaced/enforced rather than a silent 'small maximum' default.

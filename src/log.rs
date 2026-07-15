@@ -191,6 +191,18 @@ pub fn model_requested(record: &serde_json::Value) -> bool {
 /// The compact suffix logged views hang on a requested-not-confirmed model id — one wording, shared.
 pub const MODEL_REQUESTED_SUFFIX: &str = " (requested)";
 
+/// A record's model id as logged views display it: the recorded `model` field, suffixed when
+/// merely requested (per [`model_requested`]), bare when response-confirmed. The one formatter
+/// behind the list row and the stored-run detail, so the two renderings can't drift.
+pub fn model_display(record: &serde_json::Value) -> String {
+    let model = field(record, "model");
+    if model_requested(record) {
+        format!("{model}{MODEL_REQUESTED_SUFFIX}")
+    } else {
+        model
+    }
+}
+
 /// The recorded string form of a repo path — the one conversion the run record and the active-run
 /// marker share, and the form ledger commands (`promote`/`retire`) later reopen as a path. Not
 /// display formatting: the round-trip is byte-exact, guaranteed by the boundary — every repo path

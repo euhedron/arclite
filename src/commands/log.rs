@@ -118,15 +118,7 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
     let errored = crate::log::is_errored(r);
     // A model the backend never confirmed shows as requested — the list must not present the
     // requested id as the identity that ran (report-the-identity-that-ran).
-    let model = if crate::log::model_requested(r) {
-        format!(
-            "{}{}",
-            field(r, "model"),
-            crate::log::MODEL_REQUESTED_SUFFIX
-        )
-    } else {
-        field(r, "model")
-    };
+    let model = crate::log::model_display(r);
     format!(
         "{id} · {age} · {} · {} · {model} · {}{}{}",
         field(r, "command"),
@@ -321,15 +313,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
     );
     // Identity: command, repo (at its commit, when the run recorded one), and the backend/model —
     // with a requested-not-confirmed model id disclosed, same as it showed live.
-    let model = if crate::log::model_requested(&run) {
-        format!(
-            "{}{}",
-            field(&run, "model"),
-            crate::log::MODEL_REQUESTED_SUFFIX
-        )
-    } else {
-        field(&run, "model")
-    };
+    let model = crate::log::model_display(&run);
     meta.push_str(&format!(
         "\n{} · {} · {}/{model}",
         field(&run, "command"),
