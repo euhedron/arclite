@@ -69,18 +69,26 @@ pub fn usage_tokens(usage: &serde_json::Value) -> TokenCounts {
 }
 
 /// A token+cost tally formatted for display — the single statement of the
-/// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share.
+/// `in/cache-write/cache-read/out | $` line the run report and `arc usage` share. `cost_partial`
+/// marks a fan-out sum where some members' dollar cost was unknown: the figure is a lower bound and
+/// is shown as one (`≥ $X …`), never presented as the exact total.
 pub fn usage_display(
     input: u64,
     cache_write: u64,
     cache_read: u64,
     output: u64,
     cost_usd: Option<f64>,
+    cost_partial: bool,
 ) -> String {
-    format!(
-        "in {input}  cache-write {cache_write}  cache-read {cache_read}  out {output} | {}",
+    let cost = if cost_partial {
+        format!(
+            "≥ {} (a member's cost was unknown)",
+            cost_or_unavailable(cost_usd)
+        )
+    } else {
         cost_or_unavailable(cost_usd)
-    )
+    };
+    format!("in {input}  cache-write {cache_write}  cache-read {cache_read}  out {output} | {cost}")
 }
 
 /// An optional cost cap for display — `none` when uncapped. The cap is *per run*, so across a
@@ -147,6 +155,20 @@ pub fn field(record: &serde_json::Value, key: &str) -> String {
         .unwrap_or("?")
         .to_owned()
 }
+
+/// Whether a run record's model id was merely *requested* (the backend echoed no model id) rather
+/// than response-confirmed — read from the recorded `usage.model_source`, absent on records that
+/// predate the field (treated as confirmed, matching their era's semantics). One reader shared by
+/// every logged view, so no surface presents an unconfirmed id as the identity that ran.
+pub fn model_requested(record: &serde_json::Value) -> bool {
+    record
+        .pointer("/usage/model_source")
+        .and_then(serde_json::Value::as_str)
+        == Some("requested")
+}
+
+/// The compact suffix logged views hang on a requested-not-confirmed model id — one wording, shared.
+pub const MODEL_REQUESTED_SUFFIX: &str = " (requested)";
 
 /// The recorded string form of a repo path — the one conversion the run record and the active-run
 /// marker share, and the form ledger commands (`promote`/`retire`) later reopen as a path. Not

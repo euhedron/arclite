@@ -1101,10 +1101,13 @@ const RECENT_RUNS: usize = 5;
 const RECENT_COLS: usize = 5;
 
 /// The recently-completed tail: the newest [`RECENT_RUNS`] rows, plus the total completed-run count so
-/// the view can disclose when older runs are elided (the codebase discloses every other elision).
+/// the view can disclose when older runs are elided (the codebase discloses every other elision), and
+/// the unparseable-line count — with corrupt lines, "newest parsed" may not be "newest run", and that
+/// must show, not silently present an older record as current.
 struct RecentTail {
     rows: Vec<[String; RECENT_COLS]>,
     total: usize,
+    unparsed: usize,
 }
 
 /// Build the [`RecentTail`] from the log: the newest rows as `[age, command, repo, outcome, cost]`
@@ -1113,7 +1116,7 @@ struct RecentTail {
 /// not collapsed into an empty tail). Re-read each tick; the log is small, and a tail-only read is a
 /// later optimization.
 fn recent_completed(now: u64) -> Result<RecentTail, String> {
-    let (records, _) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
+    let (records, unparsed) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
     let total = records.len();
     let rows = records
         .iter()
@@ -1142,7 +1145,11 @@ fn recent_completed(now: u64) -> Result<RecentTail, String> {
             ]
         })
         .collect();
-    Ok(RecentTail { rows, total })
+    Ok(RecentTail {
+        rows,
+        total,
+        unparsed,
+    })
 }
 
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
@@ -1678,12 +1685,16 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         Ok(tail) if tail.rows.is_empty() => {}
         Ok(tail) => {
             // Disclose when older runs are elided (showing N of M), matching the codebase's
-            // elision-disclosure standard (arc log's "… N older run(s)", inspect's "+N more").
-            let title = if tail.total > tail.rows.len() {
+            // elision-disclosure standard (arc log's "… N older run(s)", inspect's "+N more") —
+            // and when unparseable log lines mean "newest parsed" may not be "newest run".
+            let mut title = if tail.total > tail.rows.len() {
                 format!("recently completed · {} of {}", tail.rows.len(), tail.total)
             } else {
                 "recently completed".to_owned()
             };
+            if tail.unparsed > 0 {
+                title.push_str(&format!(" · {}", crate::log::unparsed_note(tail.unparsed)));
+            }
             let table = Table::new(
                 tail.rows.iter().map(|c| Row::new(c.clone())),
                 RECENT_COLUMN_WIDTHS,
@@ -2564,6 +2575,7 @@ mod tests {
             recent: Ok(RecentTail {
                 rows: Vec::new(),
                 total: 0,
+                unparsed: 0,
             }),
         }
     }

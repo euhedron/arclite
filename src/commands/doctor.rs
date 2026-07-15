@@ -146,12 +146,16 @@ fn git_repo_root() -> anyhow::Result<Option<String>> {
     }
 }
 
-/// A pre-push hook's state: present and invoking `arc` (the arc gate is wired), present without it,
-/// present but unreadable (kept distinct from absent), or no hook at all.
+/// A pre-push hook's state: present with `arc` appearing as an invocation (per the text scan —
+/// [`hook_invokes`] is a heuristic, and every surface carries that qualification, the JSON state
+/// names included, rather than claiming a definitive all-clear), present without it, present but
+/// unreadable (kept distinct from absent), or no hook at all.
 #[derive(Serialize)]
 #[serde(tag = "state", content = "detail", rename_all = "snake_case")]
 enum HookStatus {
+    #[serde(rename = "invokes_arc_per_text_scan")]
     InvokesArc,
+    #[serde(rename = "no_arc_per_text_scan")]
     NoArc,
     Unreadable(String),
     Absent,
@@ -400,9 +404,11 @@ pub(crate) fn human(report: &Report) -> String {
             || "default .git/hooks".to_owned(),
             |p| format!("core.hooksPath={p}"),
         );
+        // The invokes-arc verdict is a text scan, not a shell parse — say so, so a heuristic
+        // can't read as a definitive all-clear (inconclusive-check-must-not-report-all-clear).
         let state = match &report.gate.pre_push {
-            Some(HookStatus::InvokesArc) => "pre-push invokes arc".to_owned(),
-            Some(HookStatus::NoArc) => "pre-push present (no arc)".to_owned(),
+            Some(HookStatus::InvokesArc) => "pre-push invokes arc (per text scan)".to_owned(),
+            Some(HookStatus::NoArc) => "pre-push present (no arc found by text scan)".to_owned(),
             Some(HookStatus::Unreadable(e)) => format!("pre-push unreadable: {e}"),
             Some(HookStatus::Absent) | None => "no pre-push hook".to_owned(),
         };

@@ -164,6 +164,9 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
                     w.cache_read_input_tokens,
                     w.output_tokens,
                     Some(w.cost_usd),
+                    // The rollup's tokens-only/unknown-cost caveat is its own note below, sized by
+                    // run count — not the per-line lower-bound marker.
+                    false,
                 ),
             )
         })

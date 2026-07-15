@@ -35,6 +35,11 @@ pub struct Usage {
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
     pub cost_usd: Option<f64>,
+    /// True when `cost_usd` is a *lower bound*: a fan-out summed members where some reported a
+    /// dollar cost and some couldn't (an errored member with unknown spend). Displayed as "≥" and
+    /// recorded, so a partial total is never presented as exact. `false` for every single run.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cost_partial: bool,
 }
 
 /// A synthesis result: the model's text plus what it cost.
@@ -214,6 +219,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 .map(|m| m.cache_read_input_tokens)
                 .sum(),
             cost_usd: parsed.total_cost_usd,
+            cost_partial: false,
         };
         // Prefer human-readable detail — the `errors` list, then a `result` message (a quota-limit
         // refusal carries its message there, under subtype "success") — before the bare `subtype`
@@ -253,6 +259,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
             cache_read_input_tokens: usage.cache_read_input_tokens,
             cost_usd: Some(cost_usd),
+            cost_partial: false,
         },
         structured: parsed.structured_output,
         error: None,
@@ -275,6 +282,7 @@ fn errored_without_usage(requested_model: &str, message: String) -> Synthesis {
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
             cost_usd: None,
+            cost_partial: false,
         },
         structured: None,
         error: Some(message),
@@ -308,18 +316,45 @@ pub const DEFAULT_BACKEND: &str = CLAUDE;
 /// Constructs a backend instance — the factory half of a [`BACKENDS`] registry row.
 type BackendFactory = fn() -> Box<dyn Backend>;
 
-/// The known synthesis backends: each name paired with its `Backend` constructor — the one registry
-/// `backend()` dispatches from and `known_backends()` lists, so adding a backend is a single row here,
-/// not a name list and a `match` arm kept in lockstep (the factory is what a name list alone can't
-/// encode). `doctor` probes, `validate_backend`, and error wording all derive from the name set.
-const BACKENDS: &[(&str, BackendFactory)] = &[
-    (CLAUDE, || Box::new(ClaudeBackend)),
-    (CODEX, || Box::new(CodexBackend)),
+/// The known synthesis backends: each name paired with its `Backend` constructor and a one-line
+/// capability blurb — the one registry `backend()` dispatches from, `known_backends()` lists, and
+/// the `--backend` CLI help enumerates, so adding a backend is a single row here, not a name list,
+/// a `match` arm, and a help string kept in lockstep. `doctor` probes, `validate_backend`, and
+/// error wording all derive from the name set.
+const BACKENDS: &[(&str, BackendFactory, &str)] = &[
+    (
+        CLAUDE,
+        || Box::new(ClaudeBackend),
+        "reports dollar cost; honors --max-budget-usd and --allow-tool",
+    ),
+    (
+        CODEX,
+        || Box::new(CodexBackend),
+        "reports tokens only — no dollar cost, no native budget cap, no tool grants",
+    ),
 ];
 
 /// The known backend names, derived from the [`BACKENDS`] registry.
 pub(crate) fn known_backends() -> Vec<&'static str> {
-    BACKENDS.iter().map(|(name, _)| *name).collect()
+    BACKENDS.iter().map(|(name, _, _)| *name).collect()
+}
+
+/// The `--backend` flag's help text, derived from the [`BACKENDS`] registry rows (names, default
+/// marker, capability blurbs) — so the CLI's enumeration can't go stale against the registry.
+pub(crate) fn backends_help() -> String {
+    let list = BACKENDS
+        .iter()
+        .map(|(name, _, blurb)| {
+            let default = if *name == DEFAULT_BACKEND {
+                " (default)"
+            } else {
+                ""
+            };
+            format!("`{name}`{default}: {blurb}")
+        })
+        .collect::<Vec<_>>()
+        .join(". ");
+    format!("Synthesis backend — {list}. Overrides the configured `defaults.backend`")
 }
 
 /// The providers' model-listing endpoints and Anthropic's pinned API version (the value the API
@@ -503,8 +538,8 @@ pub trait Backend {
 pub fn backend(name: &str) -> anyhow::Result<Box<dyn Backend>> {
     BACKENDS
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, make)| make())
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, make, _)| make())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "unknown backend `{name}` (known: {})",
@@ -661,6 +696,11 @@ fn drive(
         let line = match line {
             Ok(line) => line,
             Err(e) => {
+                // The stream is broken but the child is still running — and still metering. Stop it
+                // (best-effort) and reap it before reporting, so an abandoned agent can't keep
+                // consuming tokens after this run records its failure.
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(DriveError::AfterSpawn(
                     anyhow::Error::new(e).context("reading the agent CLI's output stream"),
                 ));
@@ -952,6 +992,7 @@ impl CodexUsage {
             cache_creation_input_tokens: 0, // codex has no cache-creation concept, only cached reads
             cache_read_input_tokens: self.cached_input_tokens,
             cost_usd: None, // codex reports tokens only — no fabricated dollar cost
+            cost_partial: false,
         }
     }
 }

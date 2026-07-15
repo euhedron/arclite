@@ -45,6 +45,32 @@ pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path:
     dir.join(format!("{id}.md"))
 }
 
+/// The candidate entry paths for `stem`, in claim order (`stem.md`, `stem-1.md`, …) — the one
+/// sequence both the real claim and the dry-run preview walk, so what a preview names and what a
+/// run would claim can't drift (preview-must-share-execution-path).
+fn findings_entry_candidates<'a>(
+    dir: &'a std::path::Path,
+    stem: &'a str,
+) -> impl Iterator<Item = std::path::PathBuf> + 'a {
+    (0u32..).map(move |n| {
+        let name = if n == 0 {
+            stem.to_owned()
+        } else {
+            format!("{stem}-{n}")
+        };
+        findings_entry_path(dir, &name)
+    })
+}
+
+/// The path a promote/retire *would* claim for `stem` right now: the first free candidate. For
+/// dry-run previews — same sequence as the claim, probed without creating; indicative, since a
+/// concurrent writer can take the name between preview and run (the preview already says so).
+pub(crate) fn preview_findings_entry(dir: &std::path::Path, stem: &str) -> std::path::PathBuf {
+    findings_entry_candidates(dir, stem)
+        .find(|p| !p.exists())
+        .expect("the candidate sequence is unbounded, so a free name always exists")
+}
+
 /// Claim a collision-free `<stem>[-n].md` under `dir`, returning the path and an open handle to write.
 /// `create_new` fails if the name exists, so a concurrent writer bumps a numeric suffix rather than
 /// clobbering — the concurrency-safe ledger-entry claim shared by `promote` (a new finding) and `retire`
@@ -55,24 +81,18 @@ pub(crate) fn claim_findings_entry(
     stem: &str,
 ) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
     std::fs::create_dir_all(dir)?;
-    let mut n = 0u32;
-    loop {
-        let name = if n == 0 {
-            stem.to_owned()
-        } else {
-            format!("{stem}-{n}")
-        };
-        let path = findings_entry_path(dir, &name);
+    for path in findings_entry_candidates(dir, stem) {
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
         {
             Ok(file) => return Ok((path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
         }
     }
+    unreachable!("the candidate sequence is unbounded, so the loop returns")
 }
 
 /// `git config --get <key>` in `dir`: `Ok(Some(value))` if set, `Ok(None)` if unset (git exits 1 —

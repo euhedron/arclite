@@ -10,7 +10,15 @@ pub fn run(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if let Some(id) = &args.id {
         show(id, global)
     } else if args.last {
-        let (records, _) = matching_records(args)?;
+        let (records, unparsed) = matching_records(args)?;
+        // With corrupt lines in the log, "newest parsed" may not be "newest run" — disclosed, so
+        // --last can't silently answer with an older record (distinguish-absent-from-unreadable).
+        if unparsed > 0 {
+            eprintln!(
+                "arclite: {} — the newest *parsed* run is shown, which may not be the newest run",
+                crate::log::unparsed_note(unparsed)
+            );
+        }
         let newest = records.first().context("no runs match")?;
         let id = newest
             .get("id")
@@ -108,11 +116,21 @@ pub(crate) fn row(r: &Value, now: u64) -> String {
     // A run that errored (spent but didn't complete) is flagged so failed runs stand out in the list;
     // it's mutually exclusive with a gate verdict (a failed run never reaches the gate).
     let errored = crate::log::is_errored(r);
+    // A model the backend never confirmed shows as requested — the list must not present the
+    // requested id as the identity that ran (report-the-identity-that-ran).
+    let model = if crate::log::model_requested(r) {
+        format!(
+            "{}{}",
+            field(r, "model"),
+            crate::log::MODEL_REQUESTED_SUFFIX
+        )
+    } else {
+        field(r, "model")
+    };
     format!(
-        "{id} · {age} · {} · {} · {} · {}{}{}",
+        "{id} · {age} · {} · {} · {model} · {}{}{}",
         field(r, "command"),
         repo,
-        field(r, "model"),
         cost(r),
         if blocked {
             format!(" · {}", crate::log::gate_label(blocked))
@@ -301,13 +319,22 @@ pub(crate) fn stored_human(v: &Value) -> String {
         when,
         field(&run, "version")
     );
-    // Identity: command, repo (at its commit, when the run recorded one), and the backend/model.
+    // Identity: command, repo (at its commit, when the run recorded one), and the backend/model —
+    // with a requested-not-confirmed model id disclosed, same as it showed live.
+    let model = if crate::log::model_requested(&run) {
+        format!(
+            "{}{}",
+            field(&run, "model"),
+            crate::log::MODEL_REQUESTED_SUFFIX
+        )
+    } else {
+        field(&run, "model")
+    };
     meta.push_str(&format!(
-        "\n{} · {} · {}/{}",
+        "\n{} · {} · {}/{model}",
         field(&run, "command"),
         crate::display_path(&field(&run, "repo")),
         field(&run, "backend"),
-        field(&run, "model")
     ));
     if let Some(commit) = run.get("commit").and_then(Value::as_str) {
         meta.push_str(&format!(" · commit {commit}"));
@@ -351,6 +378,11 @@ pub(crate) fn stored_human(v: &Value) -> String {
                     t.cache_read,
                     t.output,
                     crate::log::record_cost(&run),
+                    // The record carries the lower-bound marker (absent on single runs and old
+                    // records), so a partial fan-out total replays as "≥", same as it showed live.
+                    u.get("cost_partial")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                 )
             )
         }

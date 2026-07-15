@@ -158,7 +158,9 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub apply: bool,
     /// With --apply, reinstall even when already up to date (repair, or re-pull the current build).
-    #[arg(long)]
+    /// Rejected without --apply — the check-only path has nothing to force, and silently accepting
+    /// the flag would read as if it did something.
+    #[arg(long, requires = "apply")]
     pub force: bool,
 }
 
@@ -213,8 +215,9 @@ pub enum ConfigAction {
     Set {
         /// The setting key — `arc config list` shows the known keys.
         key: String,
-        /// The value (validated and typed per key). For the secret keys (`api_keys.*`) omit it:
-        /// the value is read from stdin instead, so a credential never rides argv or shell history.
+        /// The value (validated and typed per key). The secret keys (`api_keys.*`) *must* omit it —
+        /// their value is read from stdin (pipe or paste), so a credential never rides argv or
+        /// shell history; an inline secret is rejected.
         value: Option<String>,
         /// Write the user layer (`~/.arc/settings.json`) instead of the project's.
         #[arg(long)]
@@ -302,9 +305,9 @@ pub struct SynthArgs {
     /// Model id to use (a claude or codex model, matching `--backend`). Omit for the backend's default.
     #[arg(long)]
     pub model: Option<String>,
-    /// Synthesis backend: `claude` (default) or `codex`. Codex reports token usage but no dollar cost,
-    /// and `--max-budget-usd` is claude-only. Overrides the configured `defaults.backend`.
-    #[arg(long, value_name = "NAME")]
+    // Help derived from the BACKENDS registry (names, default, capability blurbs) — never a
+    // hand-kept enumeration that goes stale when a backend row is added.
+    #[arg(long, value_name = "NAME", help = crate::ai::backends_help())]
     pub backend: Option<String>,
     /// Build and show the prompt + a token/cost estimate WITHOUT calling the model (zero spend).
     #[arg(long)]
