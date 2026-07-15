@@ -65,10 +65,18 @@ fn findings_entry_candidates<'a>(
 /// The path a promote/retire *would* claim for `stem` right now: the first free candidate. For
 /// dry-run previews — same sequence as the claim, probed without creating; indicative, since a
 /// concurrent writer can take the name between preview and run (the preview already says so).
-pub(crate) fn preview_findings_entry(dir: &std::path::Path, stem: &str) -> std::path::PathBuf {
-    findings_entry_candidates(dir, stem)
-        .find(|p| !p.exists())
-        .expect("the candidate sequence is unbounded, so a free name always exists")
+/// The probe uses `try_exists` semantics: an unreadable candidate is a real error, never read as
+/// "free" (which would preview a name the real claim would refuse).
+pub(crate) fn preview_findings_entry(
+    dir: &std::path::Path,
+    stem: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    for path in findings_entry_candidates(dir, stem) {
+        if !path.try_exists()? {
+            return Ok(path);
+        }
+    }
+    unreachable!("the candidate sequence is unbounded, so the loop returns")
 }
 
 /// Claim a collision-free `<stem>[-n].md` under `dir`, returning the path and an open handle to write.
@@ -170,9 +178,6 @@ pub(crate) fn try_is_dir(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(optional(std::fs::metadata(path))?.is_some_and(|m| m.is_dir()))
 }
 
-/// Render `items` as a comma-joined string, or `empty` when there are none — the "one-or-more, else a
-/// placeholder" shape shared by settings-layer lines ([`settings::NO_LAYERS`]) and inspect's manifest
-/// list (`(none)`), single-sourced so the empty-vs-joined branch isn't re-written at each call site.
 pub(crate) fn join_or(items: &[String], empty: &str) -> String {
     if items.is_empty() {
         empty.to_owned()
@@ -181,13 +186,22 @@ pub(crate) fn join_or(items: &[String], empty: &str) -> String {
     }
 }
 
+/// The home-directory prefix [`display_path`] abbreviates, resolved once at startup ([`run`] warms
+/// it before any command) so the display helper — called from render projections — only ever reads
+/// a fixed value, never probes the environment mid-format.
+static DISPLAY_HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+fn display_home() -> &'static Option<String> {
+    DISPLAY_HOME.get_or_init(|| dirs::home_dir().and_then(|h| h.to_str().map(str::to_owned)))
+}
+
 /// Abbreviate a leading home-directory prefix to `~` for *display* (e.g. `C:\Users\x\proj` → `~\proj`);
 /// paths outside home are returned unchanged. Cosmetic only — applied where a path is shown to a
 /// person, never in error messages (which keep the exact path) nor where a value must round-trip
-/// (the stored record stays canonical).
+/// (the stored record stays canonical). Reads the startup-resolved [`DISPLAY_HOME`], probing nothing.
 pub(crate) fn display_path(path: &str) -> String {
-    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_owned))
-        && let Some(rest) = path.strip_prefix(&home)
+    if let Some(home) = display_home()
+        && let Some(rest) = path.strip_prefix(home)
         && (rest.is_empty() || rest.starts_with(['/', '\\']))
     {
         return format!("~{rest}");
@@ -195,9 +209,6 @@ pub(crate) fn display_path(path: &str) -> String {
     path.to_owned()
 }
 
-/// A label left-padded to `width`, then its value — the single statement of the aligned
-/// `label   value` row that `doctor` and `inspect` print, so neither hand-counts whitespace into a
-/// format literal.
 pub(crate) fn labeled_row(label: &str, value: &str, width: usize) -> String {
     format!("{label:<width$}{value}")
 }
@@ -206,6 +217,8 @@ pub(crate) fn labeled_row(label: &str, value: &str, width: usize) -> String {
 /// `SUCCESS`, the gate's distinct block code, or `FAILURE` with the error on stderr.
 #[must_use]
 pub fn run() -> ExitCode {
+    // Resolve the display home-prefix once, up front — render paths read it, they never probe.
+    let _ = display_home();
     let cli = Cli::parse();
 
     // Deterministic commands always succeed-or-error (mapped to SUCCESS); the synthesis commands

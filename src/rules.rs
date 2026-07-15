@@ -21,13 +21,18 @@ pub struct Rule {
     pub source: PathBuf,
 }
 
-/// Load `path` as a rule, or `None` if it isn't a `.md` file.
+/// Load `path` as a rule, or `None` if it isn't a `.md` file. A `.md` file whose stem can't be a
+/// rule id (non-UTF-8) is a hard error, not a skip: a *present* rule silently vanishing from the
+/// active set is exactly the kind of quiet shrinkage the loaders elsewhere refuse.
 fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
     if path.extension().and_then(|e| e.to_str()) != Some("md") {
         return Ok(None);
     }
     let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
-        return Ok(None);
+        anyhow::bail!(
+            "rule file {} has a non-UTF-8 name — its stem is the rule id, so rename it to load it",
+            path.display()
+        );
     };
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("cannot read rule {}", path.display()))?;

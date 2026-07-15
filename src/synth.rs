@@ -617,7 +617,10 @@ fn repo_commit(root: &Path) -> Option<String> {
     // quietly (an unborn HEAD — a repo with no commits yet, legitimately nothing to anchor);
     // 128 = fatal (not a repository — benign here — or a corrupt one, whose stderr says which).
     let head = match ai::command("git").and_then(|mut c| {
-        c.arg("-C")
+        // LC_ALL=C pins git's message locale: the not-a-repository classification below matches
+        // stderr text, which localizes — the probe must read the same words everywhere.
+        c.env("LC_ALL", "C")
+            .arg("-C")
             .arg(root)
             .args(["rev-parse", "--verify", "--quiet", "--short", "HEAD"])
             .output()
@@ -1448,13 +1451,27 @@ fn multi_synthesize(
         combined.usage = usage;
         return Ok((combined, succeeded)); // succeeded == 0: an errored result, surfaced and logged with cost
     }
-    let mut combined = combine_runs(ok)?;
-    // Fold the errored-but-spent children's usage into the total — their results are excluded, their
-    // cost is not — so the reported spend is the whole fan-out's, not just the surviving runs'.
-    if !errored.is_empty() {
-        combined.usage =
-            sum_usage(std::iter::once(&combined.usage).chain(errored.iter().map(|s| &s.usage)));
-    }
+    // The whole fan-out's spend, summed up front: if the union below fails, this is what the errored
+    // record carries — completed calls' usage must reach the log even when their results can't be
+    // combined (account-for-consumed-cost-on-failure).
+    let total_usage = sum_usage(ok.iter().chain(errored.iter()).map(|s| &s.usage));
+    let mut combined = match combine_runs(ok) {
+        Ok(combined) => combined,
+        Err(e) => {
+            return Ok((
+                ai::Synthesis {
+                    text: String::new(),
+                    usage: total_usage,
+                    structured: None,
+                    error: Some(format!("the fan-out's results couldn't be combined: {e:#}")),
+                },
+                succeeded,
+            ));
+        }
+    };
+    // The combined result carries the whole fan-out's usage — the errored-but-spent children's
+    // results are excluded, their cost is not.
+    combined.usage = total_usage;
     Ok((combined, succeeded))
 }
 

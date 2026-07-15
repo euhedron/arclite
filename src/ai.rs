@@ -241,14 +241,85 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             error: Some(detail),
         });
     }
-    let text = parsed.result.context("claude JSON had no `result` field")?;
-    // usage and cost are part of a successful response's contract; if the CLI omits them, error
-    // loudly rather than fabricate zeros that would read as genuine zero spend.
-    let usage = parsed.usage.context("claude JSON had no `usage` field")?;
-    let cost_usd = parsed
-        .total_cost_usd
-        .context("claude JSON had no `total_cost_usd` field")?;
-    let model = model.context("claude JSON had no `modelUsage` entries")?;
+    // usage, cost, and per-model identification are part of a successful response's contract. A
+    // payload missing any of them is *semantically incomplete* — surfaced loudly as an errored run,
+    // but carrying every field that DID parse (the modelUsage token sums, the cost if present),
+    // never discarding real parsed spend for all-zero placeholders
+    // (account-for-consumed-cost-on-failure).
+    let mut missing = Vec::new();
+    if parsed.result.is_none() {
+        missing.push("`result`");
+    }
+    if parsed.usage.is_none() {
+        missing.push("`usage`");
+    }
+    if parsed.total_cost_usd.is_none() {
+        missing.push("`total_cost_usd`");
+    }
+    if model.is_none() {
+        missing.push("`modelUsage`");
+    }
+    // Whatever token counts DID parse, kept ahead of the completeness check: the top-level `usage`
+    // block when present, else the modelUsage sums — so an incomplete payload salvages every parsed
+    // field rather than discarding one source because the other is missing.
+    let salvaged_tokens = parsed.usage.as_ref().map_or_else(
+        || {
+            (
+                parsed.model_usage.values().map(|m| m.input_tokens).sum(),
+                parsed.model_usage.values().map(|m| m.output_tokens).sum(),
+                parsed
+                    .model_usage
+                    .values()
+                    .map(|m| m.cache_creation_input_tokens)
+                    .sum(),
+                parsed
+                    .model_usage
+                    .values()
+                    .map(|m| m.cache_read_input_tokens)
+                    .sum(),
+            )
+        },
+        |u| {
+            (
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_creation_input_tokens,
+                u.cache_read_input_tokens,
+            )
+        },
+    );
+    let complete = (
+        parsed.result,
+        parsed.usage,
+        parsed.total_cost_usd,
+        model.clone(),
+    );
+    let (Some(text), Some(usage), Some(cost_usd), Some(model)) = complete else {
+        let (model, model_source) = match model {
+            Some(reported) => (reported, ModelSource::Reported),
+            None => (requested_model.to_owned(), ModelSource::Requested),
+        };
+        let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
+            salvaged_tokens;
+        return Ok(Synthesis {
+            text: String::new(),
+            usage: Usage {
+                model,
+                model_source,
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+                cost_usd: parsed.total_cost_usd,
+                cost_partial: false,
+            },
+            structured: None,
+            error: Some(format!(
+                "claude's success payload was missing {} — recorded with the usage that did parse",
+                missing.join(", ")
+            )),
+        });
+    };
     Ok(Synthesis {
         text,
         usage: Usage {
@@ -684,11 +755,15 @@ fn drive(
     });
     // Drain stderr on its own thread, concurrently with the stdout stream below: a backend that fills
     // the stderr pipe buffer while we're still reading stdout would block writing it — and we'd never
-    // reach a post-loop read — a deadlock. Joined after the child exits.
+    // reach a post-loop read — a deadlock. Joined after the child exits. A failed drain is *marked* in
+    // the captured text rather than silently truncating it — downstream error messages quote this
+    // stderr, and a partial capture must not read as the whole story.
     let mut stderr_pipe = child.stderr.take().expect("stderr was configured as piped");
     let stderr_reader = std::thread::spawn(move || {
         let mut stderr = String::new();
-        let _ = stderr_pipe.read_to_string(&mut stderr);
+        if let Err(e) = stderr_pipe.read_to_string(&mut stderr) {
+            stderr.push_str(&format!(" [stderr capture failed partway: {e}]"));
+        }
         stderr
     });
     let stdout = child.stdout.take().expect("stdout was configured as piped");
@@ -767,9 +842,13 @@ fn synthesize_claude(
     // Disable auto-loading of user/project CLAUDE.md + auto-memory. A neutral cwd alone does NOT stop
     // it — the user-level ~/.claude/CLAUDE.md loads regardless of cwd. This affects only context
     // loading, not the separate credential store, so auth is unaffected; `--ambient-memory` opts in.
+    // `--setting-sources ""` completes the isolation: without it the user/project settings.json still
+    // loads — hooks and other behavior-shaping config riding under a run arclite states explicitly
+    // (auth is separate and unaffected; confirmed by exercise).
     if !req.ambient_memory {
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        cmd.args(["--setting-sources", ""]);
     }
     let mut result_line: Option<String> = None;
     let driven = drive(

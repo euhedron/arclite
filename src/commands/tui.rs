@@ -99,11 +99,23 @@ enum Msg {
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
     /// A model-listing fetch finished for the named setting: the ids + a truncation flag, or the
-    /// failure to show. Folds in only if that setting's fetch is still the open edit.
+    /// failure to show. Folds in only if *this* fetch — matched by generation, not just the setting
+    /// name — is still the open edit, so a canceled fetch can't dress a newer edit of the same key.
     ModelsFetched {
         setting: String,
+        generation: u64,
         result: Result<(Vec<String>, bool), String>,
     },
+    /// A detached background run exited with something to say — a non-zero status and/or stderr
+    /// warnings (its best-effort side effects announcing failures). Shown in the footer.
+    LaunchExited {
+        verb: String,
+        failed: bool,
+        tail: String,
+    },
+    /// The input thread's `event::read` failed — the terminal's input stream is broken, so the
+    /// cockpit exits with this error rather than running on uncontrollable.
+    InputFailed(String),
 }
 
 /// Which section is on screen. The cockpit opens on [`Route::Home`] (a launchpad), not a section — the
@@ -298,6 +310,15 @@ struct App {
     /// Monotonic launch generation — each (re)spawned preview or listing carries the value current
     /// at spawn, and results fold in only while it still matches (see [`Launch::generation`]).
     launch_generation: u64,
+    /// Monotonic config-picker fetch generation — same staleness discipline as the launch's: a
+    /// canceled fetch's late arrival must not fold into a newer edit of even the same setting.
+    config_fetch_generation: u64,
+    /// The most recent background launch's exit notice (its stderr tail / non-zero status), shown in
+    /// the footer — the detached run's warnings must reach the user, not vanish into /dev/null.
+    launch_notice: Option<String>,
+    /// The input thread's terminal failure, if it died — the loop exits and surfaces this instead of
+    /// running on input-dead (which would look idle while ignoring every key).
+    input_error: Option<String>,
     should_quit: bool,
     /// A clone of the loop's `mpsc` sender, handed to launch worker threads so a dry-run reports back.
     tx: mpsc::Sender<Msg>,
@@ -345,6 +366,9 @@ impl App {
             palette: None,
             launch: None,
             launch_generation: 0,
+            config_fetch_generation: 0,
+            launch_notice: None,
+            input_error: None,
             should_quit: false,
             tx,
             cwd,
@@ -412,6 +436,12 @@ impl App {
         self.launch_generation += 1;
         if let Some(launch) = self.launch.as_mut() {
             launch.generation = self.launch_generation;
+            // An in-flight model fetch belongs to the old generation: its arrival will be dropped,
+            // so a state left at Fetching would wait forever and turn every later `m` press into a
+            // no-op. Reset to Unfetched — the next press refetches under the new generation.
+            if matches!(launch.models, ModelsState::Fetching) {
+                launch.models = ModelsState::Unfetched;
+            }
         }
         self.spawn_preview();
     }
@@ -525,17 +555,37 @@ impl App {
         }) else {
             return;
         };
+        // stderr is piped, not discarded: the detached run's best-effort warnings (a failed log
+        // append, an unwritable status marker) must reach the TUI user — the wait thread reads the
+        // tail and reports it (with a non-zero exit) via [`Msg::LaunchExited`] into the footer.
         let spawned = launch_command(verb, &shaped).and_then(|mut cmd| {
             cmd.stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
                 .spawn()
         });
         match spawned {
             Ok(child) => {
+                let tx = self.tx.clone();
+                let verb = verb.to_owned();
                 thread::spawn(move || {
                     let mut child = child;
-                    let _ = child.wait();
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        use std::io::Read;
+                        if let Err(e) = pipe.read_to_string(&mut stderr) {
+                            stderr.push_str(&format!(" [stderr capture failed partway: {e}]"));
+                        }
+                    }
+                    let status = child.wait();
+                    let failed = !status.as_ref().is_ok_and(std::process::ExitStatus::success);
+                    let warnings = stderr.trim();
+                    // Quiet success needs no notice; anything else does.
+                    if failed || !warnings.is_empty() {
+                        // The last line is the most recent (and usually most specific) warning.
+                        let tail = warnings.lines().last().unwrap_or("").to_owned();
+                        let _ = tx.send(Msg::LaunchExited { verb, failed, tail });
+                    }
                 });
                 self.launch = None;
             }
@@ -592,9 +642,10 @@ impl App {
     }
 
     /// Fetch a provider's model listing on a worker thread for the config picker; the result returns
-    /// as [`Msg::ModelsFetched`] and folds in only if that setting's fetch is still the open edit —
-    /// Esc abandons it, and a later edit outranks it (a stale listing must not dress a newer edit).
-    fn spawn_models_fetch(&self, backend: String, setting: String) {
+    /// as [`Msg::ModelsFetched`] and folds in only if *this* fetch (by generation) is still the open
+    /// edit — Esc abandons it, and a later edit of even the same setting outranks it (a stale
+    /// listing must not dress a newer edit).
+    fn spawn_models_fetch(&self, backend: String, setting: String, generation: u64) {
         let tx = self.tx.clone();
         let cwd = self.cwd.clone();
         thread::spawn(move || {
@@ -609,7 +660,11 @@ impl App {
                     listing.truncated,
                 ))
             })();
-            let _ = tx.send(Msg::ModelsFetched { setting, result });
+            let _ = tx.send(Msg::ModelsFetched {
+                setting,
+                generation,
+                result,
+            });
         });
     }
 
@@ -870,8 +925,11 @@ enum ConfigEdit {
         index: usize,
     },
     /// The provider's model listing is being fetched on a worker thread; folds into a `Pick` (or a
-    /// `Text` with the failure on the info line) via [`Msg::ModelsFetched`].
-    Fetching,
+    /// `Text` with the failure on the info line) via [`Msg::ModelsFetched`] — only when the message's
+    /// generation matches this one, so an abandoned fetch can't fold into a newer edit.
+    Fetching {
+        generation: u64,
+    },
 }
 
 /// The picker row that drops into free-text entry — offered where the enumerated values don't bound
@@ -1202,11 +1260,22 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
     let (tx, rx) = mpsc::channel::<Msg>();
 
     // Input thread: the sole reader of stdin. `event::read` blocks; each event becomes a `Msg`.
+    // A read *failure* is fatal and said so: with input dead every key (q included) is ignored,
+    // so running on would look idle while being uncontrollable — the loop exits with the error
+    // instead (distinguish a broken input stream from a merely quiet one).
     let input_tx = tx.clone();
     thread::spawn(move || {
-        while let Ok(event) = event::read() {
-            if input_tx.send(Msg::Input(event)).is_err() {
-                break; // receiver gone — the loop exited
+        loop {
+            match event::read() {
+                Ok(event) => {
+                    if input_tx.send(Msg::Input(event)).is_err() {
+                        break; // receiver gone — the loop exited
+                    }
+                }
+                Err(e) => {
+                    let _ = input_tx.send(Msg::InputFailed(format!("{e}")));
+                    break;
+                }
             }
         }
     });
@@ -1238,6 +1307,11 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
             .expect("a sender thread panicked (input/tick hold a sender for the loop's lifetime)");
         update(&mut app, msg);
     }
+    // An input-stream failure exited the loop; it's an error, not a quit — surfaced after the
+    // terminal is restored (the caller prints it), never silently swallowed into a normal exit.
+    if let Some(e) = app.input_error {
+        anyhow::bail!("the terminal input stream failed: {e}");
+    }
     Ok(())
 }
 
@@ -1245,12 +1319,21 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
 fn update(app: &mut App, msg: Msg) {
     match msg {
         Msg::Tick => app.status = Snapshot::read(),
+        Msg::InputFailed(e) => {
+            app.input_error = Some(e);
+            app.should_quit = true;
+        }
         Msg::Input(Event::Key(key)) if key.kind == KeyEventKind::Press => handle_key(app, key),
         Msg::Input(_) => {} // resize/focus/release → just redraw next iteration
         Msg::UpdateChecked(newer) => app.update = newer,
-        Msg::ModelsFetched { setting, result } => {
-            // Fold in only if this setting's fetch is still the open edit — Esc may have abandoned
-            // it, or the cursor moved on to another setting (a stale listing is dropped, not applied).
+        Msg::ModelsFetched {
+            setting,
+            generation,
+            result,
+        } => {
+            // Fold in only if *this* fetch is still the open edit — matched by generation, so a
+            // canceled fetch's late arrival can't dress a newer edit of the same setting (Esc
+            // abandons; re-entering the edit spawns a fresh generation).
             if app.route == Route::Config
                 && let Some(ConfigView::Loaded {
                     values,
@@ -1259,7 +1342,7 @@ fn update(app: &mut App, msg: Msg) {
                     error,
                     ..
                 }) = app.config.as_mut()
-                && matches!(editing, Some(ConfigEdit::Fetching))
+                && matches!(editing, Some(ConfigEdit::Fetching { generation: open }) if *open == generation)
                 && values.get(*selected).is_some_and(|row| row.key == setting)
             {
                 match result {
@@ -1296,6 +1379,20 @@ fn update(app: &mut App, msg: Msg) {
                     Err(error) => LaunchStage::Failed { error },
                 };
             }
+        }
+        Msg::LaunchExited { verb, failed, tail } => {
+            // The detached run's parting words — its exit status and last stderr line — surfaced in
+            // the footer (best-effort side effects announce their failures; /dev/null hid them).
+            let outcome = if failed {
+                "failed"
+            } else {
+                "finished with warnings"
+            };
+            app.launch_notice = Some(if tail.is_empty() {
+                format!("{verb} {outcome}")
+            } else {
+                format!("{verb} {outcome}: {tail}")
+            });
         }
         Msg::LaunchModels { generation, result } => {
             // Same guard as the preview; the fetch began as a cycle press, so a successful arrival
@@ -1753,7 +1850,9 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                         format!("◂ {} ▸", options[*index])
                     }
                     Some(ConfigEdit::Text(buffer)) if i == *selected => format!("{buffer}█"),
-                    Some(ConfigEdit::Fetching) if i == *selected => "fetching models…".to_owned(),
+                    Some(ConfigEdit::Fetching { .. }) if i == *selected => {
+                        "fetching models…".to_owned()
+                    }
                     _ => r.value.clone(),
                 };
                 let row = Row::new([r.key.clone(), cell]);
@@ -1937,7 +2036,11 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
 /// current value (an unset one starts empty). Esc is handled one level up.
 fn handle_config_key(app: &mut App, code: KeyCode) {
     // A remote space's fetch is staged out of the view borrow — it spawns a worker off `app`.
-    let mut fetch: Option<(String, String)> = None;
+    // Each fetch takes a fresh generation: a canceled fetch's late arrival must not fold into a
+    // *newer* edit of the same setting (tolerate-stale-async-results).
+    let mut fetch: Option<(String, String, u64)> = None;
+    app.config_fetch_generation += 1;
+    let generation = app.config_fetch_generation;
     if let Some(ConfigView::Loaded {
         values,
         selected,
@@ -1962,8 +2065,8 @@ fn handle_config_key(app: &mut App, code: KeyCode) {
                         options: options.clone(),
                     },
                     ValueSpace::Remote { backend } => {
-                        fetch = Some(((*backend).to_owned(), row.key.clone()));
-                        ConfigEdit::Fetching
+                        fetch = Some(((*backend).to_owned(), row.key.clone(), generation));
+                        ConfigEdit::Fetching { generation }
                     }
                     // A secret's mask (like an unset value) must not prefill the buffer.
                     ValueSpace::Open => ConfigEdit::Text(
@@ -1981,8 +2084,8 @@ fn handle_config_key(app: &mut App, code: KeyCode) {
             _ => {}
         }
     }
-    if let Some((backend, setting)) = fetch {
-        app.spawn_models_fetch(backend, setting);
+    if let Some((backend, setting, generation)) = fetch {
+        app.spawn_models_fetch(backend, setting, generation);
     }
 }
 
@@ -2038,7 +2141,7 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
                     _ => {}
                 },
                 // Awaiting the listing; Esc (handled above) is the only meaningful key.
-                ConfigEdit::Fetching => {}
+                ConfigEdit::Fetching { .. } => {}
             }
             if switch_to_text {
                 *edit = ConfigEdit::Text(String::new());
@@ -2333,11 +2436,16 @@ fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
 /// contextual key hints.
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     let n = app.status.active.len();
-    let runs = if n == 0 {
+    let mut runs = if n == 0 {
         "idle".to_owned()
     } else {
         format!("● {n} running")
     };
+    // A detached run's exit notice (failure / stderr warnings) rides beside the run count until the
+    // next notice replaces it — the background run's announcements are shown, not /dev/null'd.
+    if let Some(notice) = &app.launch_notice {
+        runs.push_str(&format!(" · {notice}"));
+    }
 
     let hints = if let Some(launch) = &app.launch {
         // The gate's keys by stage (the modal shows no hint — this footer is it): Enter fires the run
@@ -2389,7 +2497,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                     ..
                 }) => "type value · enter save · esc cancel",
                 Some(ConfigView::Loaded {
-                    editing: Some(ConfigEdit::Fetching),
+                    editing: Some(ConfigEdit::Fetching { .. }),
                     ..
                 }) => "esc cancel",
                 _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
@@ -2589,6 +2697,9 @@ mod tests {
             palette: None,
             launch: None,
             launch_generation: 0,
+            config_fetch_generation: 0,
+            launch_notice: None,
+            input_error: None,
             should_quit: false,
             tx,
             cwd: ".".to_owned(),

@@ -81,16 +81,27 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     let mut retired = Vec::new();
     let mut unmatched = Vec::new();
-    for v in verdicts {
+    for (i, v) in verdicts.iter().enumerate() {
         if v.get("verdict").and_then(Value::as_str) != Some("resolved") {
             continue; // only resolved findings retire; reproduces/indeterminate stay open
         }
+        // A resolved verdict without its required id (or reason) slipped the declared schema.
+        // Malformed data must not masquerade as "nothing actionable" — fail closed before any
+        // ledger move, naming the item (revalidate the structured channel at the acting boundary).
         let Some(id) = v
             .get("id")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         else {
-            continue; // a verdict with no id names no ledger entry
+            anyhow::bail!(
+                "resolved verdict #{} carries no `id` — the run's structured output slipped the schema; nothing was retired",
+                i + 1
+            );
+        };
+        let Some(reason) = v.get("reason").and_then(Value::as_str) else {
+            anyhow::bail!(
+                "resolved verdict `{id}` carries no `reason` — the run's structured output slipped the schema; nothing was retired"
+            );
         };
         // The id rode through the model — validate it as an untrusted path segment before joining it to
         // the ledger dir, reusing the canonical single-safe-segment check (shared with run-id validation).
@@ -107,11 +118,11 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             unmatched.push(id.to_owned());
             continue;
         }
-        let reason = v.get("reason").and_then(Value::as_str).unwrap_or("");
         let dest = if args.dry_run {
             // The same collision-aware sequence the real claim walks, probed without writing — the
             // preview names the path a run started now would take (indicative under concurrency).
             crate::preview_findings_entry(&resolved, id)
+                .with_context(|| format!("cannot probe the ledger at {}", resolved.display()))?
         } else {
             move_entry(&src, &resolved, id, reason, &run_id).with_context(|| {
                 format!("cannot retire finding `{id}` into {}", resolved.display())

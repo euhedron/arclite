@@ -37,7 +37,11 @@ pub struct Settings {
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
 
+// Every Raw* layer rejects unknown fields: a misspelled key (`source` for `sources`, `modle`) would
+// otherwise deserialize cleanly and silently leave the requested behavior inactive — the exact
+// silent-drop reject-unsupported-option-before-acting forbids. The error names the bad key and file.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Raw {
     #[serde(default)]
     defaults: RawDefaults,
@@ -50,6 +54,7 @@ struct Raw {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawApiKeys {
     anthropic: Option<String>,
     openai: Option<String>,
@@ -58,6 +63,7 @@ struct RawApiKeys {
 /// Scalar command defaults as written in `settings.json`. Each key is a typed field here (+ a merge
 /// arm below) and one row in the settable-key table in `commands/config.rs`.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawDefaults {
     model: Option<String>,
     backend: Option<String>,
@@ -69,6 +75,7 @@ struct RawDefaults {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawRuleset {
     #[serde(default)]
     sources: Vec<String>,

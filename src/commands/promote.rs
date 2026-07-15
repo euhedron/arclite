@@ -85,6 +85,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             // The same collision-aware sequence the real claim walks, probed without writing — the
             // preview names the path a run started now would take (indicative under concurrency).
             crate::preview_findings_entry(&ledger, &stem)
+                .with_context(|| format!("cannot probe the ledger at {}", ledger.display()))?
         } else {
             write_entry(
                 &ledger,
