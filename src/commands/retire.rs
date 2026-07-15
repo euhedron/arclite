@@ -181,13 +181,35 @@ fn move_entry(
 /// Resolution section, so the moved entry is self-describing and carries durable provenance (the run
 /// id, not an agent-recorded timestamp — see `.arc/findings/README.md`).
 fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
-    // The status line comes from promote's constants — the one statement of the entry format — so
-    // the search string can't drift from what promote actually wrote.
-    let restatused = body.replacen(
-        super::promote::STATUS_OPEN,
-        super::promote::STATUS_RESOLVED,
-        1,
-    );
+    // Rewrite the `status:` field by structure — keyed on the field name, inside the `---`-delimited
+    // frontmatter block only — not a substring search over the whole document. Any current value
+    // flips (open, accepted, a hand-authored variant), a body that *quotes* a status line is left
+    // alone, and an entry with no status field is warned about rather than silently no-opped into
+    // `resolved/` still reading `open`. The replacement line is promote's constant — the one
+    // statement of the entry format.
+    let mut in_frontmatter = false;
+    let mut replaced = false;
+    let mut lines: Vec<&str> = Vec::new();
+    for (i, line) in body.lines().enumerate() {
+        if line.trim_end() == "---" {
+            // Entering on the leading delimiter, leaving on the closing one.
+            in_frontmatter = i == 0;
+            lines.push(line);
+            continue;
+        }
+        if in_frontmatter && !replaced && line.trim_start().starts_with("status:") {
+            lines.push(super::promote::STATUS_RESOLVED);
+            replaced = true;
+            continue;
+        }
+        lines.push(line);
+    }
+    if !replaced {
+        eprintln!(
+            "arclite: retired entry carries no frontmatter `status:` field to flip — moved as-is"
+        );
+    }
+    let restatused = lines.join("\n");
     let note = if reason.is_empty() {
         format!("Resolved per verify run `{run_id}`.")
     } else {
@@ -222,5 +244,23 @@ mod tests {
         let out = mark_resolved(body, "", "run-2");
         assert_eq!(out.matches("## Resolution").count(), 1);
         assert!(out.contains("Resolved per verify run `run-2`."));
+    }
+
+    #[test]
+    fn mark_resolved_flips_any_status_value_not_just_open() {
+        let body = "---\nid: x\nstatus: accepted\n---\n\n## Claim\nthing\n";
+        let out = mark_resolved(body, "", "run-3");
+        assert!(out.contains("status: resolved"));
+        assert!(!out.contains("status: accepted"));
+    }
+
+    #[test]
+    fn mark_resolved_leaves_a_status_line_quoted_in_the_body_alone() {
+        let body =
+            "---\nid: x\nstatus: open\n---\n\n## Claim\nfrontmatter says `status: open` today\n";
+        let out = mark_resolved(body, "", "run-4");
+        assert!(out.contains("status: resolved"));
+        // The body's quoted mention is untouched — only the frontmatter field flipped.
+        assert!(out.contains("frontmatter says `status: open` today"));
     }
 }

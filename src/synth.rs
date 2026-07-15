@@ -586,17 +586,29 @@ fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
 
 /// The target repo's commit state at run time — `HEAD`'s short sha, suffixed `-dirty` when the
 /// worktree differs from it — anchoring the run record (and any findings promoted from it) to the
-/// code state the run actually judged. `None` outside a git repo or when git can't answer: a run on
-/// a plain directory is legitimate, so provenance is best-effort and its absence is the disclosure
-/// (the record simply carries no `commit`).
+/// code state the run actually judged. `None` when there is legitimately no commit to anchor (not a
+/// git repo, or an unborn HEAD): a run on a plain directory is fine, so that absence stays silent.
+/// A probe that *breaks* — git missing, a spawn failure, a status probe failing inside a known repo —
+/// is unreadable, not absent: the anchor is still dropped, but with a warning, so a broken provenance
+/// check can't masquerade as "no commit".
 fn repo_commit(root: &Path) -> Option<String> {
-    let head = ai::command("git")
-        .ok()?
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()?;
+    let unreadable = |what: &str| {
+        eprintln!("arclite: run not commit-anchored — {what}");
+    };
+    let head = match ai::command("git").and_then(|mut c| {
+        c.arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .map_err(Into::into)
+    }) {
+        Ok(out) => out,
+        Err(e) => {
+            unreadable(&format!("git couldn't run ({e:#})"));
+            return None;
+        }
+    };
+    // Non-success here is the legitimate absent case (not a repo, or a repo with no commits yet).
     if !head.status.success() {
         return None;
     }
@@ -605,19 +617,29 @@ fn repo_commit(root: &Path) -> Option<String> {
         return None;
     }
     // Dirty = any uncommitted change (staged, unstaged, or untracked): the judged code went beyond
-    // HEAD, and a finding anchored to the bare sha would overclaim. A status that *fails* leaves
-    // dirtiness undetermined — the anchor is dropped entirely (absence is this function's
-    // disclosure) rather than presented as a clean commit.
-    let status = ai::command("git")
-        .ok()?
-        .arg("-C")
-        .arg(root)
-        .args(["status", "--porcelain"])
-        .output()
-        .ok()?;
-    if !status.status.success() {
-        return None;
-    }
+    // HEAD, and a finding anchored to the bare sha would overclaim. HEAD resolved, so this *is* a git
+    // repo — a status probe failing now is unreadable (warned above the None), never silently absent,
+    // and never presented as a clean commit.
+    let status = match ai::command("git").and_then(|mut c| {
+        c.arg("-C")
+            .arg(root)
+            .args(["status", "--porcelain"])
+            .output()
+            .map_err(Into::into)
+    }) {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => {
+            unreadable(&format!(
+                "git status failed in a repo whose HEAD resolved ({})",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+            return None;
+        }
+        Err(e) => {
+            unreadable(&format!("git status couldn't run ({e:#})"));
+            return None;
+        }
+    };
     if status.stdout.is_empty() {
         Some(sha)
     } else {

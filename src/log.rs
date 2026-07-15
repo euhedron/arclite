@@ -284,9 +284,17 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
 }
 
 /// Store one run's full result at [`result_path`] (best-effort, like [`append`]). Returns the path
-/// written, or `None` if it couldn't be stored.
+/// written, or `None` if it couldn't be stored. The id names the file in a shared store, so it's
+/// claimed with an exclusive create: an id collision surfaces through the best-effort warning
+/// (`AlreadyExists`) instead of silently overwriting another run's stored result.
 pub fn store_result<T: Serialize>(id: &str, content: &T) -> Option<PathBuf> {
     let path = result_path(id)?;
     let body = serde_json::to_string_pretty(content).expect("a run result serializes");
-    write_best_effort(path, "run result not stored", |p| std::fs::write(p, &body))
+    write_best_effort(path, "run result not stored", |p| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(p)?;
+        file.write_all(body.as_bytes())
+    })
 }

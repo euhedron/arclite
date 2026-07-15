@@ -112,23 +112,33 @@ fn ensure_dir(
 }
 
 /// Write `content` to `path` only if absent (never clobber), returning whether it was written.
-/// The parent directory must already exist.
+/// The parent directory must already exist. The no-clobber claim is made atomically — an exclusive
+/// create, not a look-then-write — so concurrent scaffolds can't both see "absent" and overwrite
+/// each other; whoever loses the race lands in `skipped`, same as an existing file.
 fn write_if_absent(
     path: &Path,
     content: &str,
     created: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> anyhow::Result<bool> {
-    if path
-        .try_exists()
-        .with_context(|| format!("cannot access {}", path.display()))?
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
     {
-        skipped.push(path.display().to_string());
-        return Ok(false);
+        Ok(mut file) => {
+            file.write_all(content.as_bytes())
+                .with_context(|| format!("cannot write {}", path.display()))?;
+            created.push(path.display().to_string());
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            skipped.push(path.display().to_string());
+            Ok(false)
+        }
+        Err(e) => Err(e).with_context(|| format!("cannot write {}", path.display())),
     }
-    std::fs::write(path, content).with_context(|| format!("cannot write {}", path.display()))?;
-    created.push(path.display().to_string());
-    Ok(true)
 }
 
 /// Point git at the committed `.arc/hooks` directory so the pre-push gate runs — the opt-in activation.

@@ -1619,8 +1619,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
 
     // Registry-health disclosures (unreadable entries, pruned stale markers) — built once and shown
     // whether or not runs are in flight, so a prune or an unreadable marker is never hidden by an
-    // empty active list. (The empty branch used to drop them, buried only in the running-table's
-    // title — the exact gap a critique + suggest pair on this file independently flagged.)
+    // empty active list.
     let mut notes = Vec::new();
     if snap.unreadable > 0 {
         notes.push(crate::runs::unreadable_entries(snap.unreadable));
