@@ -6,6 +6,13 @@
 //! enters the AI's context. Frontmatter/attributes for selective inclusion
 //! (kind, scope, tags, …) can be added later, once something actually filters on
 //! them — not before.
+//!
+//! A source given explicitly as a **file** may also be a **JSON rule pack** — a
+//! list of `{id, statement, enabled?}` objects (the shape rule-owning systems
+//! keep as their single source of truth) — so arc audits against such a rulebook
+//! directly instead of forcing a generated `.md` mirror that would drift.
+//! Directory walks stay `.md`-only: a directory can hold unrelated JSON
+//! (settings, reports); a pack must be named deliberately.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -43,6 +50,50 @@ fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
     }))
 }
 
+/// Load `path` as a JSON rule pack — a list of `{id, statement, enabled?}` objects — or `None`
+/// if it isn't a `.json` file. A `.json` file that doesn't parse as a pack is a hard error, not
+/// a skip: an explicitly named source silently contributing nothing is the same quiet shrinkage
+/// `load_sources` refuses for typo'd paths. Entries with `enabled: false` are dropped HERE (the
+/// pack's own switch, honored at its source); arc's `disabled_rules` still applies on top.
+fn rules_from_json(path: &Path) -> anyhow::Result<Option<Vec<Rule>>> {
+    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("cannot read rule pack {}", path.display()))?;
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&text)
+        .with_context(|| format!("rule pack {} is not a JSON list", path.display()))?;
+    let mut rules = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        let id = e
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        let body = e
+            .get("statement")
+            .or_else(|| e.get("body"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if id.is_empty() || body.is_empty() {
+            anyhow::bail!(
+                "rule pack {} entry {i} needs non-empty `id` and `statement`",
+                path.display()
+            );
+        }
+        if e.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+            continue;
+        }
+        rules.push(Rule {
+            id: id.to_owned(),
+            body: body.to_owned(),
+            source: path.to_owned(),
+        });
+    }
+    Ok(Some(rules))
+}
+
 /// Load all `*.md` rules from `dir`.
 pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
     let mut rules = Vec::new();
@@ -66,13 +117,13 @@ pub struct Overridden {
     pub winner: PathBuf,
 }
 
-/// Load rules from multiple sources (each a directory of `.md` files or a single `.md` file),
-/// deduped by id with later sources winning — so a project ruleset can override a shared pool's
-/// rule of the same id. Returns the loaded rules, any sources that resolved to neither a
-/// directory nor a `.md` file — a typo'd or absent path the caller surfaces rather than dropping
-/// silently, so a misconfigured source can't shrink the active ruleset unnoticed — and every
-/// id collision the later-wins dedup resolved, for the same reason: the override is by design,
-/// its silence wouldn't be.
+/// Load rules from multiple sources (each a directory of `.md` files, a single `.md` file, or a
+/// single `.json` rule pack), deduped by id with later sources winning — so a project ruleset
+/// can override a shared pool's rule of the same id. Returns the loaded rules, any sources that
+/// resolved to none of those forms — a typo'd or absent path the caller surfaces rather than
+/// dropping silently, so a misconfigured source can't shrink the active ruleset unnoticed — and
+/// every id collision the later-wins dedup resolved, for the same reason: the override is by
+/// design, its silence wouldn't be.
 /// (A present-but-unreadable source — or an absent `*.md` path — surfaces its I/O error, via
 /// `try_is_dir`/`rule_from_file`, rather than being miscounted as a skipped typo.)
 pub fn load_sources(
@@ -100,6 +151,10 @@ pub fn load_sources(
             }
         } else if let Some(rule) = rule_from_file(src)? {
             insert(rule, &mut overridden);
+        } else if let Some(pack) = rules_from_json(src)? {
+            for rule in pack {
+                insert(rule, &mut overridden);
+            }
         } else {
             skipped.push(src.clone());
         }
@@ -122,4 +177,82 @@ pub fn render(rules: &[Rule]) -> String {
         .map(|rule| format!("## {}\n{}", rule.id, rule.body))
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch file under a per-test temp dir (std-only — no tempfile dependency).
+    fn scratch(name: &str, contents: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("arclite-rules-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn json_pack_loads_and_honors_its_own_enabled_switch() {
+        let pack = scratch(
+            "pack.json",
+            r#"[{"id": "a", "statement": "always A", "enabled": true},
+                {"id": "b", "statement": "never B", "enabled": false},
+                {"id": "c", "statement": "always C"}]"#,
+        );
+        let (rules, skipped, overridden) = load_sources(&[pack]).unwrap();
+        assert_eq!(
+            rules.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["a", "c"],
+            "enabled:false entries are dropped at the pack, absent enabled defaults on"
+        );
+        assert_eq!(rules[0].body, "always A");
+        assert!(skipped.is_empty() && overridden.is_empty());
+    }
+
+    #[test]
+    fn json_pack_that_is_not_a_pack_is_an_error_not_a_skip() {
+        let bogus = scratch("settings.json", r#"{"defaults": {"backend": "claude"}}"#);
+        assert!(
+            load_sources(&[bogus]).is_err(),
+            "an explicitly named JSON source that isn't a rule pack must fail loudly"
+        );
+    }
+
+    #[test]
+    fn json_pack_entry_missing_fields_is_an_error() {
+        let pack = scratch("partial.json", r#"[{"id": "only-id"}]"#);
+        assert!(
+            load_sources(&[pack]).is_err(),
+            "a pack entry without a statement is a hard error — partial packs are a rule-owning system's overlay concept, not arc's"
+        );
+    }
+
+    #[test]
+    fn md_and_pack_dedup_later_source_wins() {
+        let pack = scratch(
+            "dup-pack.json",
+            r#"[{"id": "dup", "statement": "from pack"}]"#,
+        );
+        let md = scratch("dup.md", "from md");
+        let (rules, _, overridden) = load_sources(&[pack.clone(), md.clone()]).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].body, "from md", "later source wins");
+        assert_eq!(overridden.len(), 1);
+        assert_eq!(overridden[0].replaced, pack);
+    }
+
+    #[test]
+    fn directory_walk_stays_md_only() {
+        let pack = scratch(
+            "walked.json",
+            r#"[{"id": "w", "statement": "should not load"}]"#,
+        );
+        let dir = pack.parent().unwrap().to_path_buf();
+        let (rules, _, _) = load_sources(&[dir]).unwrap();
+        assert!(
+            !rules.iter().any(|r| r.id == "w"),
+            "a directory source must not pick up JSON — packs are named deliberately"
+        );
+    }
 }
