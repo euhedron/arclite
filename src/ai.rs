@@ -197,6 +197,34 @@ struct ClaudeUsage {
     cache_read_input_tokens: u64,
 }
 
+/// The one display join for a model identity set — [`Usage::model`]'s documented derivation
+/// (members joined with " + "). Shared with fan-out aggregation ([`crate::synth`]'s `sum_usage`),
+/// so the separator has a single home.
+pub(crate) fn join_models(models: &[String]) -> String {
+    models.join(" + ")
+}
+
+/// The model identity a payload supports: a non-empty confirmed set (the response's own per-model
+/// usage) becomes the identity that ran, [`ModelSource::Reported`]; an empty one falls back to the
+/// requested id, disclosed as [`ModelSource::Requested`] — never presented as confirmed. The single
+/// resolution shared by every parse path (error, incomplete, success), so the fallback semantics
+/// can't drift between branches.
+fn model_identity(confirmed: &[String], requested: &str) -> (String, Vec<String>, ModelSource) {
+    if confirmed.is_empty() {
+        (
+            requested.to_owned(),
+            vec![requested.to_owned()],
+            ModelSource::Requested,
+        )
+    } else {
+        (
+            join_models(confirmed),
+            confirmed.to_vec(),
+            ModelSource::Reported,
+        )
+    }
+}
+
 /// Parse the Claude CLI JSON payload into a [`Synthesis`]. The model reported is resolved from the
 /// payload's per-model usage — the models that actually ran — never echoed from the request, so a
 /// substitution can't mislabel the run.
@@ -208,24 +236,14 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
     // small calls), so the set is kept as data (`models`) and reported joined for display — never
     // one member presented as though it alone produced the synthesis, and never a display string
     // downstream code would have to re-split. Resolved once, shared by the success and error paths.
-    let models: Vec<String> = parsed.model_usage.keys().cloned().collect();
-    let model = (!models.is_empty()).then(|| models.join(" + "));
+    let confirmed: Vec<String> = parsed.model_usage.keys().cloned().collect();
     if parsed.is_error.unwrap_or(false) {
         // A run that ran and *spent* but did not complete (e.g. a tripped --max-budget-usd cap). On an
         // error payload the top-level `usage` block is zeroed (confirmed by exercise) while the real
         // tokens are in `modelUsage` and the real cost in `total_cost_usd` — so the honest usage sums
         // modelUsage rather than reading the zeros, and the failure is carried as a value (logged), not
-        // bailed (which would lose the spend). The model falls back to the requested one only when the
-        // payload named none (an error before any model ran) — disclosed as Requested, not presented
-        // as the identity that ran.
-        let (model, models, model_source) = match model {
-            Some(reported) => (reported, models.clone(), ModelSource::Reported),
-            None => (
-                requested_model.to_owned(),
-                vec![requested_model.to_owned()],
-                ModelSource::Requested,
-            ),
-        };
+        // bailed (which would lose the spend).
+        let (model, models, model_source) = model_identity(&confirmed, requested_model);
         let usage = Usage {
             model,
             models,
@@ -283,7 +301,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
     if parsed.total_cost_usd.is_none() {
         missing.push("`total_cost_usd`");
     }
-    if model.is_none() {
+    if confirmed.is_empty() {
         missing.push("`modelUsage`");
     }
     // Whatever token counts DID parse, kept ahead of the completeness check: the top-level `usage`
@@ -316,21 +334,16 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         },
     );
     let usage_absent = parsed.usage.is_none();
+    // Resolved once for whichever path follows: confirmed set → Reported, none → the requested id
+    // disclosed as Requested.
+    let (model, models, model_source) = model_identity(&confirmed, requested_model);
     let complete = (
         parsed.result,
         parsed.usage,
         parsed.total_cost_usd,
-        model.clone(),
+        (!confirmed.is_empty()).then_some(()),
     );
-    let (Some(text), Some(usage), Some(cost_usd), Some(model)) = complete else {
-        let (model, models, model_source) = match model {
-            Some(reported) => (reported, models.clone(), ModelSource::Reported),
-            None => (
-                requested_model.to_owned(),
-                vec![requested_model.to_owned()],
-                ModelSource::Requested,
-            ),
-        };
+    let (Some(text), Some(usage), Some(cost_usd), Some(())) = complete else {
         let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
             salvaged_tokens;
         return Ok(Synthesis {
@@ -364,7 +377,8 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         usage: Usage {
             model,
             models,
-            model_source: ModelSource::Reported, // resolved from the response's modelUsage above
+            // Reported by construction: this path requires a non-empty confirmed set above.
+            model_source,
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,

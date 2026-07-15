@@ -1711,8 +1711,9 @@ fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
             (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
         };
     }
-    // The display form re-derives from the merged set — one direction (data → display), never back.
-    total.model = total.models.join(" + ");
+    // The display form re-derives from the merged set — one direction (data → display), never
+    // back — through the same join `parse_result` uses, so the separator has one home.
+    total.model = crate::ai::join_models(&total.models);
     total
 }
 
