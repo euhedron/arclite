@@ -123,13 +123,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         }
     };
 
-    // The runnable spelling of the verb is `arc run <verb>` (the run group, cli::NAME_RUN) — the
-    // summary and the ledger entries must name a command that exists, not `arc audit`.
-    let invocation = format!(
-        "{} {} {command}",
-        crate::cli::binary_name(),
-        crate::cli::NAME_RUN
-    );
+    let invocation = run_invocation(&command);
     let head = format!(
         "{}{} {} finding(s) from run {run_id} (`{invocation}`) into {}:",
         if args.dry_run { "[dry run] " } else { "" },
@@ -277,6 +271,17 @@ fn write_entry(
 pub(crate) const STATUS_OPEN: &str = "status: open";
 pub(crate) const STATUS_RESOLVED: &str = "status: resolved";
 
+/// The runnable spelling of a synthesis verb — `arc run <verb>` (the run group, [`crate::cli::NAME_RUN`]),
+/// never `arc audit`, which doesn't exist. One builder for the head summary and the entries'
+/// provenance line, so the two can't drift.
+fn run_invocation(command: &str) -> String {
+    format!(
+        "{} {} {command}",
+        crate::cli::binary_name(),
+        crate::cli::NAME_RUN
+    )
+}
+
 fn entry_md(
     finding: &Value,
     id: &str,
@@ -292,13 +297,7 @@ fn entry_md(
     let commit_line = commit.map_or_else(String::new, |c| format!("commit: {c}\n"));
     let recorded_line = recorded.map_or_else(String::new, |r| format!("recorded: {r}\n"));
     let against = commit.map_or_else(String::new, |c| format!(" against commit `{c}`"));
-    // The runnable spelling: synthesis verbs live under the run group (`arc run <verb>`), so the
-    // provenance names a command a reader can actually invoke.
-    let invocation = format!(
-        "{} {} {command}",
-        crate::cli::binary_name(),
-        crate::cli::NAME_RUN
-    );
+    let invocation = run_invocation(command);
     format!(
         "---\n\
          id: {id}\n\

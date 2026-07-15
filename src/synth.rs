@@ -1279,9 +1279,18 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         let mut problems = Vec::new();
         validate_against_schema(payload, &schema_value, "$", &mut problems);
         if !problems.is_empty() {
-            problems.truncate(5); // the first few name the shape drift; a flood adds nothing
+            // The first few name the shape drift; the rest are elided *disclosed* — a count, not a
+            // silent cap that would read as the full list.
+            let total = problems.len();
+            problems.truncate(5);
+            let elided = total - problems.len();
+            let more = if elided > 0 {
+                format!("; … and {elided} more")
+            } else {
+                String::new()
+            };
             errored = Some(format!(
-                "the structured result failed the local schema re-check: {}",
+                "the structured result failed the local schema re-check: {}{more}",
                 problems.join("; ")
             ));
         }
