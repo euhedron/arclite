@@ -38,10 +38,13 @@ pub(crate) fn get(
         );
     }
     let mut cmd = Command::new(curl_program()?);
-    // stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the returned
-    // error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
+    // `-q` FIRST (curl only honors it as the first argument): don't load `~/.curlrc` — an ambient
+    // config could inject redirects, proxies, or headers under this request, and arclite states the
+    // run explicitly. stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the
+    // returned error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
     // writing there directly would corrupt the display.
-    cmd.args(["--fail", "--silent", "--show-error"])
+    cmd.arg("-q")
+        .args(["--fail", "--silent", "--show-error"])
         .args(["--user-agent", "arclite"])
         .arg(url)
         .stdout(Stdio::piped())

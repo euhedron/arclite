@@ -16,17 +16,22 @@ permissions:
 
 jobs:
   # Create the Release once, before the matrix uploads race to attach assets to it.
+  # Context values reach every `run:` below as environment variables, never inline `${{ }}`
+  # interpolation into the script text: a ref name is repo-controlled input, and a tag like
+  # `v1$(cmd)` is valid to git — as an env var it's inert data the shell quotes, not grammar.
   create-release:
     runs-on: ubuntu-latest
     steps:
       - name: Create the release (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: >
-          gh release create "${{ github.ref_name }}"
-          --repo "${{ github.repository }}"
-          --title "${{ github.ref_name }}"
-          --notes "arc ${{ github.ref_name }}"
+          gh release create "$TAG"
+          --repo "$REPO"
+          --title "$TAG"
+          --notes "arc $TAG"
           --verify-tag || true
 
   upload:
@@ -52,18 +57,24 @@ jobs:
             bin: arc.exe
             asset: arc-${{ github.ref_name }}-windows-x86_64.exe
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      BIN: ${{ matrix.bin }}
+      ASSET: ${{ matrix.asset }} # carries the ref name — env-var indirection like TAG, same reason
     steps:
       - uses: actions/checkout@v4
       - name: Add the Rust target
-        run: rustup target add ${{ matrix.target }}
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+      - run: cargo build --release --locked --target "$TARGET"
       - name: Stage the asset under its release name
         shell: bash
-        run: cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+        run: cp "target/$TARGET/release/$BIN" "$ASSET"
       - name: Upload the asset
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: >
-          gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}"
-          --repo "${{ github.repository }}" --clobber
+          gh release upload "$TAG" "$ASSET"
+          --repo "$REPO" --clobber

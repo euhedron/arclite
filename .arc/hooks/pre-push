@@ -1,6 +1,7 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # arclite pre-push hook. Nothing here is canonical — a hook is configurable by definition; this is only
-# what arclite runs today, and it is meant to change. Edit it freely.
+# what arclite runs today, and it is meant to change. Edit it freely. (bash, not sh: the changed-path
+# read below consumes git's NUL-delimited machine form, which POSIX sh cannot read.)
 #
 # Enable for a clone: `git config core.hooksPath .arc/hooks`. Skip one push: `ARC_GATE=0 git push`.
 # Disable: unset core.hooksPath.
@@ -11,8 +12,9 @@
 #     violation and blocks the push.
 #   - ADVISORIES (non-blocking): `arc run critique/suggest/extract` over the pushed diff — defects,
 #     what's worth attention, and candidate rules to curate. They run *regardless* of the gate's verdict
-#     (a blocked push still surfaces them) and never block. To spread spend across subscriptions, add
-#     `--backend codex` to them.
+#     (a blocked push still surfaces them) and never block. They run tool-less (portable across
+#     backends); on a claude-backed hook, granting read-only tools (--allow-tool Read/Grep/Glob) lets a
+#     diff-scoped advisory consult the rest of the repo — add them per verb if you want that.
 if [ "$ARC_GATE" = "0" ]; then
     echo "arclite gate: skipped (ARC_GATE=0)" >&2
     exit 0
@@ -54,27 +56,14 @@ fi
 
 # Advisories are scoped to the source changes being pushed (origin/main..HEAD) with --no-scan, so their
 # signal tracks the change and the cost stays small; the gate, by contrast, re-audits all of src.
-# The changed paths are accumulated as *positional parameters* (set -- "$@") and expanded quoted, so a
-# path with spaces or glob characters stays one argument; each is prefixed "./" so a leading-dash path
-# can't be read as a flag. (Paths ride line-delimited: POSIX sh has no NUL-safe read for git's -z form;
-# a pathological newline-bearing filename splits into paths arc then rejects loudly — never silently.)
+# Paths ride git's NUL-delimited machine form (-z) into quoted positional parameters — no whitespace
+# splitting, no quoting ambiguity, any byte a filename can hold — and each is ./-prefixed so a
+# leading-dash name can't be read as a flag.
 set --
 if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
-    while IFS= read -r f; do
-        [ -n "$f" ] && set -- "$@" --include "./$f"
-    done <<EOF
-$(git diff --name-only --diff-filter=d origin/main..HEAD -- src 2>/dev/null)
-EOF
-fi
-
-# Read-only tools for the advisories: a diff-scoped context can't see cross-module references, so let
-# the advisory consult the rest of the repo at its own judgment instead of flagging what it can't see.
-# claude-only — codex rejects --allow-tool before spend (no mapping to its sandbox model yet), so
-# resolve the *effective* backend (the configured default; the runs below pass no --backend) and drop
-# the tools rather than have every advisory refuse to run.
-adv_tools="--allow-tool Read --allow-tool Grep --allow-tool Glob"
-if [ "$(arc config get defaults.backend 2>/dev/null)" = "codex" ]; then
-    adv_tools=""
+    while IFS= read -r -d '' f; do
+        set -- "$@" --include "./$f"
+    done < <(git diff --name-only --diff-filter=d -z origin/main..HEAD -- src 2>/dev/null)
 fi
 
 # Launch the gate and each advisory concurrently, each to its own temp file (so their streams don't
@@ -88,9 +77,7 @@ adv_outs=""
 if [ "$#" -gt 0 ]; then
     for verb in critique suggest extract; do
         out=$(mktemp)
-        # "$@" carries the quoted --include pairs built above; only $adv_tools word-splits (flags only).
-        # shellcheck disable=SC2086  # intended word-split: one flag per tool
-        arc run "$verb" . --no-scan "$@" $adv_tools >"$out" 2>&1 &
+        arc run "$verb" . --no-scan "$@" >"$out" 2>&1 &
         adv_pids="$adv_pids $!"
         adv_outs="$adv_outs $out"
     done

@@ -312,6 +312,25 @@ pub const ALL: &[&Verb] = &[
     &AUDIT, &CRITIQUE, &VERIFY, &SUGGEST, &SUMMARIZE, &EXTRACT, &EVOLVE, &AGGREGATE,
 ];
 
+/// Resolve a parsed `arc run <verb>` to its registry row + its args — the single decision point over
+/// the closed CLI enum, kept in the registry's own file so dispatch can't grow a parallel home
+/// elsewhere (`lib.rs` drives whatever this returns). Adding a verb is its clap variant, its `Verb`
+/// row, one arm here, and its [`ALL`] entry — the compiler enforces the arm, the parity test below
+/// enforces `ALL`.
+pub fn resolve(verb: &cli::RunVerb) -> (&'static Verb, &SynthArgs) {
+    use cli::RunVerb as V;
+    match verb {
+        V::Summarize(a) => (&SUMMARIZE, a),
+        V::Suggest(a) => (&SUGGEST, a),
+        V::Extract(a) => (&EXTRACT, a),
+        V::Audit(a) => (&AUDIT, a),
+        V::Critique(a) => (&CRITIQUE, a),
+        V::Verify(a) => (&VERIFY, a),
+        V::Evolve(a) => (&EVOLVE, a),
+        V::Aggregate(a) => (&AGGREGATE, a),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The verb set has two compile-checked homes (the clap enum, whose dispatch match won't build

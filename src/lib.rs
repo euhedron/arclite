@@ -16,7 +16,7 @@ mod settings;
 mod synth;
 mod walk;
 
-use cli::{Cli, Command, RunVerb};
+use cli::{Cli, Command};
 
 /// arclite's per-scope config/data directory (`~/.arc`, `<repo>/.arc`): settings, rules, and logs.
 pub(crate) const ARC_DIR: &str = ".arc";
@@ -238,16 +238,12 @@ pub fn run() -> ExitCode {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::Run(args) => match &args.verb {
-            RunVerb::Summarize(a) => commands::verbs::SUMMARIZE.run(a, &cli.global),
-            RunVerb::Suggest(a) => commands::verbs::SUGGEST.run(a, &cli.global),
-            RunVerb::Extract(a) => commands::verbs::EXTRACT.run(a, &cli.global),
-            RunVerb::Audit(a) => commands::verbs::AUDIT.run(a, &cli.global),
-            RunVerb::Critique(a) => commands::verbs::CRITIQUE.run(a, &cli.global),
-            RunVerb::Verify(a) => commands::verbs::VERIFY.run(a, &cli.global),
-            RunVerb::Evolve(a) => commands::verbs::EVOLVE.run(a, &cli.global),
-            RunVerb::Aggregate(a) => commands::verbs::AGGREGATE.run(a, &cli.global),
-        },
+        Command::Run(args) => {
+            // The verb registry owns the enum→verb mapping (verbs::resolve, beside verbs::ALL);
+            // this call site just drives the resolved row.
+            let (verb, a) = commands::verbs::resolve(&args.verb);
+            verb.run(a, &cli.global)
+        }
     };
 
     match result {
