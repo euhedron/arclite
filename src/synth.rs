@@ -319,13 +319,23 @@ fn gather_rules(
     if rule_sources.is_empty() {
         return Ok(String::new());
     }
-    let (loaded, skipped) = crate::rules::load_sources(rule_sources)?;
+    let (loaded, skipped, overridden) = crate::rules::load_sources(rule_sources)?;
     for src in &skipped {
         // A configured source that resolved to nothing (typo'd path, absent dir, or a non-`.md`
         // file): surface it in the manifest so a shrunken ruleset never goes unnoticed.
         sources.push(format!(
             "rules: source skipped — not a directory or .md file: {}",
             src.display()
+        ));
+    }
+    for o in &overridden {
+        // Later-source-wins is the designed override; each collision it resolved is disclosed so a
+        // rule body silently dropping out of the active set can't go unnoticed.
+        sources.push(format!(
+            "rules: `{}` from {} overridden by {}",
+            o.id,
+            o.replaced.display(),
+            o.winner.display()
         ));
     }
     let (rules, disabled) = crate::rules::partition_disabled(loaded, disabled_rules);
@@ -530,10 +540,12 @@ pub struct Context {
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
-/// backing `--changed`. `Ok(vec)` lists them (empty = genuinely clean tree); `Err(reason)`
+/// backing `--changed`. Returns `(paths, deleted, undecodable)`: the readable changed files, the
+/// deletion count, and how many changed paths weren't valid UTF-8 (skipped, for the caller to
+/// disclose — a lossily-decoded name would point the later read at a mangled path). `Err(reason)`
 /// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
 /// as a clean "no changes" result.
-fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
+fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize, usize), String> {
     let output = ai::command("git")
         .map_err(|e| format!("could not prepare git: {e:#}"))?
         .arg("-C")
@@ -541,7 +553,6 @@ fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
         // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
         // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
         // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
-        // (A path with invalid UTF-8 bytes is lossily decoded below — rare; the lossy name won't match.)
         .args(["status", "--porcelain", "-z"])
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
@@ -555,17 +566,20 @@ fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
     // Each record is two status chars and a space, then the path. A rename/copy (status 'R'/'C') is
     // followed by a second record holding its original path — under -z the new path comes first and the
     // ` -> ` separator is dropped — so that trailing field carries no status prefix: consume and discard
-    // it rather than mis-reading its bytes as another changed path.
+    // it rather than mis-reading its bytes as another changed path. Records are split as *bytes*
+    // (git emits raw path bytes): each path must then decode as UTF-8 exactly, because it's rejoined
+    // to the root and read — a lossy decode would mangle the name and read the wrong path. An
+    // undecodable path is skipped and counted, for the caller to disclose.
     const PORCELAIN_PATH_OFFSET: usize = 3;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut records = text.split('\0');
+    let mut records = output.stdout.split(|&b| b == 0);
     let mut changed = Vec::new();
     let mut deleted = 0usize;
+    let mut undecodable = 0usize;
     while let Some(record) = records.next() {
         if record.is_empty() {
             continue; // -z output ends in a NUL, so the final split is empty
         }
-        let status = record.as_bytes();
+        let status = record;
         // A deletion ('D' in the index or worktree status column) has no content to feed context, so
         // exclude and count it — disclosed by the caller as a deletion rather than later surfacing as
         // a "missing — skipped" path indistinguishable from a typo'd `--include`.
@@ -575,13 +589,16 @@ fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize), String> {
             .get(PORCELAIN_PATH_OFFSET..)
             .filter(|p| !p.is_empty())
         {
-            changed.push(root.join(path));
+            match std::str::from_utf8(path) {
+                Ok(path) => changed.push(root.join(path)),
+                Err(_) => undecodable += 1,
+            }
         }
         if matches!(status.first(), Some(b'R' | b'C')) {
             records.next(); // a rename/copy carries its original path in the next record — discard it
         }
     }
-    Ok((changed, deleted))
+    Ok((changed, deleted, undecodable))
 }
 
 /// The target repo's commit state at run time — `HEAD`'s short sha, suffixed `-dirty` when the
@@ -747,18 +764,26 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     // --changed: scope to git-changed files — same group as --include, not special to any command.
     // A git failure aborts loudly rather than silently passing as a clean tree.
     if changed {
-        let (files, deleted) = changed_files(&root)
+        let (files, deleted, undecodable) = changed_files(&root)
             .map_err(|reason| anyhow::anyhow!("--changed could not consult git: {reason}"))?;
-        sources.push(match (files.is_empty(), deleted) {
-            (true, 0) => "changed: no git changes found".to_owned(),
-            (true, d) => format!("changed: {d} deleted file(s) — nothing readable to include"),
-            (false, 0) => format!("changed: {} git-changed file(s)", files.len()),
-            (false, d) => {
-                format!(
-                    "changed: {} git-changed file(s) ({d} deleted, skipped)",
-                    files.len()
-                )
-            }
+        // Every skipped class is disclosed beside the count it was excluded from — deletions have
+        // no content to read; a non-UTF-8 path can't be named without mangling it.
+        let mut notes = Vec::new();
+        if deleted > 0 {
+            notes.push(format!("{deleted} deleted, skipped"));
+        }
+        if undecodable > 0 {
+            notes.push(format!("{undecodable} non-UTF-8 path(s), skipped"));
+        }
+        let suffix = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", notes.join("; "))
+        };
+        sources.push(match (files.is_empty(), notes.is_empty()) {
+            (true, true) => "changed: no git changes found".to_owned(),
+            (true, false) => format!("changed: nothing readable to include{suffix}"),
+            (false, _) => format!("changed: {} git-changed file(s){suffix}", files.len()),
         });
         includes.extend(files);
     }

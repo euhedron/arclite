@@ -25,6 +25,9 @@ pub(crate) struct Report {
     /// cleaned up rather than silently rotting in settings.
     pub disabled_unmatched: Vec<String>,
     pub skipped: Vec<String>,
+    /// Id collisions the later-source-wins dedup resolved (`id: replaced → winner`, display-ready) —
+    /// the override is by design, but each occurrence is disclosed, never silent.
+    pub overridden: Vec<String>,
     pub layers: Vec<String>,
 }
 
@@ -38,7 +41,7 @@ pub(crate) fn resolved(
     let root = super::resolve_root(path)?;
     let settings = crate::settings::Settings::load(path)?;
     let resolution = super::resolve_rule_sources(rules_override, ruleset, &settings)?;
-    let (rules, skipped) = crate::rules::load_sources(&resolution.sources)?;
+    let (rules, skipped, overridden) = crate::rules::load_sources(&resolution.sources)?;
     let rel = |p: &Path| p.strip_prefix(&root).unwrap_or(p).display().to_string();
     // The disabling judgment comes from the one statement of it — the same partition synthesis
     // filters with — never a reimplemented membership check that could drift from what runs actually
@@ -69,6 +72,10 @@ pub(crate) fn resolved(
         rules: entries,
         disabled_unmatched,
         skipped: skipped.iter().map(|p| rel(p)).collect(),
+        overridden: overridden
+            .iter()
+            .map(|o| format!("{}: {} → {}", o.id, rel(&o.replaced), rel(&o.winner)))
+            .collect(),
         layers: settings.active.iter().map(|p| rel(p)).collect(),
     })
 }
@@ -116,6 +123,15 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             lines.push(format!("  {s}"));
         }
     }
+    if !report.overridden.is_empty() {
+        lines.push(format!(
+            "overridden by a later source ({}):",
+            report.overridden.len()
+        ));
+        for o in &report.overridden {
+            lines.push(format!("  {o}"));
+        }
+    }
     lines.push(format!(
         "settings: {}",
         crate::join_or(&report.layers, crate::settings::NO_LAYERS)
@@ -130,6 +146,7 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
         "disabled_unmatched": report.disabled_unmatched,
         "skipped": report.skipped,
+        "overridden": report.overridden,
         "settings": report.layers,
     });
     emit(&payload, &lines.join("\n"), global.json)

@@ -59,7 +59,9 @@ pub struct InspectReport {
     /// an `--include` slice would target — not just which file *types* exist.
     pub by_top_dir: BTreeMap<String, usize>,
     pub by_extension: BTreeMap<String, usize>,
-    /// Entries the walk couldn't read (permission denied, I/O, …) — counted, never silently dropped.
+    /// Entries the walk couldn't fully process — unreadable (permission denied, I/O, …) or not
+    /// representable in the report's strings (a non-UTF-8 manifest path) — counted, never silently
+    /// dropped.
     pub walk_errors: usize,
 }
 
@@ -124,7 +126,14 @@ pub fn gather(path: &Path) -> anyhow::Result<(InspectReport, PathBuf)> {
                     is_manifest = true;
                 }
                 if is_manifest {
-                    manifest_paths.push(rel.to_string_lossy().into_owned());
+                    // The recorded path is later rejoined to the root and *read* (the synthesis
+                    // context), so it must round-trip exactly — a lossy conversion would point the
+                    // read at a mangled path. A non-UTF-8 manifest path can't ride the report's
+                    // strings; count it with the walk's other unprocessable entries, never silently.
+                    match rel.to_str() {
+                        Some(exact) => manifest_paths.push(exact.to_owned()),
+                        None => walk_errors += 1,
+                    }
                 }
                 // Tally the file under its top-level directory (a root-level file under ".") so the
                 // view shows the layout an `--include` slice targets, not just the file types.

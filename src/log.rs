@@ -150,20 +150,13 @@ pub fn field(record: &serde_json::Value, key: &str) -> String {
 
 /// The recorded string form of a repo path — the one conversion the run record and the active-run
 /// marker share, and the form ledger commands (`promote`/`retire`) later reopen as a path. Not
-/// display formatting: a UTF-8 path round-trips byte-exactly. A non-UTF-8 path can't ride JSON
-/// losslessly, so it's recorded lossily *and disclosed*, rather than silently pointing a later
-/// `Path::new(repo)` somewhere else.
+/// display formatting: the round-trip is byte-exact, guaranteed by the boundary — every repo path
+/// enters through `resolve_root`, which rejects non-UTF-8 before any command runs, precisely so
+/// stored state can never address a different path than the one judged.
 pub fn repo_record_string(dir: &std::path::Path) -> String {
-    match dir.to_str() {
-        Some(exact) => exact.to_owned(),
-        None => {
-            let lossy = dir.to_string_lossy().into_owned();
-            eprintln!(
-                "arclite: the repo path {lossy} isn't valid UTF-8 — recorded lossily; ledger commands may not resolve it"
-            );
-            lossy
-        }
-    }
+    dir.to_str()
+        .expect("repo paths are validated UTF-8 at the CLI boundary (commands::resolve_root)")
+        .to_owned()
 }
 
 /// The last path segment of a repo path — the compact way `arc log` and the TUI show *which* repo a

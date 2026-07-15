@@ -229,19 +229,27 @@ fn gate_status() -> Gate {
     }
 }
 
-/// Whether a hook script actually *invokes* the `bin` command, rather than merely containing its name
-/// as a substring: `bin` must sit at a word boundary (start, or after a non-identifier char) and be
-/// followed by whitespace, so a longer token that ends in the name (`search`, `myarc`) or begins with it
-/// (`archive`) isn't a false positive that reports the gate as wired when it isn't.
+/// Whether a hook script actually *invokes* the `bin` command, rather than merely containing its name.
+/// Comment lines are dropped first — hooks (arclite's own included) narrate their gate in comments, so
+/// prose like "`arc run audit` over all of src" must not report the gate as wired. In what remains,
+/// `bin` must sit at a word boundary (start, or after a non-identifier char) and be followed by
+/// whitespace, so `search`/`myarc`/`archive` don't match. Still a heuristic, not a shell parse — a
+/// quoted `"arc run"` string argument could match — but the realistic false-positive class
+/// (documentation comments) is excluded, and the verdict biases toward `NoArc`, which prompts a look,
+/// over a false all-clear.
 fn hook_invokes(body: &str, bin: &str) -> bool {
-    body.match_indices(bin).any(|(i, _)| {
-        let boundary_before = body[..i]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-');
-        let whitespace_after = body[i + bin.len()..].starts_with(char::is_whitespace);
-        boundary_before && whitespace_after
-    })
+    body.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .any(|line| {
+            line.match_indices(bin).any(|(i, _)| {
+                let boundary_before = line[..i]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-');
+                let whitespace_after = line[i + bin.len()..].starts_with(char::is_whitespace);
+                boundary_before && whitespace_after
+            })
+        })
 }
 
 /// Width of `doctor`'s human-output label column, so the value column aligns — named (like tui's

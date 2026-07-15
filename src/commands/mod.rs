@@ -310,5 +310,16 @@ pub(crate) fn resolve_rule_sources(
 /// Resolve `path` to an absolute path with a uniform error — shared by the command entry points, so
 /// the resolution and its wording are single-sourced rather than copy-pasted.
 pub(crate) fn resolve_root(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))
+    let root =
+        std::path::absolute(path).with_context(|| format!("cannot resolve {}", path.display()))?;
+    // Validate once, at the boundary: run records, markers, and ledger entries all carry the repo
+    // path as JSON text a later command reopens, so a non-UTF-8 root would have to ride lossily —
+    // stored state silently addressing a different path. Rejecting here makes every downstream
+    // conversion exact by construction (see log::repo_record_string).
+    anyhow::ensure!(
+        root.to_str().is_some(),
+        "arclite needs a UTF-8 repository path — {} can't be recorded and reopened losslessly",
+        root.display()
+    );
+    Ok(root)
 }

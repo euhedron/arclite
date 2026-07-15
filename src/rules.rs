@@ -52,30 +52,54 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Rule>> {
     Ok(rules)
 }
 
+/// One id-collision [`load_sources`] resolved: the rule body that was replaced (its id and losing
+/// source file) and the source that won — so the deliberate later-source-wins override is a
+/// disclosed event, never a silent drop of an active rule body.
+pub struct Overridden {
+    pub id: String,
+    pub replaced: PathBuf,
+    pub winner: PathBuf,
+}
+
 /// Load rules from multiple sources (each a directory of `.md` files or a single `.md` file),
 /// deduped by id with later sources winning — so a project ruleset can override a shared pool's
-/// rule of the same id. Returns the loaded rules plus any sources that resolved to neither a
+/// rule of the same id. Returns the loaded rules, any sources that resolved to neither a
 /// directory nor a `.md` file — a typo'd or absent path the caller surfaces rather than dropping
-/// silently, so a misconfigured source can't shrink the active ruleset unnoticed.
+/// silently, so a misconfigured source can't shrink the active ruleset unnoticed — and every
+/// id collision the later-wins dedup resolved, for the same reason: the override is by design,
+/// its silence wouldn't be.
 /// (A present-but-unreadable source — or an absent `*.md` path — surfaces its I/O error, via
 /// `try_is_dir`/`rule_from_file`, rather than being miscounted as a skipped typo.)
-pub fn load_sources(sources: &[PathBuf]) -> anyhow::Result<(Vec<Rule>, Vec<PathBuf>)> {
+pub fn load_sources(
+    sources: &[PathBuf],
+) -> anyhow::Result<(Vec<Rule>, Vec<PathBuf>, Vec<Overridden>)> {
     let mut by_id: BTreeMap<String, Rule> = BTreeMap::new();
     let mut skipped = Vec::new();
+    let mut overridden = Vec::new();
+    let mut insert = |rule: Rule, overridden: &mut Vec<Overridden>| {
+        if let Some(prev) = by_id.insert(rule.id.clone(), rule) {
+            let winner = by_id[&prev.id].source.clone();
+            overridden.push(Overridden {
+                id: prev.id,
+                replaced: prev.source,
+                winner,
+            });
+        }
+    };
     for src in sources {
         if crate::try_is_dir(src)
             .with_context(|| format!("cannot access rule source {}", src.display()))?
         {
             for rule in load(src)? {
-                by_id.insert(rule.id.clone(), rule);
+                insert(rule, &mut overridden);
             }
         } else if let Some(rule) = rule_from_file(src)? {
-            by_id.insert(rule.id.clone(), rule);
+            insert(rule, &mut overridden);
         } else {
             skipped.push(src.clone());
         }
     }
-    Ok((by_id.into_values().collect(), skipped))
+    Ok((by_id.into_values().collect(), skipped, overridden))
 }
 
 /// Split `rules` into (active, disabled) by the configured disabled-id list, preserving order — the
