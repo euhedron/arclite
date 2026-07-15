@@ -94,6 +94,26 @@ fn apply(
     // way to fetch an asset's bytes (there is no download-by-name endpoint), working for public and
     // private repos alike. The lookup precedes any staging, so a failure here leaves nothing to clean up.
     let asset_id = release_asset_id(target, &name, auth.as_deref())?;
+    // Claim the staging name atomically (exclusive create) before curl writes into it: two concurrent
+    // `arc update --apply` runs share this fixed sidecar path, and without the claim one could truncate
+    // the file mid-download while the other installs it — a corrupt binary swapped into place. The
+    // loser fails fast here instead; a leftover claim from a hard-killed run is named so it can be
+    // removed (every non-crash path below already cleans it up).
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&download_path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::anyhow!(
+                    "another arc update appears to be in progress ({} exists) — if none is, remove that file and retry",
+                    download_path.display()
+                )
+            } else {
+                anyhow::Error::new(e)
+                    .context(format!("cannot stage the update at {}", download_path.display()))
+            }
+        })?;
     // Stage the download, then install it. On any failure — a partial download, or an install that
     // rolled back its own rename — the staging file may remain, so remove it on the error path (warn
     // if it can't be removed; an absent file is the normal, silent case) and propagate the error.
@@ -297,8 +317,12 @@ fn curl_get(
         .map(|b| ("Authorization", b))
         .into_iter()
         .collect();
-    // Redirects on: the release-asset flow *is* a 302 to signed storage, and this credential is
-    // Authorization-class — the kind curl documents stripping on a cross-host hop.
+    // Redirects on: the release-asset flow *is* a 302 to signed storage. The credential is
+    // Authorization-class, and the client's cross-host stripping is confirmed, not assumed: curl
+    // removes an Authorization header — including one set via a header directive, this path — on any
+    // cross-host redirect (behavior fixed in curl 7.58, CVE-2018-1000007), so the token reaches only
+    // the initial API host and never rides the hop to storage. The acknowledged-hop contract lives on
+    // http::get's `follow_redirects` parameter (see the module doc).
     crate::http::get(url, &[("Accept", accept)], &secret, true, dest)
 }
 

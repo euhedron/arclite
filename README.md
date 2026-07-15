@@ -14,7 +14,7 @@ arclite is an **agent-first, cross-platform CLI for cross-repo code intelligence
 
 **Install.** Two ways:
 
-*Download & run* (no toolchain — for using arc on your own repos): grab the latest `arc-v<version>-<os>-<arch>` binary for your platform from the repo's **[Releases](https://github.com/nikganderson/arclite/releases)**, put it on your `PATH` as `arc` (`arc.exe` on Windows; `chmod +x` on Linux/macOS), then run `arc doctor`. No clone, no Rust. (Binaries are published by the release workflow on each version tag; until the first tagged release lands, build *From source* below.)
+*Download & run* (no toolchain — for using arc on your own repos): grab the latest `arc-v<version>-<os>-<arch>` binary for your platform from the repo's **[Releases](https://github.com/nikganderson/arclite/releases)**, put it on your `PATH` as `arc` (`arc.exe` on Windows; `chmod +x` on Linux/macOS), then run `arc doctor`. No clone, no Rust. (Binaries are published by the release workflow on each version tag.)
 
 *From source* (to develop arclite):
 

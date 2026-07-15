@@ -311,3 +311,25 @@ pub const AGGREGATE: Verb = Verb {
 pub const ALL: &[&Verb] = &[
     &AUDIT, &CRITIQUE, &VERIFY, &SUGGEST, &SUMMARIZE, &EXTRACT, &EVOLVE, &AGGREGATE,
 ];
+
+#[cfg(test)]
+mod tests {
+    /// The verb set has two compile-checked homes (the clap enum, whose dispatch match won't build
+    /// with a missing arm) and one that isn't ([`super::ALL`], the TUI registry). This pins them
+    /// together, so a verb added to clap but missed here fails a test instead of silently missing
+    /// from the palette.
+    #[test]
+    fn all_registry_matches_the_clap_verb_subcommands() {
+        let cmd = <crate::cli::Cli as clap::CommandFactory>::command();
+        let run = cmd
+            .find_subcommand(crate::cli::NAME_RUN)
+            .expect("the run group exists");
+        let clap_names: std::collections::BTreeSet<String> = run
+            .get_subcommands()
+            .map(|c| c.get_name().to_owned())
+            .collect();
+        let all_names: std::collections::BTreeSet<String> =
+            super::ALL.iter().map(|v| v.name().to_owned()).collect();
+        assert_eq!(clap_names, all_names);
+    }
+}

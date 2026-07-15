@@ -41,6 +41,14 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         );
     };
     let record = crate::commands::log::stored_run(&stored);
+    // Retire acts on verify verdicts specifically. Another verb's structured results can carry the
+    // same field names by coincidence (or a model's drift), and acting on those would move ledger
+    // entries on a judgment that never re-checked them — so the run's identity is checked, not shaped.
+    let command = record.get("command").and_then(Value::as_str).unwrap_or("");
+    anyhow::ensure!(
+        command == crate::cli::NAME_VERIFY,
+        "run `{run_id}` is a `{command}` run — retire acts on `arc run verify` verdicts"
+    );
     let repo = record
         .get("repo")
         .and_then(Value::as_str)
@@ -50,18 +58,23 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             .with_context(|| format!("cannot access the run's repository ({repo})"))?,
         "the run's repository ({repo}) no longer exists — nothing to retire from"
     );
-    // The verdicts are the structured `results` (a verify run emits {id, verdict, reason}); a prose run
-    // has none. We act only on `resolved` — `reproduces`/`indeterminate` stay in the open ledger.
+    // The verdicts are the structured `results` (a verify run emits {id, verdict, reason}). Absent
+    // structure and legitimately-empty results are distinct failures, told apart honestly: verify is
+    // structured by default, so no `results` at all means the store predates structure or the run
+    // errored — while an empty array means the verify ran with no open findings in context.
     let verdicts = stored
         .get("structured")
         .and_then(|s| s.get(crate::synth::RESULTS_KEY))
         .and_then(Value::as_array)
-        .filter(|items| !items.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "run `{run_id}` has no structured verdicts — retire acts on an `arc run verify --structured` run"
+                "run `{run_id}` carries no structured verdicts — it predates always-structured output, or errored before returning results"
             )
         })?;
+    anyhow::ensure!(
+        !verdicts.is_empty(),
+        "verify run `{run_id}` recorded no verdicts — its context carried no open findings; nothing to retire"
+    );
 
     let open = crate::findings_open_dir(Path::new(repo));
     let resolved = crate::findings_resolved_dir(Path::new(repo));
@@ -209,19 +222,31 @@ fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
             "arclite: retired entry carries no frontmatter `status:` field to flip — moved as-is"
         );
     }
-    let restatused = lines.join("\n");
     let note = if reason.is_empty() {
         format!("Resolved per verify run `{run_id}`.")
     } else {
         format!("Resolved per verify run `{run_id}`: {reason}")
     };
-    // Land the note under the existing Resolution heading (the seeded format ends with it) or add one —
-    // either way without assuming the file's exact structure.
-    if restatused.contains("## Resolution") {
-        format!("{}\n{note}\n", restatused.trim_end())
+    // Land the note inside the Resolution *section* — at its end, before the next `## ` heading —
+    // not at the file's end, which would file the note under whatever section happens to be last.
+    // No heading at all → add the section at the end.
+    let mut lines: Vec<String> = lines.into_iter().map(str::to_owned).collect();
+    if let Some(h) = lines.iter().position(|l| l.trim_end() == "## Resolution") {
+        let mut at = lines[h + 1..]
+            .iter()
+            .position(|l| l.starts_with("## "))
+            .map_or(lines.len(), |off| h + 1 + off);
+        // Step back over the section's trailing blank lines so the note sits flush under its content.
+        while at > h + 1 && lines[at - 1].trim().is_empty() {
+            at -= 1;
+        }
+        lines.insert(at, note);
     } else {
-        format!("{}\n\n## Resolution\n{note}\n", restatused.trim_end())
+        lines.push(String::new());
+        lines.push("## Resolution".to_owned());
+        lines.push(note);
     }
+    format!("{}\n", lines.join("\n").trim_end())
 }
 
 #[cfg(test)]
@@ -262,5 +287,16 @@ mod tests {
         assert!(out.contains("status: resolved"));
         // The body's quoted mention is untouched — only the frontmatter field flipped.
         assert!(out.contains("frontmatter says `status: open` today"));
+    }
+
+    #[test]
+    fn mark_resolved_lands_the_note_inside_the_resolution_section_not_at_file_end() {
+        let body =
+            "---\nstatus: open\n---\n\n## Claim\nthing\n\n## Resolution\n\n## Next Action\nlater\n";
+        let out = mark_resolved(body, "", "run-5");
+        let note_at = out.find("Resolved per verify run `run-5`.").unwrap();
+        let next_at = out.find("## Next Action").unwrap();
+        // The note belongs to Resolution — before the following section, not appended after it.
+        assert!(note_at < next_at);
     }
 }
