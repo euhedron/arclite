@@ -15,10 +15,14 @@ use crate::cli::{GlobalArgs, PromoteArgs};
 use crate::output::emit;
 
 /// One promoted finding: its ledger id and the file written (or, on a dry run, where it would go).
+/// `truncated` reports that the id was cut to the slug budget — disclosed per entry, never applied
+/// silently.
 #[derive(Serialize)]
 struct Promoted {
     id: String,
     path: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -80,7 +84,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     let mut promoted = Vec::new();
     for finding in findings {
-        let stem = slug(primary_text(finding));
+        let (stem, truncated) = slug(primary_text(finding));
         let path = if args.dry_run {
             // The same collision-aware sequence the real claim walks, probed without writing — the
             // preview names the path a run started now would take (indicative under concurrency).
@@ -108,6 +112,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         promoted.push(Promoted {
             id,
             path: path.display().to_string(),
+            truncated,
         });
     }
 
@@ -148,7 +153,18 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     );
     let mut lines: Vec<String> = promoted
         .iter()
-        .map(|p| format!("  {} · {}", p.id, crate::display_path(&p.path)))
+        .map(|p| {
+            format!(
+                "  {} · {}{}",
+                p.id,
+                crate::display_path(&p.path),
+                if p.truncated {
+                    " · id truncated to the filename budget"
+                } else {
+                    ""
+                }
+            )
+        })
         .collect();
     if seeded_readme {
         lines.push("  + seeded the ledger's README.md (first promotion into this repo)".to_owned());
@@ -186,8 +202,11 @@ const SLUG_MAX_CHARS: usize = 48;
 /// A kebab-case id stem from a finding's text: its leading alphanumeric words, lowercased and joined
 /// with `-`, up to [`SLUG_MAX_CHARS`] on a word boundary (a single word longer than the budget is
 /// truncated). Same-text findings still collide here by design — the atomic claim bumps a suffix.
-fn slug(text: &str) -> String {
+/// The bool reports whether the budget cut anything off, so the promotion can *say* an id was
+/// truncated rather than silently shortening it.
+fn slug(text: &str) -> (String, bool) {
     let mut out = String::new();
+    let mut truncated = false;
     for word in text
         .split_whitespace()
         .map(|w| {
@@ -200,18 +219,20 @@ fn slug(text: &str) -> String {
     {
         if out.is_empty() {
             // The first word seeds the slug, truncated if it alone exceeds the budget.
+            truncated = word.chars().count() > SLUG_MAX_CHARS;
             out.extend(word.chars().take(SLUG_MAX_CHARS));
         } else if out.len() + 1 + word.len() <= SLUG_MAX_CHARS {
             out.push('-');
             out.push_str(&word);
         } else {
+            truncated = true;
             break;
         }
     }
     if out.is_empty() {
-        "finding".to_owned()
+        ("finding".to_owned(), false)
     } else {
-        out
+        (out, truncated)
     }
 }
 
@@ -347,8 +368,9 @@ mod tests {
     #[test]
     fn slug_stays_within_the_path_budget_on_a_word_boundary() {
         // A finding whose text is many long identifier-words (an audit `location`) must not yield a
-        // filename that risks the platform path limit; the slug caps in length, breaking between words.
-        let s = slug(
+        // filename that risks the platform path limit; the slug caps in length, breaking between
+        // words — and reports that it did.
+        let (s, truncated) = slug(
             "PairThesisController citationcontext handlers GetTranscriptCitationContextAsync GetFilingCitationContextAsync",
         );
         assert!(s.len() <= SLUG_MAX_CHARS, "`{s}` exceeds {SLUG_MAX_CHARS}");
@@ -356,15 +378,25 @@ mod tests {
             !s.starts_with('-') && !s.ends_with('-'),
             "`{s}` has a stray boundary dash"
         );
+        assert!(truncated, "a capped slug must report its truncation");
     }
 
     #[test]
     fn slug_truncates_a_single_oversized_word() {
-        assert_eq!(slug(&"x".repeat(200)).len(), SLUG_MAX_CHARS);
+        let (s, truncated) = slug(&"x".repeat(200));
+        assert_eq!(s.len(), SLUG_MAX_CHARS);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn slug_reports_untruncated_when_the_text_fits() {
+        let (s, truncated) = slug("short name");
+        assert_eq!(s, "short-name");
+        assert!(!truncated);
     }
 
     #[test]
     fn slug_falls_back_when_text_has_no_alphanumerics() {
-        assert_eq!(slug("—— ·· ——"), "finding");
+        assert_eq!(slug("—— ·· ——"), ("finding".to_owned(), false));
     }
 }

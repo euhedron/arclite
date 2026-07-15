@@ -16,11 +16,14 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     } else {
         lines.push(format!("{} active run(s):", active.len()));
         for r in &active {
+            // An in-flight run's model is the *requested* id by definition — no response has named
+            // one yet — and the line says so rather than presenting it as confirmed.
             lines.push(format!(
-                "  {} · {} · {} · {} · {} turns · {} tools · {} chars · pid {} #{}",
+                "  {} · {} · {}{} · {} · {} turns · {} tools · {} chars · pid {} #{}",
                 r.command,
                 r.repo,
                 r.model,
+                crate::log::MODEL_REQUESTED_SUFFIX,
                 r.age_display(now),
                 r.turns,
                 r.tool_calls,

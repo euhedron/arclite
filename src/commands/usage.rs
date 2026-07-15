@@ -40,6 +40,12 @@ pub(crate) struct Rollup {
     pub(crate) notes: Vec<String>,
     pub(crate) tokens_only: usize,
     pub(crate) no_usage: usize,
+    /// Runs whose spend is *unknown* (the backend returned no usage; recorded zeros are
+    /// placeholders) — counted apart from the measured sums, never read as genuine zero.
+    pub(crate) spend_unknown: usize,
+    /// Present-but-non-numeric usage fields encountered across records (each read as 0) —
+    /// disclosed, so a mangled record can't masquerade as real zero consumption.
+    pub(crate) malformed_fields: usize,
     pub(crate) no_timestamp: usize,
     pub(crate) unparsed: usize,
 }
@@ -65,9 +71,13 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
         ("total", None),
     ];
     // Records with no `usage` object at all can't contribute to any sum; costless records (codex:
-    // tokens but no dollar cost) contribute to token sums but not cost. Both are counted + surfaced.
+    // tokens but no dollar cost) contribute to token sums but not cost. Unknown-spend runs (the
+    // backend returned no usage — zeros are placeholders) and malformed token fields are counted
+    // apart, so neither reads as genuine zero. All are surfaced.
     let mut no_usage = 0usize;
     let mut tokens_only = 0usize;
+    let mut spend_unknown = 0usize;
+    let mut malformed_fields = 0usize;
     // A record with no timestamp can't be placed in a finite window (it lands in the all-time total
     // only); count it so the windowed sums' omission is disclosed rather than silent.
     let no_timestamp = records
@@ -111,7 +121,19 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
                     }
                     continue;
                 };
+                // An unknown-spend run's zeros are placeholders, not measurements: counted in its
+                // own disclosure, kept out of the token sums and the tokens-only (codex) count it
+                // would otherwise masquerade in.
+                if crate::log::record_spend_unknown(r) {
+                    if span.is_none() {
+                        spend_unknown += 1;
+                    }
+                    continue;
+                }
                 let t = crate::log::usage_tokens(usage);
+                if span.is_none() {
+                    malformed_fields += t.malformed;
+                }
                 w.input_tokens += t.input;
                 w.cache_creation_input_tokens += t.cache_creation;
                 w.cache_read_input_tokens += t.cache_read;
@@ -196,6 +218,16 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
             "{no_usage} run(s) lack usage data entirely (excluded from all sums)"
         ));
     }
+    if spend_unknown > 0 {
+        notes.push(format!(
+            "{spend_unknown} run(s) consumed an unknown amount (the backend returned no usage) — excluded from the sums, not counted as zero"
+        ));
+    }
+    if malformed_fields > 0 {
+        notes.push(format!(
+            "{malformed_fields} usage field(s) were absent or non-numeric (read as 0) — the sums may under-count"
+        ));
+    }
     if no_timestamp > 0 {
         notes.push(format!(
             "{no_timestamp} run(s) without a timestamp (in the all-time total only, not the timed windows)"
@@ -211,6 +243,8 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
         notes,
         tokens_only,
         no_usage,
+        spend_unknown,
+        malformed_fields,
         no_timestamp,
         unparsed,
     };

@@ -42,30 +42,51 @@ pub fn cost_or_unavailable(cost_usd: Option<f64>) -> String {
 /// the sentinel can't drift between `arc log`'s row and its detail view.
 pub const COST_NO_USAGE: &str = "$?";
 
-/// The four token counts of a record's `usage` object (0 for any absent field) — the single place
-/// that knows those JSON field names, so the `arc usage` rollup (which sums them) and the stored-run
-/// detail (which renders them) can't drift on the key set.
+/// The four token counts of a record's `usage` object — the single place that knows those JSON
+/// field names, so the `arc usage` rollup (which sums them) and the stored-run detail (which
+/// renders them) can't drift on the key set. The writer serializes all four fields unconditionally,
+/// so in a well-formed record every key is present and numeric; an absent key and a non-numeric one
+/// are equally suspect — both read 0 and both count into `malformed`, so damage is disclosed rather
+/// than indistinguishable from genuine zero consumption.
 pub struct TokenCounts {
     pub input: u64,
     pub cache_creation: u64,
     pub cache_read: u64,
     pub output: u64,
+    pub malformed: usize,
 }
 
 /// Read the four token counts out of a `usage` JSON object (as nested in a run record).
 pub fn usage_tokens(usage: &serde_json::Value) -> TokenCounts {
-    let n = |key: &str| {
-        usage
-            .get(key)
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
+    let mut malformed = 0usize;
+    let mut n = |key: &str| match usage.get(key).and_then(serde_json::Value::as_u64) {
+        Some(v) => v,
+        None => {
+            malformed += 1;
+            0
+        }
     };
+    let input = n("input_tokens");
+    let cache_creation = n("cache_creation_input_tokens");
+    let cache_read = n("cache_read_input_tokens");
+    let output = n("output_tokens");
     TokenCounts {
-        input: n("input_tokens"),
-        cache_creation: n("cache_creation_input_tokens"),
-        cache_read: n("cache_read_input_tokens"),
-        output: n("output_tokens"),
+        input,
+        cache_creation,
+        cache_read,
+        output,
+        malformed,
     }
+}
+
+/// Whether a run record's spend is *unknown* (the backend returned no usage; the recorded zeros are
+/// placeholders) — read from the recorded `usage.spend_unknown`, absent on records that predate the
+/// field. The rollup counts these separately from measured token sums.
+pub fn record_spend_unknown(record: &serde_json::Value) -> bool {
+    record
+        .pointer("/usage/spend_unknown")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// A token+cost tally formatted for display — the single statement of the

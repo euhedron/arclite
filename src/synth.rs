@@ -1565,8 +1565,8 @@ fn union_results<'a>(
     Ok(serde_json::Value::Object(obj))
 }
 
-/// Sum token usage and cost across several runs' usages; the model is the same across them, so take
-/// the first's. The caller guarantees at least one (a fan-out always keeps ≥1 surviving run).
+/// Sum token usage and cost across several runs' usages. The caller guarantees at least one (a
+/// fan-out always keeps ≥1 surviving run).
 fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
     let mut usages = usages;
     let mut total = usages
@@ -1578,6 +1578,19 @@ fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
         total.output_tokens += u.output_tokens;
         total.cache_creation_input_tokens += u.cache_creation_input_tokens;
         total.cache_read_input_tokens += u.cache_read_input_tokens;
+        // The identity that ran: members *can* differ (an errored member reports its requested id;
+        // a substitution could differ mid-fan-out), so a mixed set is reported as the joined ids —
+        // never the first member's id presented as though one model handled every run. Confidence
+        // folds to the weakest: any requested-only member makes the whole total requested-only.
+        if u.model != total.model && !total.model.split(" + ").any(|m| m == u.model) {
+            total.model = format!("{} + {}", total.model, u.model);
+        }
+        if u.model_source == crate::ai::ModelSource::Requested {
+            total.model_source = crate::ai::ModelSource::Requested;
+        }
+        // A member whose spend is unknown makes the total's zeros partial too — carried so the
+        // rollup can't read the sum as fully-measured.
+        total.spend_unknown = total.spend_unknown || u.spend_unknown;
         // Dollar cost folds as the sum of the members that reported one — `None` only when *no*
         // member did (codex fan-outs) — so a single member with an unreported cost (a claude error
         // payload without `total_cost_usd`) can't erase the survivors' known spend. That sum is a

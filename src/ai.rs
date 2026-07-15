@@ -40,6 +40,11 @@ pub struct Usage {
     /// recorded, so a partial total is never presented as exact. `false` for every single run.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub cost_partial: bool,
+    /// True when the run's spend is *unknown* — the child ran but returned no usage, so the zeros
+    /// here are placeholders, not measurements. Recorded so `arc usage` counts these runs as
+    /// unknown-spend rather than folding them into the ordinary token sums as if zero were real.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub spend_unknown: bool,
 }
 
 /// A synthesis result: the model's text plus what it cost.
@@ -220,6 +225,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 .sum(),
             cost_usd: parsed.total_cost_usd,
             cost_partial: false,
+            spend_unknown: false,
         };
         // Prefer human-readable detail — the `errors` list, then a `result` message (a quota-limit
         // refusal carries its message there, under subtype "success") — before the bare `subtype`
@@ -288,6 +294,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             )
         },
     );
+    let any_usage_source = parsed.usage.is_some() || !parsed.model_usage.is_empty();
     let complete = (
         parsed.result,
         parsed.usage,
@@ -312,6 +319,9 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
                 cache_read_input_tokens,
                 cost_usd: parsed.total_cost_usd,
                 cost_partial: false,
+                // Zeros are placeholders (unknown), not measurements, only when *no* token source
+                // parsed at all; salvaged numbers are real spend.
+                spend_unknown: !any_usage_source,
             },
             structured: None,
             error: Some(format!(
@@ -331,30 +341,39 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             cache_read_input_tokens: usage.cache_read_input_tokens,
             cost_usd: Some(cost_usd),
             cost_partial: false,
+            spend_unknown: false,
         },
         structured: parsed.structured_output,
         error: None,
     })
 }
 
+/// The [`Usage`] for a run whose child *ran* but returned no usage at all: zeros marked
+/// `spend_unknown` — placeholders, never measurements — under the necessarily-requested model id.
+/// The one shape every no-usage failure path records, so none of them can register as a measured
+/// zero-token run.
+fn unknown_spend_usage(requested_model: &str) -> Usage {
+    Usage {
+        model: requested_model.to_owned(),
+        model_source: ModelSource::Requested,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cost_usd: None,
+        cost_partial: false,
+        spend_unknown: true,
+    }
+}
+
 /// An errored synthesis for a run whose child *ran* but whose spend is unknowable — the payload was
-/// unparseable, or the usage event never arrived. Zeros with no cost are the honest shape (nothing
-/// to fabricate), and the failure is carried as a value so the run still reaches the log as errored
-/// with its cause, rather than vanishing on a bail after tokens may have burned
-/// (account-for-consumed-cost-on-failure). The model is necessarily the requested one.
+/// unparseable, or the usage event never arrived. Carried as a value so the run still reaches the
+/// log as errored with its cause, rather than vanishing on a bail after tokens may have burned
+/// (account-for-consumed-cost-on-failure).
 fn errored_without_usage(requested_model: &str, message: String) -> Synthesis {
     Synthesis {
         text: String::new(),
-        usage: Usage {
-            model: requested_model.to_owned(),
-            model_source: ModelSource::Requested,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            cost_usd: None,
-            cost_partial: false,
-        },
+        usage: unknown_spend_usage(requested_model),
         structured: None,
         error: Some(message),
     }
@@ -486,8 +505,10 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
     #[derive(Deserialize)]
     struct Entry {
         id: String,
-        #[serde(default)]
-        created: i64,
+        // Optional, honestly: an absent timestamp must not become a fabricated epoch-zero that
+        // silently sorts the entry as "oldest" — undated entries sort after the dated ones and the
+        // count is disclosed on the listing.
+        created: Option<i64>,
     }
     #[derive(Deserialize)]
     struct Page {
@@ -505,7 +526,15 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
     )
     .context("fetching OpenAI's model list")?;
     let mut page: Page = serde_json::from_str(&body).context("parsing OpenAI's model list")?;
-    page.data.sort_by_key(|e| std::cmp::Reverse(e.created));
+    let undated = page.data.iter().filter(|e| e.created.is_none()).count();
+    if undated > 0 {
+        eprintln!(
+            "arclite: {undated} model(s) in OpenAI's listing carry no `created` timestamp — sorted last, not as oldest"
+        );
+    }
+    // Dated entries newest-first; undated ones after them, never fabricated into epoch zero.
+    page.data
+        .sort_by_key(|e| std::cmp::Reverse(e.created.map_or((0, 0), |c| (1, c))));
     Ok(ModelListing {
         models: page
             .data
@@ -529,9 +558,8 @@ const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 /// The codex backend's default model — specified explicitly (not read from codex's own `config.toml`)
 /// so a codex run is self-contained. Update as codex's lineup advances; the run reports the id used.
-/// `gpt-5.6-sol`: the GPT-5.6 flagship (GA 2026-07-09; the `gpt-5.6` alias routes to it) — verified
-/// callable through arc's own codex path (run `1784084700-52822-826236000`) before becoming the
-/// default, per verify-a-model-is-callable-not-just-listed.
+/// Verified callable through arc's own codex path before becoming the default — the repo's evidence
+/// is run `1784084700-52822-826236000` in the run log (verify-a-model-is-callable-not-just-listed).
 const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
 
 /// A synthesis backend — a headless agent CLI arclite drives. It translates a backend-neutral
@@ -585,14 +613,22 @@ pub trait Backend {
     }
 
     /// Reject, before any spend, a requested capability this backend can't honor — surfaced as an
-    /// error, never silently dropped. Default: honor everything. A backend overrides to refuse what it
-    /// lacks; no backend is privileged — each declares its own limits here.
+    /// error, never silently dropped. Default: honor everything, but no backend accepts a tool name
+    /// shaped like an option: the names ride a variadic CLI flag, so a leading-dash value would
+    /// escape its argument slot into the agent CLI's own grammar
+    /// (guard-values-interpolated-into-commands).
     fn reject_unsupported(
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
     ) -> anyhow::Result<()> {
-        let _ = (max_budget_usd, allowed_tools);
+        let _ = max_budget_usd;
+        for tool in allowed_tools {
+            anyhow::ensure!(
+                !tool.starts_with('-') && !tool.is_empty(),
+                "--allow-tool value `{tool}` looks like an option, not a tool name — it would escape its argument slot"
+            );
+        }
         Ok(())
     }
 
@@ -772,13 +808,18 @@ fn drive(
             Ok(line) => line,
             Err(e) => {
                 // The stream is broken but the child is still running — and still metering. Stop it
-                // (best-effort) and reap it before reporting, so an abandoned agent can't keep
-                // consuming tokens after this run records its failure.
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(DriveError::AfterSpawn(
-                    anyhow::Error::new(e).context("reading the agent CLI's output stream"),
-                ));
+                // and reap it before reporting; a kill/reap that *itself* fails is named in the
+                // error (the child may still be consuming), never silently discarded.
+                let mut cleanup = String::new();
+                if let Err(kill) = child.kill() {
+                    cleanup.push_str(&format!(" (killing the agent failed: {kill} — it may still be running and consuming)"));
+                }
+                if let Err(reap) = child.wait() {
+                    cleanup.push_str(&format!(" (reaping the agent failed: {reap})"));
+                }
+                return Err(DriveError::AfterSpawn(anyhow::Error::new(e).context(
+                    format!("reading the agent CLI's output stream{cleanup}"),
+                )));
             }
         };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -958,10 +999,9 @@ fn synthesize_claude(
 /// where judgment quality matters more than latency.
 const CODEX_REASONING_EFFORT: &str = "xhigh";
 
-/// The reasoning-effort levels codex's `model_reasoning_effort` accepts. Update if codex's lineup
-/// changes; [`CODEX_REASONING_EFFORT`] (the default) must be one of these. Shared with the config
-/// key's option list, so the picker and the validator can't drift. (`none` and `max` arrived with
-/// GPT-5.6; `minimal` remains for the 5.5 family.)
+/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference;
+/// update as the lineup changes). [`CODEX_REASONING_EFFORT`] (the default) must be one of these.
+/// Shared with the config key's option list, so the picker and the validator can't drift.
 pub(crate) const CODEX_REASONING_EFFORTS: &[&str] =
     &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -1072,6 +1112,7 @@ impl CodexUsage {
             cache_read_input_tokens: self.cached_input_tokens,
             cost_usd: None, // codex reports tokens only — no fabricated dollar cost
             cost_partial: false,
+            spend_unknown: false,
         }
     }
 }
@@ -1237,8 +1278,8 @@ fn synthesize_codex(
     };
     // A run that failed after spending still gets its cost recorded: carry the failure as a value with
     // the captured usage (the claude contract — [`Synthesis::error`]), so the caller logs an *errored*
-    // run instead of losing the spend on a bail. No captured usage → an all-zeros record: the honest
-    // shape for a run that died before any turn completed.
+    // run instead of losing the spend on a bail. No captured usage → spend UNKNOWN, marked as such —
+    // never a default-zeros record that would register as a measured zero-token run.
     let error = if let Some(msg) = failure {
         Some(format!("codex reported an error: {msg}"))
     } else if !status.success() {
@@ -1249,7 +1290,10 @@ fn synthesize_codex(
     if let Some(error) = error {
         return Ok(Synthesis {
             text: String::new(),
-            usage: usage.unwrap_or_default().into_usage(req.model),
+            usage: usage.map_or_else(
+                || unknown_spend_usage(req.model),
+                |u| u.into_usage(req.model),
+            ),
             structured: None,
             error: Some(error),
         });

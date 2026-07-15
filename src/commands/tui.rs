@@ -1244,12 +1244,38 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // the shell's next prompt reclaims the space the viewport used — no blank gap, no leftover
     // masthead/footer. Order matters: clear + reposition run while raw mode is still on; restore()
     // (which clears nothing) comes last, and runs even if the loop errored (panics go through the hook).
-    let _ = terminal.clear();
+    // Best-effort, but announced: a failed cleanup step can leave the viewport's rows or a hidden
+    // cursor behind, and the user deserves to know why their prompt looks off. Collected and warned
+    // once after restore() (when stderr is safe to write again), never silently discarded.
+    let mut cleanup_failures: Vec<String> = Vec::new();
+    if let Err(e) = terminal.clear() {
+        cleanup_failures.push(format!("clear: {e}"));
+    }
     let origin = terminal.get_frame().area().as_position();
-    let _ = terminal.set_cursor_position(origin);
-    let _ = terminal.show_cursor();
-    let _ = terminal.backend_mut().flush();
+    if let Err(e) = terminal.set_cursor_position(origin) {
+        cleanup_failures.push(format!("cursor reposition: {e}"));
+    }
+    if let Err(e) = terminal.show_cursor() {
+        cleanup_failures.push(format!("show cursor: {e}"));
+    }
+    if let Err(e) = terminal.backend_mut().flush() {
+        cleanup_failures.push(format!("flush: {e}"));
+    }
     ratatui::restore();
+    if !cleanup_failures.is_empty() {
+        // The module-wide print ban guards the TUI's ownership of the terminal; restore() just
+        // ended it, so stderr is the shell's again and the warning belongs there.
+        #[expect(
+            clippy::print_stderr,
+            reason = "after restore() the TUI no longer owns the terminal"
+        )]
+        {
+            eprintln!(
+                "arclite: terminal cleanup partially failed ({}) — the display may need a `reset`",
+                cleanup_failures.join("; ")
+            );
+        }
+    }
     result
 }
 
@@ -1681,41 +1707,34 @@ fn render_home(frame: &mut Frame, area: Rect, cwd_display: &str, note: Option<&s
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
 }
 
-/// Column widths for the live-run table, sized to each field's content: the command verb, a flexing
-/// repo cell (takes the row's slack), the model id, then the compact age/turns/tools/chars counters —
-/// positionally paired with the header labels in [`render_status`].
+/// Live-run table widths — positionally paired with the header labels in [`render_status`].
 const STATUS_COLUMN_WIDTHS: [Constraint; 7] = [
-    Constraint::Length(10), // command
-    Constraint::Min(12),    // repo (flexes to fill the row)
-    Constraint::Length(18), // model id
-    Constraint::Length(6),  // age
-    Constraint::Length(6),  // turns
-    Constraint::Length(6),  // tool calls
-    Constraint::Length(9),  // output chars
+    Constraint::Length(10),
+    Constraint::Min(12),
+    Constraint::Length(18),
+    Constraint::Length(6),
+    Constraint::Length(6),
+    Constraint::Length(6),
+    Constraint::Length(9),
 ];
 
-/// Column widths for the recently-completed tail — positionally paired with the header in
-/// [`render_status`]: age, command, repo, the outcome flag, then cost taking the row's slack (wide
-/// enough for the codex "tokens only" wording).
+/// Recently-completed tail widths — positionally paired with its header in [`render_status`]; the
+/// cost column takes the slack (it must fit the codex "tokens only" wording).
 const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
-    Constraint::Length(8),  // age ("12m ago")
-    Constraint::Length(10), // command
-    Constraint::Length(14), // repo basename
-    Constraint::Length(8),  // outcome (blocked / errored / ok)
-    Constraint::Min(8),     // cost — separate column, takes the slack
+    Constraint::Length(8),
+    Constraint::Length(10),
+    Constraint::Length(14),
+    Constraint::Length(8),
+    Constraint::Min(8),
 ];
 
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
 fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
-    // header line, the in-flight table (flexes to fill), then a short recently-completed tail when
-    // there is one — sized below to its rows. The tail renders as a column-aligned table (a header
-    // above one row per run), like the active table; a log-read failure surfaces as a single line,
-    // and no completed runs collapses the tail to nothing.
     let recent_h = match &snap.recent {
         Ok(tail) if tail.rows.is_empty() => 0,
-        Ok(tail) => tail.rows.len() as u16 + LINE + BORDER, // rows + header row + border
-        Err(_) => LINE + BORDER,                            // one error line + border
+        Ok(tail) => tail.rows.len() as u16 + LINE + BORDER,
+        Err(_) => LINE + BORDER,
     };
     let [header, active_area, recent_area] = Layout::vertical([
         Constraint::Length(LINE),
@@ -1726,9 +1745,7 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
 
     frame.render_widget(Line::from("live status").bold(), header);
 
-    // Registry-health disclosures (unreadable entries, pruned stale markers) — built once and shown
-    // whether or not runs are in flight, so a prune or an unreadable marker is never hidden by an
-    // empty active list.
+    // Registry-health disclosures show whether or not runs are in flight.
     let mut notes = Vec::new();
     if snap.unreadable > 0 {
         notes.push(crate::runs::unreadable_entries(snap.unreadable));
@@ -1760,7 +1777,8 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
             Row::new([
                 r.command.clone(),
                 crate::log::repo_basename(&r.repo).to_owned(),
-                r.model.clone(),
+                // In flight = requested by definition; no response has named the ran model yet.
+                format!("{}{}", r.model, crate::log::MODEL_REQUESTED_SUFFIX),
                 r.age_display(snap.now),
                 r.turns.to_string(),
                 r.tool_calls.to_string(),
@@ -1776,20 +1794,16 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
         frame.render_widget(table, active_area);
     }
 
-    // The recently-completed tail, column-aligned (see `recent_completed`); a log-read failure shows
-    // as a single line instead.
     match &snap.recent {
         Ok(tail) if tail.rows.is_empty() => {}
         Ok(tail) => {
-            // Disclose when older runs are elided (showing N of M), matching the codebase's
-            // elision-disclosure standard (arc log's "… N older run(s)", inspect's "+N more") —
-            // and when unparseable log lines mean "newest parsed" may not be "newest run".
             let mut title = if tail.total > tail.rows.len() {
                 format!("recently completed · {} of {}", tail.rows.len(), tail.total)
             } else {
                 "recently completed".to_owned()
             };
             if tail.unparsed > 0 {
+                // With corrupt lines in the log, "newest parsed" may not be "newest run".
                 title.push_str(&format!(" · {}", crate::log::unparsed_note(tail.unparsed)));
             }
             let table = Table::new(

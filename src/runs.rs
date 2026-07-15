@@ -17,6 +17,9 @@ pub struct ActiveRun {
     pub index: usize,
     pub command: String,
     pub repo: String,
+    /// The *requested* model id: a marker is written before any response could name the model that
+    /// ran, so every view of an active run qualifies this identity rather than presenting it as
+    /// confirmed (report-the-identity-that-ran).
     pub model: String,
     pub started_at: u64,
     /// Live progress, updated as the run streams. Every field is written at registration, so there

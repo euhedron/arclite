@@ -370,7 +370,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
     let usage = match run.get("usage") {
         Some(u) => {
             let t = crate::log::usage_tokens(u);
-            format!(
+            let mut line = format!(
                 "tokens: {}",
                 crate::log::usage_display(
                     t.input,
@@ -384,7 +384,21 @@ pub(crate) fn stored_human(v: &Value) -> String {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                 )
-            )
+            );
+            // The same honesty markers the rollup applies: placeholder zeros and mangled fields
+            // must not replay as measurements.
+            if crate::log::record_spend_unknown(&run) {
+                line.push_str(
+                    " · spend unknown (the backend returned no usage; zeros are placeholders)",
+                );
+            }
+            if t.malformed > 0 {
+                line.push_str(&format!(
+                    " · {} usage field(s) absent or non-numeric, read as 0",
+                    t.malformed
+                ));
+            }
+            line
         }
         None => format!("cost: {}", crate::log::COST_NO_USAGE),
     };
