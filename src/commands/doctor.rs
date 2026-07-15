@@ -40,8 +40,9 @@ struct Runtime {
 struct Tools {
     cargo: ToolStatus,
     git: ToolStatus,
-    /// `curl`, needed only for `arc update --apply` (the binary download) — probed so doctor surfaces
-    /// the dependency up front rather than letting a user hit it mid-update.
+    /// `curl` — arclite's outbound-HTTP path (`arc update --apply`'s binary download, and the
+    /// provider model listings behind `arc models` / the TUI's pickers) — probed so doctor surfaces
+    /// the dependency up front rather than letting a user hit it mid-command.
     curl: ToolStatus,
     /// Each known synthesis backend ([`crate::ai::known_backends`]) and its detected status — probed
     /// from that one registry, so a new backend is checked here automatically rather than silently missed.
@@ -337,10 +338,9 @@ pub(crate) fn human(report: &Report) -> String {
         row("git", &report.tools.git.display("not found")),
         row(
             "curl",
-            &report
-                .tools
-                .curl
-                .display("not found (needed only for arc update --apply)"),
+            &report.tools.curl.display(
+                "not found (needed for arc update --apply and the provider model listings)",
+            ),
         ),
     ];
     for b in &report.tools.backends {

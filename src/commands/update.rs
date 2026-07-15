@@ -32,7 +32,11 @@ type Version = [u64; 3];
 /// The version check consults git over HTTPS with the credential a push already uses — no token — so it
 /// works wherever git does; only the `--apply` download needs [`AUTH_ENV`].
 pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    clean_stale_backup(); // tidy a prior --apply's leftover backup, best-effort
+    // Tidy a prior --apply's leftover backup, best-effort. Windows-only in fact as well as in doc:
+    // only the Windows install path ever writes the `.old` sidecar, and an unconditional remove on
+    // Unix could delete a same-named sibling file the updater never created.
+    #[cfg(windows)]
+    clean_stale_backup();
     let current = current_version();
     let latest = latest_version()?;
     let available = latest > current;
@@ -328,6 +332,8 @@ fn curl_get(
 
 /// Suffix of the backup the Windows swap leaves beside the exe — named once so [`install`] (which
 /// writes it) and [`clean_stale_backup`] (which must delete exactly that name) cannot disagree.
+/// Windows-only like its two users: no Unix code may ever touch the name.
+#[cfg(windows)]
 const BACKUP_SUFFIX: &str = ".old";
 
 /// Install `new` over the running binary `exe`. On Windows a running `.exe` can't be overwritten but
@@ -393,7 +399,9 @@ fn install(exe: &Path, new: &Path) -> anyhow::Result<()> {
 /// Remove a [`BACKUP_SUFFIX`] backup a prior Windows `--apply` left behind. Absent is the normal case (silent); a
 /// present-but-undeletable backup (the prior binary may still be running) is benign and retried on a
 /// later run, but it's surfaced — matching the codebase's warn-on-cleanup-failure standard — rather
-/// than swallowed. A no-op on Unix, which replaces the binary atomically and never writes a backup.
+/// than swallowed. Compiled (and called) on Windows only: Unix replaces the binary atomically, never
+/// writes a backup, and must not delete a same-named file it didn't create.
+#[cfg(windows)]
 fn clean_stale_backup() {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,

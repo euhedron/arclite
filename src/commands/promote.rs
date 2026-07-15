@@ -126,8 +126,15 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         }
     };
 
+    // The runnable spelling of the verb is `arc run <verb>` (the run group, cli::NAME_RUN) — the
+    // summary and the ledger entries must name a command that exists, not `arc audit`.
+    let invocation = format!(
+        "{} {} {command}",
+        crate::cli::binary_name(),
+        crate::cli::NAME_RUN
+    );
     let head = format!(
-        "{}{} {} finding(s) from run {run_id} (`arc {command}`) into {}:",
+        "{}{} {} finding(s) from run {run_id} (`{invocation}`) into {}:",
         if args.dry_run { "[dry run] " } else { "" },
         if args.dry_run {
             "would promote"
@@ -251,6 +258,13 @@ fn entry_md(
     let commit_line = commit.map_or_else(String::new, |c| format!("commit: {c}\n"));
     let recorded_line = recorded.map_or_else(String::new, |r| format!("recorded: {r}\n"));
     let against = commit.map_or_else(String::new, |c| format!(" against commit `{c}`"));
+    // The runnable spelling: synthesis verbs live under the run group (`arc run <verb>`), so the
+    // provenance names a command a reader can actually invoke.
+    let invocation = format!(
+        "{} {} {command}",
+        crate::cli::binary_name(),
+        crate::cli::NAME_RUN
+    );
     format!(
         "---\n\
          id: {id}\n\
@@ -259,7 +273,7 @@ fn entry_md(
          system_run_id: {run_id}\n\
          {commit_line}{recorded_line}---\n\n\
          ## Claim\n{claim}\n\n\
-         ## Evidence\nPromoted from `arc {command}` run `{run_id}`{against} — see `arc log {run_id}` for the full run and its note.\n\n\
+         ## Evidence\nPromoted from `{invocation}` run `{run_id}`{against} — see `arc log {run_id}` for the full run and its note.\n\n\
          ## Why It Matters\n\n\
          ## Next Action\n\n\
          ## Resolution\n"

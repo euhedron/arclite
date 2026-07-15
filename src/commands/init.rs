@@ -103,6 +103,14 @@ fn ensure_dir(
         .try_exists()
         .with_context(|| format!("cannot access {}", dir.display()))?
     {
+        // "Already there" only counts when it's actually a directory: a *file* squatting on the name
+        // would be reported as skipped while the scaffolded settings point at an unusable rules
+        // source — a scaffold that looks successful and resolves to nothing. Surface it instead.
+        anyhow::ensure!(
+            crate::try_is_dir(dir).with_context(|| format!("cannot access {}", dir.display()))?,
+            "{} exists but is not a directory — move it aside so init can scaffold the directory",
+            dir.display()
+        );
         skipped.push(dir.display().to_string());
     } else {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;

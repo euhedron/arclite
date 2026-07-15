@@ -275,11 +275,24 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
             .create(true)
             .append(true)
             .open(p)?;
-        // One `write_all` of the record *and* its newline — a single append-positioned write the OS
-        // serializes — so two sessions logging to the shared `runs.jsonl` at once can't interleave into
-        // a corrupt line (a `writeln!`'s separate content and newline writes could). A run record is
-        // well under the atomic-write size, so this doesn't partial-write.
-        file.write_all(format!("{line}\n").as_bytes())
+        // ONE `write` call of the record *and* its newline: the kernel atomically positions each
+        // single write at EOF under O_APPEND, so concurrent sessions logging to the shared
+        // `runs.jsonl` can't interleave *within* a call — a guarantee `write_all` would forfeit,
+        // since its retry loop may split the buffer across calls. A rare partial write is therefore
+        // surfaced as this best-effort append's failure (the log reader already tolerates and
+        // discloses an unparsable line) instead of silently continued into an interleaving risk.
+        let buf = format!("{line}\n");
+        let n = file.write(buf.as_bytes())?;
+        if n != buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!(
+                    "partial append ({n} of {} bytes) — the record line may be truncated",
+                    buf.len()
+                ),
+            ));
+        }
+        Ok(())
     })
 }
 
