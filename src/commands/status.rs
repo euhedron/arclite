@@ -7,6 +7,7 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         runs: active,
         unreadable,
         pruned,
+        prune_failed,
     } = crate::runs::active()?;
     let now = crate::log::now_secs();
     let mut lines = Vec::new();
@@ -44,11 +45,17 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if !pruned.is_empty() {
         lines.push(crate::runs::pruned_entries(pruned.len()));
     }
+    // A confirmed-dead marker whose removal failed is excluded from active but NOT claimed pruned —
+    // the best-effort cleanup announces its failure instead of hiding it.
+    if !prune_failed.is_empty() {
+        lines.push(crate::runs::prune_failed_entries(prune_failed.len()));
+    }
     let human = lines.join("\n");
     let payload = serde_json::json!({
         "active": &active,
         "unreadable": unreadable.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         "pruned": pruned.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "prune_failed": prune_failed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
     });
     emit(&payload, &human, global.json)
 }

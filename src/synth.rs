@@ -1121,28 +1121,32 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let text = synthesis.text;
     // For an errored synthesis ([`ai::Synthesis::error`]), the gate and `--output` don't apply and the
     // body is the failure itself — but it's still logged below (with its real spend) and exits non-zero.
-    let errored = synthesis.error;
+    let mut errored = synthesis.error;
+    // Count the gated findings. The schema guarantees the field is a present array; a missing one is
+    // the channel ignoring the requested schema — but by this point the synthesis has *spent*, so the
+    // contract failure joins the errored-run path (logged with its real usage, non-zero exit) rather
+    // than bailing, which would drop the consumed cost from accounting. Never a 0-pass either way.
+    let gate_findings = match (errored.is_some(), opts.gate) {
+        (false, Some(field)) => match structured
+            .as_ref()
+            .and_then(|v| v.get(field))
+            .and_then(serde_json::Value::as_array)
+        {
+            Some(items) => Some(items.len()),
+            None => {
+                errored = Some(format!(
+                    "gated on `{field}` but the result has no `{field}` array — the structured output slipped the declared schema"
+                ));
+                None
+            }
+        },
+        _ => None,
+    };
     let is_errored = errored.is_some();
     let cost = crate::log::cost_or_unavailable(usage.cost_usd);
     let body = match &errored {
         Some(error) => format!("error: {error}"),
         None => body_display(structured.as_ref(), &text),
-    };
-    // Count the gated findings before `structured` is moved out. The schema guarantees the field is
-    // a present array; a missing one is the CLI ignoring the requested schema — an error, not a 0-pass.
-    // A failed run has no findings to gate.
-    let gate_findings = match (is_errored, opts.gate) {
-        (false, Some(field)) => Some(
-            structured
-                .as_ref()
-                .and_then(|v| v.get(field))
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("gated on `{field}` but the result has no `{field}` array")
-                })?
-                .len(),
-        ),
-        _ => None,
     };
     // A gated fan-out (`--fail-on-findings --runs N`) that lost runs can't certify "clean" — the
     // dropped runs' coverage is missing — so fail closed: block even when the survivors found nothing.
@@ -1227,7 +1231,9 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             ts,
             version: env!("CARGO_PKG_VERSION"),
             command: opts.command,
-            repo: opts.dir.display().to_string(),
+            // The recorded form promote/retire later reopen as a path — the shared lossless
+            // conversion, not display formatting (confine-display-formatting-to-output).
+            repo: crate::log::repo_record_string(opts.dir),
             commit: repo_commit(opts.dir),
             model: &report.model,
             backend: opts.backend,

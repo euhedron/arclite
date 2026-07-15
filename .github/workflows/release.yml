@@ -5,8 +5,10 @@ name: Release
 # BOTH macOS arches on the Apple-Silicon runner (aarch64 native, x86_64 cross-compiled — one macOS SDK
 # builds both). We deliberately avoid a separate Intel-macOS (`macos-13`) runner: in the v0.1.4 release
 # that job never obtained a runner and GitHub auto-cancelled it at the documented 24h queue limit, while
-# every other job started within seconds. Asset names match what `arc update --apply` fetches:
-# `arc-v<version>-<os>-<arch>[.exe]`, from Rust's `std::env::consts::{OS,ARCH}` (see update.rs::binary_name).
+# every other job started within seconds. Asset names must be exactly what `arc update --apply` fetches
+# — the convention lives in update.rs::asset_name, and the
+# `release_workflow_assets_follow_the_one_naming_convention` test holds this matrix to it (edit either
+# side alone and `cargo test` fails).
 on:
   push:
     tags: ['v*']

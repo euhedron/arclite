@@ -117,7 +117,8 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
             pid: std::process::id(),
             index,
             command: command.to_owned(),
-            repo: repo.display().to_string(),
+            // The shared recorded form (see log::repo_record_string) — not display formatting.
+            repo: crate::log::repo_record_string(repo),
             model: model.to_owned(),
             started_at: crate::log::now_secs(),
             turns: 0,
@@ -130,12 +131,15 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
     Some(active)
 }
 
-/// The registry as one read sees it: the live runs, entries that couldn't be read or parsed, and
-/// the stale markers this read pruned (hard-killed runs' corpses — see [`active`]).
+/// The registry as one read sees it: the live runs, entries that couldn't be read or parsed, the
+/// stale markers this read pruned (hard-killed runs' corpses — see [`active`]), and the confirmed-dead
+/// markers whose removal *failed* — excluded from the active list like the pruned, but disclosed
+/// separately, since the cleanup is best-effort and its failure must not read as done.
 pub struct Registry {
     pub runs: Vec<ActiveRun>,
     pub unreadable: Vec<PathBuf>,
     pub pruned: Vec<PathBuf>,
+    pub prune_failed: Vec<PathBuf>,
 }
 
 /// Whether process `pid` is alive, probed with the platform's own tool. Unix: `kill -0`, judged by
@@ -193,6 +197,7 @@ pub fn active() -> anyhow::Result<Registry> {
         runs: Vec::new(),
         unreadable: Vec::new(),
         pruned: Vec::new(),
+        prune_failed: Vec::new(),
     };
     let Some(dir) = dir() else {
         return Ok(registry);
@@ -217,8 +222,16 @@ pub fn active() -> anyhow::Result<Registry> {
             Ok(Some(text)) => match serde_json::from_str::<ActiveRun>(&text) {
                 Ok(run) => {
                     if process_alive(run.pid) == Some(false) {
-                        let _ = std::fs::remove_file(&path);
-                        registry.pruned.push(path);
+                        // The dead marker never reports as active either way; which disclosure list
+                        // it lands in states whether the cleanup actually happened. Racing away
+                        // (NotFound) is a prune that another reader finished first.
+                        match std::fs::remove_file(&path) {
+                            Ok(()) => registry.pruned.push(path),
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                registry.pruned.push(path);
+                            }
+                            Err(_) => registry.prune_failed.push(path),
+                        }
                     } else {
                         registry.runs.push(run);
                     }
@@ -237,6 +250,15 @@ pub fn active() -> anyhow::Result<Registry> {
 pub fn pruned_entries(count: usize) -> String {
     format!(
         "pruned {count} stale marker{} (process gone — a hard-killed run)",
+        if count == 1 { "" } else { "s" }
+    )
+}
+
+/// Human phrasing for confirmed-dead markers whose best-effort removal failed — shared by `arc status`
+/// and the TUI, like [`pruned_entries`]. Not counted as pruned: the file is still there.
+pub fn prune_failed_entries(count: usize) -> String {
+    format!(
+        "{count} stale marker{} could not be removed (dead run; still on disk — will retry next read)",
         if count == 1 { "" } else { "s" }
     )
 }

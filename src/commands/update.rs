@@ -275,13 +275,19 @@ fn release_asset_id(target: Version, name: &str, auth: Option<&str>) -> anyhow::
         })
 }
 
-/// The release artifact name for the running platform — `arc-v<version>-<os>-<arch><exe-suffix>`. Must
-/// match the asset names the release workflow uploads (`.github/workflows/release.yml`); a mismatch
+/// The release-asset naming convention, stated once: `arc-<tag>-<os>-<arch><exe-suffix>` (the tag
+/// carries its `v`). [`binary_name`] instantiates it for the running platform, and the
+/// `release_workflow_assets_follow_the_one_naming_convention` test holds the release workflow's
+/// hand-written matrix to the same format — the enforcement behind "these must match".
+fn asset_name(tag: &str, os: &str, arch: &str, exe_suffix: &str) -> String {
+    format!("arc-{tag}-{os}-{arch}{exe_suffix}")
+}
+
+/// The release artifact name for the running platform. A mismatch against the published assets
 /// surfaces as a download 404 (a clear failure), never a silently wrong file.
 fn binary_name(v: Version) -> String {
-    format!(
-        "arc-v{}-{}-{}{}",
-        version_string(v),
+    asset_name(
+        &format!("v{}", version_string(v)),
         std::env::consts::OS,
         std::env::consts::ARCH,
         std::env::consts::EXE_SUFFIX,
@@ -470,6 +476,41 @@ mod tests {
         assert!(name.ends_with(std::env::consts::EXE_SUFFIX));
         #[cfg(all(windows, target_arch = "x86_64"))]
         assert_eq!(name, "arc-v0.1.2-windows-x86_64.exe"); // the exact name published today
+    }
+
+    /// The workflow's hand-written asset matrix can't be generated from [`asset_name`] (YAML can't
+    /// call it), so this test is the enforcement that keeps the two homes one: every published
+    /// platform's `asset:` line must be exactly what `asset_name` produces for it, and the count
+    /// must match, so adding a platform to one side without the other fails here — not as a
+    /// download 404 months later.
+    #[test]
+    fn release_workflow_assets_follow_the_one_naming_convention() {
+        let yml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/.github/workflows/release.yml"
+        ))
+        .expect("the release workflow exists at its documented path");
+        // The published platforms: (os, arch, exe-suffix) per matrix row, tag as the workflow
+        // interpolates it.
+        let tag = "${{ github.ref_name }}";
+        let platforms = [
+            ("linux", "x86_64", ""),
+            ("macos", "aarch64", ""),
+            ("macos", "x86_64", ""),
+            ("windows", "x86_64", ".exe"),
+        ];
+        for (os, arch, exe) in platforms {
+            let expected = format!("asset: {}", asset_name(tag, os, arch, exe));
+            assert!(
+                yml.contains(&expected),
+                "release.yml is missing `{expected}` — the matrix drifted from asset_name()"
+            );
+        }
+        assert_eq!(
+            yml.matches("asset: ").count(),
+            platforms.len(),
+            "release.yml publishes a platform this test doesn't pin — add it to the list"
+        );
     }
 
     #[test]

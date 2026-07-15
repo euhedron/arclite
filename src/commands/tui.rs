@@ -1054,6 +1054,9 @@ struct Snapshot {
     /// Stale markers (dead-pid corpses of hard-killed runs) this read pruned — disclosed in the view,
     /// since each was showing as an active run until now.
     pruned: usize,
+    /// Confirmed-dead markers whose best-effort removal failed — excluded from active but not claimed
+    /// pruned; the failed cleanup is disclosed, never silent.
+    prune_failed: usize,
     now: u64,
     error: Option<String>,
     /// The recently-completed tail (newest-first column cells + the total completed-run count, one
@@ -1073,6 +1076,7 @@ impl Snapshot {
                 active: registry.runs,
                 unreadable: registry.unreadable.len(),
                 pruned: registry.pruned.len(),
+                prune_failed: registry.prune_failed.len(),
                 now,
                 error: None,
                 recent,
@@ -1081,6 +1085,7 @@ impl Snapshot {
                 active: Vec::new(),
                 unreadable: 0,
                 pruned: 0,
+                prune_failed: 0,
                 now,
                 error: Some(format!("{e:#}")),
                 recent,
@@ -1626,6 +1631,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
     }
     if snap.pruned > 0 {
         notes.push(crate::runs::pruned_entries(snap.pruned));
+    }
+    if snap.prune_failed > 0 {
+        notes.push(crate::runs::prune_failed_entries(snap.prune_failed));
     }
     let disclosure = if notes.is_empty() {
         String::new()
@@ -2550,6 +2558,7 @@ mod tests {
             active: Vec::new(),
             unreadable: 0,
             pruned: 0,
+            prune_failed: 0,
             now: 100,
             error: None,
             recent: Ok(RecentTail {
