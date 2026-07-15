@@ -213,8 +213,9 @@ pub enum ConfigAction {
     Set {
         /// The setting key — `arc config list` shows the known keys.
         key: String,
-        /// The value (validated and typed per key).
-        value: String,
+        /// The value (validated and typed per key). For the secret keys (`api_keys.*`) omit it:
+        /// the value is read from stdin instead, so a credential never rides argv or shell history.
+        value: Option<String>,
         /// Write the user layer (`~/.arc/settings.json`) instead of the project's.
         #[arg(long)]
         user: bool,

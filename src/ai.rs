@@ -423,7 +423,10 @@ const DEFAULT_MODEL: &str = "claude-opus-4-8";
 
 /// The codex backend's default model — specified explicitly (not read from codex's own `config.toml`)
 /// so a codex run is self-contained. Update as codex's lineup advances; the run reports the id used.
-const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
+/// `gpt-5.6-sol`: the GPT-5.6 flagship (GA 2026-07-09; the `gpt-5.6` alias routes to it) — verified
+/// callable through arc's own codex path (run `1784084700-52822-826236000`) before becoming the
+/// default, per verify-a-model-is-callable-not-just-listed.
+const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
 
 /// A synthesis backend — a headless agent CLI arclite drives. It translates a backend-neutral
 /// [`Request`] into that CLI's own invocation, folds the CLI's streamed events into the live-progress
@@ -543,10 +546,11 @@ fn provider_key(env_var: &str, saved: Option<&str>, setting_key: &str) -> Option
     saved.map(|key| (key.to_owned(), format!("{setting_key} (user settings)")))
 }
 
-/// The no-key error for a model listing — names both ways to supply one.
+/// The no-key error for a model listing — names both ways to supply one. The save path reads the
+/// key from stdin, so the recommendation never puts a secret on argv or into shell history.
 fn key_hint(env_var: &str, setting_key: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "no API key for the model listing — set {env_var}, or save one with `arc config set {setting_key} <key>` (auto-saved to the user layer)"
+        "no API key for the model listing — set {env_var}, or save one with `arc config set {setting_key}` (reads the key from stdin; auto-saved to the user layer)"
     )
 }
 
@@ -605,17 +609,33 @@ impl Backend for ClaudeBackend {
 /// non-JSON lines skipped — then return the exit status and captured stderr. The shared process-driving
 /// scaffold: the backends differ only in how they build `cmd` and what they fold from each event, so
 /// this plumbing lives here once and can't drift.
+///
+/// The two failure classes stay distinguishable for the accounting contract: a *launch* failure
+/// (spawn) is a hard `Err` — nothing ran, nothing spent — while any error after the child is live
+/// (a broken stream read, a failed wait) returns through [`DriveError::AfterSpawn`], because the
+/// child may have metered tokens by then and the caller must record an errored run, never bail
+/// (account-for-consumed-cost-on-failure).
+enum DriveError {
+    /// The process never started; nothing spent. Carries the launch error.
+    Launch(anyhow::Error),
+    /// The process ran, then the drive failed; spend is possible and must be accounted.
+    AfterSpawn(anyhow::Error),
+}
+
 fn drive(
     mut cmd: Command,
     prompt: &str,
     launch_err: &'static str,
     mut on_event: impl FnMut(&str, &serde_json::Value, &str),
-) -> anyhow::Result<(std::process::ExitStatus, String)> {
+) -> Result<(std::process::ExitStatus, String), DriveError> {
     cmd.current_dir(std::env::temp_dir()) // neutral cwd; the agent's working root is set per-backend
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd.spawn().context(launch_err)?;
+    let mut child = cmd
+        .spawn()
+        .context(launch_err)
+        .map_err(DriveError::Launch)?;
     // Write the prompt on its own thread, concurrently with draining stdout/stderr below: writing it
     // all first (a large prompt on a small pipe buffer, notably Windows) deadlocks if the child emits
     // output before consuming stdin — its output pipe fills while we're blocked writing stdin. The
@@ -638,7 +658,14 @@ fn drive(
     });
     let stdout = child.stdout.take().expect("stdout was configured as piped");
     for line in std::io::BufReader::new(stdout).lines() {
-        let line = line?;
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                return Err(DriveError::AfterSpawn(
+                    anyhow::Error::new(e).context("reading the agent CLI's output stream"),
+                ));
+            }
+        };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue; // non-JSON noise (e.g. a stdin warning) — skip
         };
@@ -648,7 +675,9 @@ fn drive(
             .unwrap_or_default();
         on_event(kind, &event, &line);
     }
-    let status = child.wait()?;
+    let status = child.wait().map_err(|e| {
+        DriveError::AfterSpawn(anyhow::Error::new(e).context("waiting for the agent CLI"))
+    })?;
     let stderr = stderr_reader
         .join()
         .expect("the stderr reader thread panicked");
@@ -703,7 +732,7 @@ fn synthesize_claude(
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     }
     let mut result_line: Option<String> = None;
-    let (status, stderr) = drive(
+    let driven = drive(
         cmd,
         req.prompt,
         "failed to launch `claude` — is the Claude Code CLI installed and on PATH?",
@@ -744,7 +773,20 @@ fn synthesize_claude(
             "result" => result_line = Some(raw.to_owned()),
             _ => {}
         },
-    )?;
+    );
+    // Launch failures bail (nothing ran, nothing spent); any failure after the child was live —
+    // a broken stream read, a failed wait — is a metered run whose spend is unknown, carried as an
+    // errored synthesis so it reaches the log (account-for-consumed-cost-on-failure).
+    let (status, stderr) = match driven {
+        Ok(driven) => driven,
+        Err(DriveError::Launch(e)) => return Err(e),
+        Err(DriveError::AfterSpawn(e)) => {
+            return Ok(errored_without_usage(
+                req.model,
+                format!("claude's stream failed after launch — spend unknown: {e:#}"),
+            ));
+        }
+    };
     // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
     // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
     // The child *ran* on every path below, so tokens may have burned even where no payload came back:
@@ -799,8 +841,10 @@ const CODEX_REASONING_EFFORT: &str = "xhigh";
 
 /// The reasoning-effort levels codex's `model_reasoning_effort` accepts. Update if codex's lineup
 /// changes; [`CODEX_REASONING_EFFORT`] (the default) must be one of these. Shared with the config
-/// key's option list, so the picker and the validator can't drift.
-pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+/// key's option list, so the picker and the validator can't drift. (`none` and `max` arrived with
+/// GPT-5.6; `minimal` remains for the 5.5 family.)
+pub(crate) const CODEX_REASONING_EFFORTS: &[&str] =
+    &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
 /// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.
@@ -1049,13 +1093,14 @@ fn synthesize_codex(
             ));
         }
     };
-    // A transport-level failure (a broken stream read, a failed wait) after usage was captured is
-    // still a run that spent: carry it as an errored run with that usage, like every other
-    // failure-after-spend. With no usage in hand nothing is known to have been spent, so the
-    // launch-style hard bail stands.
+    // Launch failures bail (nothing ran, nothing spent). Any failure after the child was live — a
+    // broken stream read, a failed wait — is a metered run: with captured usage it's recorded as
+    // that spend; without, as spend-unknown zeros. Either way an errored run reaches the log
+    // (account-for-consumed-cost-on-failure), never a bail that loses it.
     let (status, stderr) = match driven {
         Ok(driven) => driven,
-        Err(e) => {
+        Err(DriveError::Launch(e)) => return Err(e),
+        Err(DriveError::AfterSpawn(e)) => {
             if let Some(usage) = usage {
                 return Ok(Synthesis {
                     text: String::new(),
@@ -1064,7 +1109,10 @@ fn synthesize_codex(
                     error: Some(format!("codex's stream failed after spend: {e:#}")),
                 });
             }
-            return Err(e);
+            return Ok(errored_without_usage(
+                req.model,
+                format!("codex's stream failed after launch — spend unknown: {e:#}"),
+            ));
         }
     };
     // A run that failed after spending still gets its cost recorded: carry the failure as a value with

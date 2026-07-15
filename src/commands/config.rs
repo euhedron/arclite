@@ -200,7 +200,28 @@ pub fn run(args: &ConfigArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     match &args.action {
         ConfigAction::List => list(global),
         ConfigAction::Get { key } => get(key, global),
-        ConfigAction::Set { key, value, user } => set(key, value, *user, global),
+        ConfigAction::Set { key, value, user } => {
+            // A secret's value comes from stdin when omitted — never argv, where the process table
+            // and shell history would hold it (keep-secrets-out-of-process-arguments). A non-secret
+            // key still requires its value inline; prompting for plain settings would just be
+            // friction.
+            let value = match (value, user_layer_only(key)) {
+                (Some(v), _) => v.clone(),
+                (None, true) => {
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .context("reading the secret from stdin")?;
+                    line.trim().to_owned()
+                }
+                (None, false) => {
+                    anyhow::bail!(
+                        "`{key}` needs a value: arc config set {key} <value> (only the api_keys.* secrets read from stdin)"
+                    )
+                }
+            };
+            set(key, &value, *user, global)
+        }
     }
 }
 
