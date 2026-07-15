@@ -145,20 +145,28 @@ pub struct Registry {
     pub prune_failed: Vec<PathBuf>,
 }
 
-/// Whether process `pid` is alive, probed with the platform's own tool. Unix: `kill -0`, judged by
-/// exit code alone — no output parsing, so locales can't skew it; a nonzero exit means no such
-/// process *or* a recycled pid now owned by another user, and either way it is not this user's
-/// in-flight arc run. Windows: `tasklist` filtered to the pid in its machine-readable CSV mode
-/// (`/FO CSV`), matched on the pid as the quoted second column — a stable field position, not the
-/// human table's presentation whitespace (and the no-match notice isn't CSV, so it can't match).
-/// `None` when the probe itself couldn't run — can't-tell, which callers must
-/// treat as alive: wrongly keeping a dead run's marker over-reports it, wrongly pruning a live
-/// run's hides real in-flight spend, so an inconclusive probe must not green-light deletion.
+/// Whether process `pid` is alive, probed with the platform's own tool — resolved by explicit
+/// system path (like [`crate::http::curl_program`]), not a PATH lookup a shadowing binary could
+/// answer: this probe's verdict green-lights marker deletion, so it must come from the platform's
+/// tool. Unix: `kill -0`, judged by exit code alone — no output parsing, so locales can't skew it;
+/// a nonzero exit means no such process *or* a recycled pid now owned by another user, and either
+/// way it is not this user's in-flight arc run. Windows: `System32\tasklist.exe` filtered to the
+/// pid in its machine-readable CSV mode (`/FO CSV`), matched on the pid as the quoted second field
+/// split on the `","` delimiter itself — raw commas *inside* the quoted image name don't shift the
+/// columns, and `"` can't appear in a Windows image name to forge one (the no-match notice isn't
+/// CSV, so it can't match). `None` when the probe itself couldn't run — can't-tell, which callers
+/// must treat as alive: wrongly keeping a dead run's marker over-reports it, wrongly pruning a
+/// live run's hides real in-flight spend, so an inconclusive probe must not green-light deletion.
 fn process_alive(pid: u32) -> Option<bool> {
     #[cfg(unix)]
     {
-        let status = crate::ai::command("kill")
-            .ok()?
+        // Both canonical homes: macOS and usr-merged Linux ship /bin/kill; older split-/usr
+        // layouts put procps kill in /usr/bin.
+        let kill = crate::http::system_binary(
+            &[PathBuf::from("/bin/kill"), PathBuf::from("/usr/bin/kill")],
+            "kill",
+        );
+        let status = std::process::Command::new(kill)
             .args(["-0", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -168,21 +176,27 @@ fn process_alive(pid: u32) -> Option<bool> {
     }
     #[cfg(windows)]
     {
-        let output = crate::ai::command("tasklist")
-            .ok()?
+        // SystemRoot unset means the trusted path can't be built at all — inconclusive (None),
+        // never a silent downgrade to an arbitrary PATH tasklist (curl_program's posture, applied
+        // to the probe's can't-tell direction).
+        let root = std::env::var_os("SystemRoot")?;
+        let tasklist = std::path::Path::new(&root)
+            .join("System32")
+            .join("tasklist.exe");
+        let output = std::process::Command::new(tasklist)
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
             .output()
             .ok()?;
         if !output.status.success() {
             return None;
         }
-        // CSV rows are `"Image Name","PID",...` — the pid is the quoted second field. The
-        // no-match case prints a prose notice, which contains no such quoted field.
-        let needle = format!("\"{pid}\"");
+        // `"Image Name","PID",...` — split on the `","` boundary, so a comma inside the quoted
+        // image name can't shift the pid into view or a neighbor into the pid column.
+        let needle = pid.to_string();
         let text = String::from_utf8_lossy(&output.stdout);
         Some(
             text.lines()
-                .any(|line| line.split(',').nth(1) == Some(needle.as_str())),
+                .any(|line| line.split("\",\"").nth(1) == Some(needle.as_str())),
         )
     }
 }

@@ -36,6 +36,12 @@ pub fn run(args: &ModelsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 if listing.truncated {
                     lines.push("  … the provider reports more pages exist".to_owned());
                 }
+                if listing.undated > 0 {
+                    lines.push(format!(
+                        "  note: {} model(s) carry no `created` timestamp — sorted last, not as oldest",
+                        listing.undated
+                    ));
+                }
                 payload.insert(
                     name.to_owned(),
                     serde_json::json!({
@@ -45,6 +51,7 @@ pub fn run(args: &ModelsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                         })).collect::<Vec<_>>(),
                         "key_source": listing.key_source,
                         "truncated": listing.truncated,
+                        "undated": listing.undated,
                     }),
                 );
             }

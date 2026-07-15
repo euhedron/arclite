@@ -113,12 +113,20 @@ pub(crate) fn curl_program() -> anyhow::Result<PathBuf> {
     };
     #[cfg(not(windows))]
     let system_curl = PathBuf::from("/usr/bin/curl");
-    // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
-    // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
-    // can't-tell as present — keeping absent distinct from unreadable. Confirmed absence (a system
-    // that ships no curl at the canonical path) is the one case PATH serves — this disclosed line.
-    if system_curl.try_exists().unwrap_or(true) {
-        return Ok(system_curl);
+    Ok(system_binary(&[system_curl], "curl"))
+}
+
+/// Resolve a trusted tool by explicit system path: the first `candidate` not *confirmed* absent
+/// wins. An unreadable or uncertain probe (`try_exists` Err) must not collapse into "absent" and
+/// fall back to a possibly-shadowing PATH binary, so can't-tell counts as present — keeping absent
+/// distinct from unreadable. Confirmed absence at every canonical path is the one case PATH serves
+/// (this disclosed line). Shared by every trusted-tool resolution (curl here, the liveness probe's
+/// kill), so the posture can't drift per call site.
+pub(crate) fn system_binary(candidates: &[PathBuf], bare: &str) -> PathBuf {
+    for candidate in candidates {
+        if candidate.try_exists().unwrap_or(true) {
+            return candidate.clone();
+        }
     }
-    Ok(PathBuf::from("curl"))
+    PathBuf::from(bare)
 }

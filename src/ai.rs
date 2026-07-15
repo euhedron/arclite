@@ -26,7 +26,15 @@ pub enum ModelSource {
 /// reports token usage but no cost (codex reports tokens only — no fabricated estimate).
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
+    /// The display form of `models` — its members joined with " + " when several ran. Rendering
+    /// only; code that needs the identities reads `models`, never re-splits this prose.
     pub model: String,
+    /// The identity set as data: every model the response confirmed ran (or the one requested id
+    /// when nothing was confirmed). The structured source `model` is derived from; fan-out
+    /// aggregation merges these, not the display strings. Serialized only when it says more than
+    /// `model` does (several members).
+    #[serde(skip_serializing_if = "one_or_fewer")]
+    pub models: Vec<String>,
     /// Whether `model` came from the response or is the unconfirmed requested id — disclosed in the
     /// report and the record, never silently presented as the identity that ran.
     pub model_source: ModelSource,
@@ -45,6 +53,13 @@ pub struct Usage {
     /// unknown-spend rather than folding them into the ordinary token sums as if zero were real.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub spend_unknown: bool,
+}
+
+/// `skip_serializing_if` for [`Usage::models`]: a single (or absent) identity adds nothing over
+/// the `model` field it derives.
+#[allow(clippy::ptr_arg)] // serde's skip_serializing_if passes the field type by reference
+fn one_or_fewer(models: &Vec<String>) -> bool {
+    models.len() <= 1
 }
 
 /// A synthesis result: the model's text plus what it cost.
@@ -190,20 +205,11 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         serde_json::from_str(json).context("claude did not return the expected JSON")?;
     // The identity that ran, as the payload actually confirms it: one modelUsage entry names the
     // model outright; several confirm only the *set* that ran (the CLI's auxiliary models bill
-    // small calls), so the set is reported joined — never one member presented as though it alone
-    // produced the synthesis. Resolved once, shared by the success and error paths.
-    let model = match parsed.model_usage.len() {
-        0 => None,
-        1 => parsed.model_usage.keys().next().cloned(),
-        _ => Some(
-            parsed
-                .model_usage
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" + "),
-        ),
-    };
+    // small calls), so the set is kept as data (`models`) and reported joined for display — never
+    // one member presented as though it alone produced the synthesis, and never a display string
+    // downstream code would have to re-split. Resolved once, shared by the success and error paths.
+    let models: Vec<String> = parsed.model_usage.keys().cloned().collect();
+    let model = (!models.is_empty()).then(|| models.join(" + "));
     if parsed.is_error.unwrap_or(false) {
         // A run that ran and *spent* but did not complete (e.g. a tripped --max-budget-usd cap). On an
         // error payload the top-level `usage` block is zeroed (confirmed by exercise) while the real
@@ -212,12 +218,17 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         // bailed (which would lose the spend). The model falls back to the requested one only when the
         // payload named none (an error before any model ran) — disclosed as Requested, not presented
         // as the identity that ran.
-        let (model, model_source) = match model {
-            Some(reported) => (reported, ModelSource::Reported),
-            None => (requested_model.to_owned(), ModelSource::Requested),
+        let (model, models, model_source) = match model {
+            Some(reported) => (reported, models.clone(), ModelSource::Reported),
+            None => (
+                requested_model.to_owned(),
+                vec![requested_model.to_owned()],
+                ModelSource::Requested,
+            ),
         };
         let usage = Usage {
             model,
+            models,
             model_source,
             input_tokens: parsed.model_usage.values().map(|m| m.input_tokens).sum(),
             output_tokens: parsed.model_usage.values().map(|m| m.output_tokens).sum(),
@@ -312,9 +323,13 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         model.clone(),
     );
     let (Some(text), Some(usage), Some(cost_usd), Some(model)) = complete else {
-        let (model, model_source) = match model {
-            Some(reported) => (reported, ModelSource::Reported),
-            None => (requested_model.to_owned(), ModelSource::Requested),
+        let (model, models, model_source) = match model {
+            Some(reported) => (reported, models.clone(), ModelSource::Reported),
+            None => (
+                requested_model.to_owned(),
+                vec![requested_model.to_owned()],
+                ModelSource::Requested,
+            ),
         };
         let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
             salvaged_tokens;
@@ -322,6 +337,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
             text: String::new(),
             usage: Usage {
                 model,
+                models,
                 model_source,
                 input_tokens,
                 output_tokens,
@@ -347,6 +363,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         text,
         usage: Usage {
             model,
+            models,
             model_source: ModelSource::Reported, // resolved from the response's modelUsage above
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
@@ -368,6 +385,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
 fn unknown_spend_usage(requested_model: &str) -> Usage {
     Usage {
         model: requested_model.to_owned(),
+        models: vec![requested_model.to_owned()],
         model_source: ModelSource::Requested,
         input_tokens: 0,
         output_tokens: 0,
@@ -470,7 +488,7 @@ const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 /// newest first per the API's contract; `limit=1000` (the documented maximum) makes truncation
 /// practically impossible, and `has_more` is still surfaced rather than assumed false.
 fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
-    let (key, key_source) = anthropic_key(settings)
+    let (key, key_source) = anthropic_key(settings)?
         .ok_or_else(|| key_hint(ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_SETTING))?;
     #[derive(Deserialize)]
     struct Entry {
@@ -505,6 +523,9 @@ fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
             .collect(),
         key_source,
         truncated: page.has_more,
+        // Anthropic's listing is ordered by the provider, not sorted here by timestamp — no
+        // undated-entry caveat exists to disclose.
+        undated: 0,
     })
 }
 
@@ -514,7 +535,7 @@ fn anthropic_models(settings: &Settings) -> anyhow::Result<ModelListing> {
 /// key provenance is disclosed so the report says whose account it reflects.
 fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
     let (key, key_source) =
-        openai_key(settings).ok_or_else(|| key_hint(OPENAI_KEY_ENV, OPENAI_KEY_SETTING))?;
+        openai_key(settings)?.ok_or_else(|| key_hint(OPENAI_KEY_ENV, OPENAI_KEY_SETTING))?;
     #[derive(Deserialize)]
     struct Entry {
         id: String,
@@ -539,13 +560,10 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
     )
     .context("fetching OpenAI's model list")?;
     let mut page: Page = serde_json::from_str(&body).context("parsing OpenAI's model list")?;
+    // Undated entries sort after the dated ones (never fabricated into epoch zero), and the count
+    // rides the listing itself — TUI worker threads call this while the TUI owns the terminal, so
+    // no printing here; each surface shows the disclosure its own way.
     let undated = page.data.iter().filter(|e| e.created.is_none()).count();
-    if undated > 0 {
-        eprintln!(
-            "arclite: {undated} model(s) in OpenAI's listing carry no `created` timestamp — sorted last, not as oldest"
-        );
-    }
-    // Dated entries newest-first; undated ones after them, never fabricated into epoch zero.
     page.data
         .sort_by_key(|e| std::cmp::Reverse(e.created.map_or((0, 0), |c| (1, c))));
     Ok(ModelListing {
@@ -562,6 +580,7 @@ fn openai_models(settings: &Settings) -> anyhow::Result<ModelListing> {
         // arrives in one response, and no `has_more`-style signal exists to read (unlike Anthropic's,
         // which the sibling surfaces). `false` states that contract.
         truncated: false,
+        undated,
     })
 }
 
@@ -603,10 +622,11 @@ pub trait Backend {
     /// standard env var or a saved user-layer `api_keys.*` setting.
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing>;
 
-    /// Where this backend's provider API key would come from (`Some(source)`) or `None` when no key
-    /// is available — resolved exactly as [`Backend::list_models`] resolves it, so the status doctor
-    /// reports and the listing's behavior can't disagree.
-    fn model_key_source(&self, settings: &Settings) -> Option<String>;
+    /// Where this backend's provider API key would come from (`Ok(Some(source))`), `Ok(None)` when
+    /// no key is available, or the resolution's own failure (a set-but-non-unicode env var) —
+    /// resolved exactly as [`Backend::list_models`] resolves it, so the status doctor reports and
+    /// the listing's behavior can't disagree.
+    fn model_key_source(&self, settings: &Settings) -> anyhow::Result<Option<String>>;
 
     /// Resolve the run's model: an explicit `--model` wins; else this backend's configured default
     /// (its [`Backend::configured_model`]); else [`Backend::default_model`].
@@ -682,11 +702,14 @@ pub struct ModelEntry {
 }
 
 /// A provider's model listing plus its provenance: where the key came from (disclosed, so the report
-/// says whose account the list reflects) and whether pagination truncated it (disclosed, never silent).
+/// says whose account the list reflects), whether pagination truncated it, and how many entries
+/// carried no `created` timestamp (sorted last, not as oldest) — every caveat carried as data for
+/// each surface to show, never printed from here (a TUI worker may be calling).
 pub struct ModelListing {
     pub models: Vec<ModelEntry>,
     pub key_source: String,
     pub truncated: bool,
+    pub undated: usize,
 }
 
 /// Each provider's key env var and saved-setting key — one home per name, shared by the listing
@@ -698,14 +721,24 @@ const OPENAI_KEY_SETTING: &str = "api_keys.openai";
 
 /// Resolve a provider API key: the standard env var wins (a session override), else the saved
 /// user-layer setting. `Some((key, source))` discloses where it came from; `None` = no key — the
-/// same resolution backs the listings and doctor's status line, so they can't disagree.
-fn provider_key(env_var: &str, saved: Option<&str>, setting_key: &str) -> Option<(String, String)> {
-    if let Ok(key) = std::env::var(env_var)
-        && !key.is_empty()
-    {
-        return Some((key, format!("{env_var} (environment)")));
+/// same resolution backs the listings and doctor's status line, so they can't disagree. A set-but-
+/// non-unicode env value is an error, not the absent case: silently sliding past a mangled
+/// credential to the saved key (or to "no key") would swap whose account gets used without a word.
+fn provider_key(
+    env_var: &str,
+    saved: Option<&str>,
+    setting_key: &str,
+) -> anyhow::Result<Option<(String, String)>> {
+    match std::env::var(env_var) {
+        Ok(key) if !key.is_empty() => {
+            return Ok(Some((key, format!("{env_var} (environment)"))));
+        }
+        Ok(_) | Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!(
+            "{env_var} is set but not valid unicode — fix or unset it (refusing to silently fall back to the saved key)"
+        ),
     }
-    saved.map(|key| (key.to_owned(), format!("{setting_key} (user settings)")))
+    Ok(saved.map(|key| (key.to_owned(), format!("{setting_key} (user settings)"))))
 }
 
 /// The no-key error for a model listing — names both ways to supply one. The save path reads the
@@ -717,7 +750,7 @@ fn key_hint(env_var: &str, setting_key: &str) -> anyhow::Error {
 }
 
 /// Anthropic's key (claude's provider), resolved per [`provider_key`].
-fn anthropic_key(settings: &Settings) -> Option<(String, String)> {
+fn anthropic_key(settings: &Settings) -> anyhow::Result<Option<(String, String)>> {
     provider_key(
         ANTHROPIC_KEY_ENV,
         settings.api_key_anthropic.as_deref(),
@@ -726,7 +759,7 @@ fn anthropic_key(settings: &Settings) -> Option<(String, String)> {
 }
 
 /// OpenAI's key (codex's provider), resolved per [`provider_key`].
-fn openai_key(settings: &Settings) -> Option<(String, String)> {
+fn openai_key(settings: &Settings) -> anyhow::Result<Option<(String, String)>> {
     provider_key(
         OPENAI_KEY_ENV,
         settings.api_key_openai.as_deref(),
@@ -753,8 +786,8 @@ impl Backend for ClaudeBackend {
         anthropic_models(settings)
     }
 
-    fn model_key_source(&self, settings: &Settings) -> Option<String> {
-        anthropic_key(settings).map(|(_, source)| source)
+    fn model_key_source(&self, settings: &Settings) -> anyhow::Result<Option<String>> {
+        Ok(anthropic_key(settings)?.map(|(_, source)| source))
     }
 
     fn synthesize(
@@ -979,6 +1012,23 @@ fn synthesize_claude(
         Ok(driven) => driven,
         Err(DriveError::Launch(e)) => return Err(e),
         Err(DriveError::AfterSpawn(e)) => {
+            // The stream died — but if the `result` event already arrived, its usage is real,
+            // parsed spend: record THAT (as an errored run naming the stream failure), falling to
+            // unknown-zeros only when no payload ever landed.
+            if let Some(line) = &result_line
+                && let Ok(mut salvaged) = parse_result(line, req.model)
+            {
+                salvaged.error = Some(format!(
+                    "claude's stream failed after its result arrived ({e:#}) — usage salvaged from the captured payload{}",
+                    salvaged
+                        .error
+                        .map(|prior| format!("; the payload itself reported: {prior}"))
+                        .unwrap_or_default()
+                ));
+                salvaged.text = String::new();
+                salvaged.structured = None;
+                return Ok(salvaged);
+            }
             return Ok(errored_without_usage(
                 req.model,
                 format!("claude's stream failed after launch — spend unknown: {e:#}"),
@@ -1102,8 +1152,8 @@ impl Backend for CodexBackend {
         openai_models(settings)
     }
 
-    fn model_key_source(&self, settings: &Settings) -> Option<String> {
-        openai_key(settings).map(|(_, source)| source)
+    fn model_key_source(&self, settings: &Settings) -> anyhow::Result<Option<String>> {
+        Ok(openai_key(settings)?.map(|(_, source)| source))
     }
 
     /// codex exposes no native per-run spend cap, so none applies (an explicit one is refused below).
@@ -1168,6 +1218,7 @@ impl CodexUsage {
     fn into_usage(self, model: &str) -> Usage {
         Usage {
             model: model.to_owned(),
+            models: vec![model.to_owned()],
             model_source: ModelSource::Requested,
             input_tokens: self.input_tokens,
             // Codex separates reasoning tokens; fold them into output for an honest total-generated

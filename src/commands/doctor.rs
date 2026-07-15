@@ -28,6 +28,9 @@ struct ApiKeyStatus {
     backend: String,
     /// Where the key comes from (env var or user-layer setting), or `None` — no key available.
     source: Option<String>,
+    /// The resolution's own failure (e.g. a set-but-non-unicode env var) — distinct from "no key",
+    /// which `source: None` alone would falsely claim.
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -99,21 +102,9 @@ struct Logs {
 /// when it genuinely isn't installed (a `NotFound` spawn), and [`ToolStatus::Failed`] when it exists
 /// but can't be prepared, spawned, or exits non-zero — never collapsing a broken tool into "absent".
 fn probe(program: &str) -> ToolStatus {
-    let mut command = match crate::ai::command(program) {
-        Ok(command) => command,
-        Err(error) => return ToolStatus::Failed(format!("{error:#}")),
-    };
-    let output = match command.arg("--version").output() {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ToolStatus::Absent,
-        Err(error) => return ToolStatus::Failed(error.to_string()),
-    };
-    if !output.status.success() {
-        return ToolStatus::Failed(format!("exited with {}", output.status));
-    }
-    match String::from_utf8_lossy(&output.stdout).lines().next() {
-        Some(line) => ToolStatus::Version(line.trim().to_owned()),
-        None => ToolStatus::Failed("ran but printed no version".to_owned()),
+    match crate::ai::command(program) {
+        Ok(command) => probe_version(command),
+        Err(error) => ToolStatus::Failed(format!("{error:#}")),
     }
 }
 
@@ -121,14 +112,17 @@ fn probe(program: &str) -> ToolStatus {
 /// the same explicit-system-path selection outbound requests use — so the version doctor reports
 /// belongs to the binary arclite runs, not to whatever different `curl` shadows PATH.
 fn probe_curl() -> ToolStatus {
-    let program = match crate::http::curl_program() {
-        Ok(program) => program,
-        Err(error) => return ToolStatus::Failed(format!("{error:#}")),
-    };
-    let output = match std::process::Command::new(&program)
-        .arg("--version")
-        .output()
-    {
+    match crate::http::curl_program() {
+        Ok(program) => probe_version(std::process::Command::new(program)),
+        Err(error) => ToolStatus::Failed(format!("{error:#}")),
+    }
+}
+
+/// The shared `--version` spawn-and-classify behind [`probe`] and [`probe_curl`] — the two differ
+/// only in how the command resolves (PATH lookup vs. explicit system path), so the outcome
+/// classification lives once and can't drift between them.
+fn probe_version(mut command: std::process::Command) -> ToolStatus {
+    let output = match command.arg("--version").output() {
         Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ToolStatus::Absent,
         Err(error) => return ToolStatus::Failed(error.to_string()),
@@ -330,11 +324,19 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
             Ok(settings) => ApiKeys {
                 statuses: crate::ai::known_backends()
                     .iter()
-                    .map(|&name| ApiKeyStatus {
-                        backend: name.to_owned(),
-                        source: crate::ai::backend(name)
+                    .map(|&name| {
+                        let resolved = crate::ai::backend(name)
                             .expect("known_backends yields registered names")
-                            .model_key_source(&settings),
+                            .model_key_source(&settings);
+                        let (source, error) = match resolved {
+                            Ok(source) => (source, None),
+                            Err(e) => (None, Some(format!("{e:#}"))),
+                        };
+                        ApiKeyStatus {
+                            backend: name.to_owned(),
+                            source,
+                            error,
+                        }
                     })
                     .collect(),
                 error: None,
@@ -411,10 +413,20 @@ pub(crate) fn human(report: &Report) -> String {
             .api_keys
             .statuses
             .iter()
-            .map(|s| format!("{}: {}", s.backend, s.source.as_deref().unwrap_or("(none)")))
+            .map(|s| match (&s.error, &s.source) {
+                (Some(e), _) => format!("{}: {e}", s.backend),
+                (None, source) => {
+                    format!("{}: {}", s.backend, source.as_deref().unwrap_or("(none)"))
+                }
+            })
             .collect::<Vec<_>>()
             .join(" · ");
-        if report.api_keys.statuses.iter().any(|s| s.source.is_none()) {
+        if report
+            .api_keys
+            .statuses
+            .iter()
+            .any(|s| s.source.is_none() && s.error.is_none())
+        {
             format!("{statuses} — model listings need one (see arc models)")
         } else {
             statuses

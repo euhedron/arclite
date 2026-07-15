@@ -90,21 +90,23 @@ enum Msg {
         result: Result<String, String>,
     },
     /// A launch's model-listing fetch finished (the first `m` press spawns it): generation-guarded
-    /// like the preview, carrying the ids + the provider's truncation flag (disclosed like the
-    /// sibling [`Msg::ModelsFetched`]) or the failure — either way the modal's notice line.
+    /// like the preview, carrying the ids + the listing's caveats — the provider's truncation flag
+    /// and its undated-entry count (disclosed like the sibling [`Msg::ModelsFetched`]) — or the
+    /// failure; either way the modal's notice line.
     LaunchModels {
         generation: u64,
-        result: Result<(Vec<String>, bool), String>,
+        result: Result<(Vec<String>, bool, usize), String>,
     },
     /// The startup update check finished: `Some(version)` if a newer release is published, else `None`.
     UpdateChecked(Option<String>),
-    /// A model-listing fetch finished for the named setting: the ids + a truncation flag, or the
-    /// failure to show. Folds in only if *this* fetch — matched by generation, not just the setting
-    /// name — is still the open edit, so a canceled fetch can't dress a newer edit of the same key.
+    /// A model-listing fetch finished for the named setting: the ids + the listing's caveats
+    /// (truncation flag, undated-entry count), or the failure to show. Folds in only if *this*
+    /// fetch — matched by generation, not just the setting name — is still the open edit, so a
+    /// canceled fetch can't dress a newer edit of the same key.
     ModelsFetched {
         setting: String,
         generation: u64,
-        result: Result<(Vec<String>, bool), String>,
+        result: Result<(Vec<String>, bool, usize), String>,
     },
     /// A detached background run exited with something to say — a non-zero status and/or stderr
     /// warnings (its best-effort side effects announcing failures). Shown in the footer.
@@ -532,9 +534,9 @@ impl App {
                         let listing = crate::ai::backend(&name)
                             .and_then(|b| b.list_models(&settings))
                             .map_err(|e| format!("{e:#}"))?;
-                        let truncated = listing.truncated;
+                        let (truncated, undated) = (listing.truncated, listing.undated);
                         let ids = listing.models.into_iter().map(|m| m.id).collect();
-                        Ok((ids, truncated))
+                        Ok((ids, truncated, undated))
                     })();
                     let _ = tx.send(Msg::LaunchModels { generation, result });
                 });
@@ -681,6 +683,7 @@ impl App {
                 Ok((
                     listing.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
                     listing.truncated,
+                    listing.undated,
                 ))
             })();
             let _ = tx.send(Msg::ModelsFetched {
@@ -879,11 +882,13 @@ enum ModelsState {
     Fetching,
     /// The fetch failed (no key, network, …) — shown on the modal's notice line; `m` retries.
     Failed(String),
-    /// The listing, with the provider's truncation flag — a truncated cycle is disclosed on the
-    /// notice line like every other surface (`arc models`, the config picker), never silent.
+    /// The listing, with its caveats — the provider's truncation flag and the undated-entry count
+    /// (entries sorted last for lack of a timestamp) — disclosed on the notice line like every
+    /// other surface (`arc models`, the config picker), never silent.
     Fetched {
         ids: Vec<String>,
         truncated: bool,
+        undated: usize,
     },
 }
 
@@ -1415,7 +1420,7 @@ fn update(app: &mut App, msg: Msg) {
                 && values.get(*selected).is_some_and(|row| row.key == setting)
             {
                 match result {
-                    Ok((ids, truncated)) => {
+                    Ok((ids, truncated, undated)) => {
                         let current = &values[*selected].value;
                         let mut options = ids;
                         options.push(OTHER_OPTION.to_owned());
@@ -1423,9 +1428,15 @@ fn update(app: &mut App, msg: Msg) {
                             index: options.iter().position(|o| o == current).unwrap_or(0),
                             options,
                         });
-                        // Truncation is a fact the picker can't show — the info line can.
-                        *error =
-                            truncated.then(|| "the provider reports more pages exist".to_owned());
+                        // The listing's caveats are facts the picker can't show — the info line can.
+                        let mut caveats: Vec<String> = Vec::new();
+                        if truncated {
+                            caveats.push("the provider reports more pages exist".to_owned());
+                        }
+                        if undated > 0 {
+                            caveats.push(format!("{undated} undated model(s) sorted last"));
+                        }
+                        *error = (!caveats.is_empty()).then(|| caveats.join("; "));
                     }
                     Err(e) => {
                         // Degrade to free text with the reason on the info line — entry stays open.
@@ -1471,8 +1482,12 @@ fn update(app: &mut App, msg: Msg) {
                 && launch.generation == generation
             {
                 match result {
-                    Ok((ids, truncated)) => {
-                        launch.models = ModelsState::Fetched { ids, truncated };
+                    Ok((ids, truncated, undated)) => {
+                        launch.models = ModelsState::Fetched {
+                            ids,
+                            truncated,
+                            undated,
+                        };
                         fetched = true;
                     }
                     Err(e) => launch.models = ModelsState::Failed(e),
@@ -2649,9 +2664,19 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         ModelsState::Fetching => notices.push(Line::from("fetching models…").dim()),
         ModelsState::Failed(e) => notices.push(Line::from(format!("models: {e}")).yellow()),
         ModelsState::Fetched {
-            truncated: true, ..
-        } => notices.push(Line::from("models: the provider reports more pages exist").yellow()),
-        ModelsState::Unfetched | ModelsState::Fetched { .. } => {}
+            truncated, undated, ..
+        } => {
+            if *truncated {
+                notices.push(Line::from("models: the provider reports more pages exist").yellow());
+            }
+            if *undated > 0 {
+                notices.push(
+                    Line::from(format!("models: {undated} undated entr(y/ies) sorted last"))
+                        .yellow(),
+                );
+            }
+        }
+        ModelsState::Unfetched => {}
     }
     let notice_rows = notices.len() as u16;
 

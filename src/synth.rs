@@ -1683,11 +1683,14 @@ fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
         total.cache_creation_input_tokens += u.cache_creation_input_tokens;
         total.cache_read_input_tokens += u.cache_read_input_tokens;
         // The identity that ran: members *can* differ (an errored member reports its requested id;
-        // a substitution could differ mid-fan-out), so a mixed set is reported as the joined ids —
-        // never the first member's id presented as though one model handled every run. Confidence
-        // folds to the weakest: any requested-only member makes the whole total requested-only.
-        if u.model != total.model && !total.model.split(" + ").any(|m| m == u.model) {
-            total.model = format!("{} + {}", total.model, u.model);
+        // a substitution could differ mid-fan-out), so the identity *sets* merge — structured data,
+        // not a re-split of the joined display string — and never the first member's id presented
+        // as though one model handled every run. Confidence folds to the weakest: any
+        // requested-only member makes the whole total requested-only.
+        for m in &u.models {
+            if !total.models.contains(m) {
+                total.models.push(m.clone());
+            }
         }
         if u.model_source == crate::ai::ModelSource::Requested {
             total.model_source = crate::ai::ModelSource::Requested;
@@ -1708,6 +1711,8 @@ fn sum_usage<'a>(usages: impl Iterator<Item = &'a ai::Usage>) -> ai::Usage {
             (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
         };
     }
+    // The display form re-derives from the merged set — one direction (data → display), never back.
+    total.model = total.models.join(" + ");
     total
 }
 

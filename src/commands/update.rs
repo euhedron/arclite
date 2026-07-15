@@ -90,8 +90,16 @@ fn apply(
     let target = if available { latest } else { current };
     let name = binary_name(target);
     // A public release needs no credential; a private repo needs a token for both the asset lookup and
-    // the download. Optional — sent to curl only when set, so the public case stays frictionless.
-    let auth = std::env::var(AUTH_ENV).ok();
+    // the download. Optional — sent to curl only when set, so the public case stays frictionless. A
+    // set-but-non-unicode token is an error, not the absent case: silently proceeding unauthenticated
+    // would turn a private repo's lookup into a misleading "not found".
+    let auth = match std::env::var(AUTH_ENV) {
+        Ok(token) => Some(token),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!(
+            "{AUTH_ENV} is set but not valid unicode — fix or unset it (refusing to silently proceed unauthenticated)"
+        ),
+    };
     let exe = std::env::current_exe().context("locating the running arc binary to replace")?;
     let download_path = sidecar(&exe, ".arc-update-new");
     // Resolve this platform's asset id from the releases API, then download it by id — the documented
