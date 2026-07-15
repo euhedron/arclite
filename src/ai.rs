@@ -2,10 +2,24 @@ use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::Settings;
+
+/// How [`Usage::model`] was established — response-derived ground truth, or the requested id echoed
+/// back because the backend's events name no model. Serialized into every run record and shown in the
+/// run report, so a substitution-blind backend's records never *read* as confirmed identity
+/// (report-the-identity-that-ran).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSource {
+    /// The response's own per-model usage named it (claude's `modelUsage`).
+    Reported,
+    /// The backend echoes no model id, so this is the *requested* one, unconfirmed (codex; or a
+    /// claude error payload that named no model).
+    Requested,
+}
 
 /// Token usage and cost for one synthesis call — ground truth from the CLI's response. `cost_usd` is
 /// `Some` when the CLI returns an authoritative dollar cost (claude), and `None` when the backend
@@ -13,6 +27,9 @@ use crate::settings::Settings;
 #[derive(Debug, Clone, Serialize)]
 pub struct Usage {
     pub model: String,
+    /// Whether `model` came from the response or is the unconfirmed requested id — disclosed in the
+    /// report and the record, never silently presented as the identity that ran.
+    pub model_source: ModelSource,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_input_tokens: u64,
@@ -175,9 +192,15 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         // tokens are in `modelUsage` and the real cost in `total_cost_usd` — so the honest usage sums
         // modelUsage rather than reading the zeros, and the failure is carried as a value (logged), not
         // bailed (which would lose the spend). The model falls back to the requested one only when the
-        // payload named none (an error before any model ran).
+        // payload named none (an error before any model ran) — disclosed as Requested, not presented
+        // as the identity that ran.
+        let (model, model_source) = match model {
+            Some(reported) => (reported, ModelSource::Reported),
+            None => (requested_model.to_owned(), ModelSource::Requested),
+        };
         let usage = Usage {
-            model: model.unwrap_or_else(|| requested_model.to_owned()),
+            model,
+            model_source,
             input_tokens: parsed.model_usage.values().map(|m| m.input_tokens).sum(),
             output_tokens: parsed.model_usage.values().map(|m| m.output_tokens).sum(),
             cache_creation_input_tokens: parsed
@@ -224,6 +247,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         text,
         usage: Usage {
             model,
+            model_source: ModelSource::Reported, // resolved from the response's modelUsage above
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             cache_creation_input_tokens: usage.cache_creation_input_tokens,
@@ -233,6 +257,28 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         structured: parsed.structured_output,
         error: None,
     })
+}
+
+/// An errored synthesis for a run whose child *ran* but whose spend is unknowable — the payload was
+/// unparseable, or the usage event never arrived. Zeros with no cost are the honest shape (nothing
+/// to fabricate), and the failure is carried as a value so the run still reaches the log as errored
+/// with its cause, rather than vanishing on a bail after tokens may have burned
+/// (account-for-consumed-cost-on-failure). The model is necessarily the requested one.
+fn errored_without_usage(requested_model: &str, message: String) -> Synthesis {
+    Synthesis {
+        text: String::new(),
+        usage: Usage {
+            model: requested_model.to_owned(),
+            model_source: ModelSource::Requested,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cost_usd: None,
+        },
+        structured: None,
+        error: Some(message),
+    }
 }
 
 /// One synthesis call's run-shaping configuration — a struct, so a new parameter is a field rather
@@ -701,12 +747,38 @@ fn synthesize_claude(
     )?;
     // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
     // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
+    // The child *ran* on every path below, so tokens may have burned even where no payload came back:
+    // each failure is carried as an errored synthesis (spend unknown → zeros, disclosed by the error
+    // text) rather than bailed, which would drop the run from the log and its cost from accounting.
     let result_line = match (result_line, status.success()) {
         (Some(line), _) => line,
-        (None, false) => bail!("claude exited with {}: {}", status, stderr.trim()),
-        (None, true) => bail!("claude produced no `result` event"),
+        (None, false) => {
+            return Ok(errored_without_usage(
+                req.model,
+                format!(
+                    "claude exited with {} and no `result` event — spend unknown: {}",
+                    status,
+                    stderr.trim()
+                ),
+            ));
+        }
+        (None, true) => {
+            return Ok(errored_without_usage(
+                req.model,
+                "claude exited successfully but produced no `result` event — spend unknown"
+                    .to_owned(),
+            ));
+        }
     };
-    let mut synthesis = parse_result(&result_line, req.model)?;
+    let mut synthesis = match parse_result(&result_line, req.model) {
+        Ok(synthesis) => synthesis,
+        Err(e) => {
+            return Ok(errored_without_usage(
+                req.model,
+                format!("claude's result payload didn't parse — spend unknown: {e:#}"),
+            ));
+        }
+    };
     // A non-zero exit whose payload parsed as an error is the expected failed-run shape — the failure
     // is carried in `synthesis.error` (with its real usage) for logging. A non-zero exit that parsed
     // as a *success* is a genuine contradiction — but its usage is real, billed spend, so it too is
@@ -822,11 +894,13 @@ struct CodexUsage {
 
 impl CodexUsage {
     /// The one CodexUsage → [`Usage`] mapping — the errored and success returns both report through
-    /// it. Codex doesn't echo a per-model id in its events, so the reported model is the requested
-    /// one (unlike claude, which resolves it from the response's per-model usage).
+    /// it. Codex doesn't echo a per-model id in its events, so the model is the *requested* one,
+    /// marked [`ModelSource::Requested`] — disclosed in the report and the record, never presented
+    /// as response-confirmed identity (unlike claude, which resolves it from per-model usage).
     fn into_usage(self, model: &str) -> Usage {
         Usage {
             model: model.to_owned(),
+            model_source: ModelSource::Requested,
             input_tokens: self.input_tokens,
             // Codex separates reasoning tokens; fold them into output for an honest total-generated
             // count.
@@ -963,13 +1037,18 @@ fn synthesize_codex(
             _ => {}
         },
     );
-    // Parse whatever usage the stream reported before the run ended, however it ended — a malformed
-    // object surfaces as a parse error rather than being swallowed to zeros (the honest ground-truth
-    // contract, cf. parse_result's loud bails).
-    let usage: Option<CodexUsage> = usage_raw
-        .map(serde_json::from_value)
-        .transpose()
-        .context("codex's `usage` object was malformed")?;
+    // Parse whatever usage the stream reported before the run ended, however it ended. A malformed
+    // usage object is surfaced loudly — but as an *errored run* (the child ran; its spend is real
+    // even though unreadable), never a bail that would drop the run from the log entirely.
+    let usage: Option<CodexUsage> = match usage_raw.map(serde_json::from_value).transpose() {
+        Ok(usage) => usage,
+        Err(e) => {
+            return Ok(errored_without_usage(
+                req.model,
+                format!("codex's `usage` object was malformed — spend unknown: {e}"),
+            ));
+        }
+    };
     // A transport-level failure (a broken stream read, a failed wait) after usage was captured is
     // still a run that spent: carry it as an errored run with that usage, like every other
     // failure-after-spend. With no usage in hand nothing is known to have been spent, so the
@@ -1007,9 +1086,18 @@ fn synthesize_codex(
             error: Some(error),
         });
     }
-    let usage = usage
-        .context("codex produced no `turn.completed` usage event")?
-        .into_usage(req.model);
+    let usage = match usage {
+        Some(usage) => usage.into_usage(req.model),
+        None => {
+            // A success exit with no usage event: the run demonstrably ran, its spend is unknown —
+            // an errored record (zeros, disclosed) rather than a bail that loses the run.
+            return Ok(errored_without_usage(
+                req.model,
+                "codex exited successfully but reported no `turn.completed` usage event — spend unknown"
+                    .to_owned(),
+            ));
+        }
+    };
     // From here the run has demonstrably spent (its usage is in hand), so a failed *result read* — a
     // missing/empty `-o` artifact, an unreadable one, or structured output that isn't the schema'd
     // JSON — is carried as a value with that usage, never bailed: the errored-run contract, so the

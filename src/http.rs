@@ -90,12 +90,16 @@ pub(crate) fn get(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// The curl to invoke. On Windows, the system `curl.exe` specifically (so TLS goes through Schannel and
-/// the system cert store, not a bundled CA set a shadowing MSYS curl would use); elsewhere, `curl` on
-/// `PATH`.
+/// The curl to invoke — the *system* curl by explicit path, because this module leans on curl's
+/// security behavior (the cross-host Authorization stripping the redirect contract cites), which a
+/// PATH-shadowing or alternative implementation may not share. On Windows that's `%SystemRoot%\
+/// System32\curl.exe` (TLS through Schannel and the system cert store, not a bundled CA set a
+/// shadowing MSYS curl would use); on Unix, `/usr/bin/curl` (macOS ships it SIP-protected; Linux
+/// distros install there). PATH is the fallback only when the system binary is *confirmed* absent —
+/// never on an inconclusive probe, and never silently on Windows without `SystemRoot`.
 fn curl_program() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
-    {
+    let system_curl = {
         // The trusted binary resolves via SystemRoot; with it unset the explicit path can't be built
         // at all, and a bare PATH `curl` could be any shadowing binary — so that anomaly errors
         // rather than silently downgrading the trust anchor.
@@ -105,14 +109,16 @@ fn curl_program() -> anyhow::Result<PathBuf> {
                  back to an arbitrary curl on PATH"
             )
         })?;
-        let system_curl = Path::new(&root).join("System32").join("curl.exe");
-        // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
-        // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
-        // can't-tell as present — keeping absent distinct from unreadable. Confirmed absence (an older
-        // Windows that ships no curl) is the one case PATH serves, and it's this disclosed line.
-        if system_curl.try_exists().unwrap_or(true) {
-            return Ok(system_curl);
-        }
+        Path::new(&root).join("System32").join("curl.exe")
+    };
+    #[cfg(not(windows))]
+    let system_curl = PathBuf::from("/usr/bin/curl");
+    // Prefer it unless *confirmed* absent: an unreadable or uncertain probe (try_exists Err) must
+    // not collapse into "absent" and fall back to a possibly-shadowing PATH curl, so treat
+    // can't-tell as present — keeping absent distinct from unreadable. Confirmed absence (a system
+    // that ships no curl at the canonical path) is the one case PATH serves — this disclosed line.
+    if system_curl.try_exists().unwrap_or(true) {
+        return Ok(system_curl);
     }
     Ok(PathBuf::from("curl"))
 }

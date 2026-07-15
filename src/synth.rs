@@ -842,6 +842,11 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
 #[derive(Serialize)]
 struct RunReport<'a> {
     model: String,
+    /// Whether `model` is response-confirmed or the unconfirmed requested id (a backend whose events
+    /// echo no model) — shown beside the model so the report never overstates the identity that ran.
+    /// `None` on a dry run: nothing ran, so no source verdict exists (and none is serialized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_source: Option<crate::ai::ModelSource>,
     /// Synthesis backend that ran (`claude` | `codex`).
     backend: &'a str,
     /// How many synthesis runs were combined (1 = single; >1 = concurrent multi-run, unioned). The
@@ -892,8 +897,14 @@ impl RunReport<'_> {
             Some(effort) => format!("  reasoning={effort}"),
             None => String::new(),
         };
+        // A model id the response never confirmed is labeled, not presented as the ran identity.
+        // (A dry run carries no source — the [dry run] banner already says nothing ran.)
+        let model_source = match self.model_source {
+            Some(crate::ai::ModelSource::Requested) => " (requested — backend echoes no model id)",
+            Some(crate::ai::ModelSource::Reported) | None => "",
+        };
         let mut line = format!(
-            "model={}{}  backend={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
+            "model={}{model_source}{}  backend={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
             self.model,
             runs,
             self.backend,
@@ -1066,6 +1077,9 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // then it holds the requested model — all a dry run can name, since nothing runs.
     let mut report = RunReport {
         model: requested.to_owned(),
+        // No source verdict until a response exists — a real run sets it from the usage; a dry run
+        // never does (nothing runs).
+        model_source: None,
         backend: opts.backend,
         runs: opts.runs,
         runs_requested: opts.runs,
@@ -1139,8 +1153,10 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         (synthesize_run(prompt, requested, opts, 0)?, 1)
     };
     let usage = synthesis.usage;
-    // From here the report reflects the model the response says ran, and how many runs were combined.
+    // From here the report reflects the model the response says ran — or, disclosed via
+    // model_source, the requested id where the backend echoes none — and the combined run count.
     report.model = usage.model.clone();
+    report.model_source = Some(usage.model_source);
     report.runs = runs;
     let structured = synthesis.structured;
     let text = synthesis.text;
