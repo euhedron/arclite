@@ -33,14 +33,8 @@ pub fn run(args: &ModelsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                         None => lines.push(format!("  {}", m.id)),
                     }
                 }
-                if listing.truncated {
-                    lines.push("  … the provider reports more pages exist".to_owned());
-                }
-                if listing.undated > 0 {
-                    lines.push(format!(
-                        "  note: {} model(s) carry no `created` timestamp — sorted last, not as oldest",
-                        listing.undated
-                    ));
+                for caveat in crate::ai::listing_caveats(listing.truncated, listing.undated) {
+                    lines.push(format!("  … {caveat}"));
                 }
                 payload.insert(
                     name.to_owned(),

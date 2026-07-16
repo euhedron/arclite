@@ -55,6 +55,23 @@ pub struct Usage {
     pub spend_unknown: bool,
 }
 
+/// The caveat lines a model listing carries — pagination truncation, undated entries sorted last —
+/// worded once for every surface (`arc models`, the TUI's config picker and launch modal). Surfaces
+/// differ only in framing (indent, a "models:" prefix), never in the caveat's substance, so the
+/// disclosures can't drift apart again.
+pub(crate) fn listing_caveats(truncated: bool, undated: usize) -> Vec<String> {
+    let mut caveats = Vec::new();
+    if truncated {
+        caveats.push("the provider reports more pages exist".to_owned());
+    }
+    if undated > 0 {
+        caveats.push(format!(
+            "{undated} undated model(s) — sorted last, not as oldest"
+        ));
+    }
+    caveats
+}
+
 /// `skip_serializing_if` for [`Usage::models`]: a single (or absent) identity adds nothing over
 /// the `model` field it derives.
 #[allow(clippy::ptr_arg)] // serde's skip_serializing_if passes the field type by reference

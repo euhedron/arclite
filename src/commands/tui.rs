@@ -1427,13 +1427,7 @@ fn update(app: &mut App, msg: Msg) {
                             options,
                         });
                         // The listing's caveats are facts the picker can't show — the info line can.
-                        let mut caveats: Vec<String> = Vec::new();
-                        if truncated {
-                            caveats.push("the provider reports more pages exist".to_owned());
-                        }
-                        if undated > 0 {
-                            caveats.push(format!("{undated} undated model(s) sorted last"));
-                        }
+                        let caveats = crate::ai::listing_caveats(truncated, undated);
                         *error = (!caveats.is_empty()).then(|| caveats.join("; "));
                     }
                     Err(e) => {
@@ -2664,14 +2658,8 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
         ModelsState::Fetched {
             truncated, undated, ..
         } => {
-            if *truncated {
-                notices.push(Line::from("models: the provider reports more pages exist").yellow());
-            }
-            if *undated > 0 {
-                notices.push(
-                    Line::from(format!("models: {undated} undated entr(y/ies) sorted last"))
-                        .yellow(),
-                );
+            for caveat in crate::ai::listing_caveats(*truncated, *undated) {
+                notices.push(Line::from(format!("models: {caveat}")).yellow());
             }
         }
         ModelsState::Unfetched => {}
