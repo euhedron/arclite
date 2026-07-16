@@ -88,16 +88,21 @@ jobs:
       TARGET: ${{ matrix.target }}
       BIN: ${{ matrix.bin }}
       ASSET: ${{ matrix.asset }} # carries the ref name — env-var indirection like TAG, same reason
+    # One shell for every step on every runner: windows-latest defaults to pwsh, where `"$TARGET"`
+    # is NOT an env-var reference (that's `$env:TARGET`) — rustup received an empty target and the
+    # v0.1.8 Windows build died on it. Bash exists on all three runners; the env-var indirection
+    # above assumes POSIX expansion, so the job states that assumption once instead of per step.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Add the Rust target
         run: rustup target add "$TARGET"
       - run: cargo build --release --locked --target "$TARGET"
       - name: Stage the asset under its release name
-        shell: bash
         run: cp "target/$TARGET/release/$BIN" "$ASSET"
       - name: Upload the asset
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
