@@ -272,9 +272,9 @@ pub(crate) const STATUS_OPEN: &str = "status: open";
 pub(crate) const STATUS_RESOLVED: &str = "status: resolved";
 
 /// The runnable spelling of a synthesis verb — `arc run <verb>` (the run group, [`crate::cli::NAME_RUN`]),
-/// never `arc audit`, which doesn't exist. One builder for the head summary and the entries'
-/// provenance line, so the two can't drift.
-fn run_invocation(command: &str) -> String {
+/// never `arc audit`, which doesn't exist. One builder for every surface that names the invocation
+/// (promote's head summary and entry provenance, synth's aggregate-context headers), so none can drift.
+pub(crate) fn run_invocation(command: &str) -> String {
     format!(
         "{} {} {command}",
         crate::cli::binary_name(),

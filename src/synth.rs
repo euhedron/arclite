@@ -518,8 +518,11 @@ fn gather_runs(ids: &[String], sources: &mut Vec<String>) -> anyhow::Result<Stri
                     "run `{id}` has no structured results to aggregate (`arc log {id}` shows what it holds)"
                 )
             })?;
+        // The invocation spelling comes from the one builder every surface shares — never a
+        // hardcoded `arc run` literal a binary/run-group rename would strand.
         text.push_str(&format!(
-            "\n## run {id} — `arc run {command}` on {repo} ({} result(s))\n",
+            "\n## run {id} — `{}` on {repo} ({} result(s))\n",
+            crate::commands::promote::run_invocation(command),
             items.len()
         ));
         for item in items {
