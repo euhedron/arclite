@@ -525,19 +525,7 @@ impl App {
                 thread::spawn(move || {
                     // The listing follows the backend the run would use: the shaped override, else
                     // the same configured-default resolution the run itself performs.
-                    let result = (|| {
-                        let settings = crate::settings::Settings::load(Path::new(&cwd))
-                            .map_err(|e| format!("{e:#}"))?;
-                        let name = backend
-                            .or_else(|| settings.default_backend.clone())
-                            .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
-                        let listing = crate::ai::backend(&name)
-                            .and_then(|b| b.list_models(&settings))
-                            .map_err(|e| format!("{e:#}"))?;
-                        let (truncated, undated) = (listing.truncated, listing.undated);
-                        let ids = listing.models.into_iter().map(|m| m.id).collect();
-                        Ok((ids, truncated, undated))
-                    })();
+                    let result = fetch_model_ids(&cwd, backend);
                     let _ = tx.send(Msg::LaunchModels { generation, result });
                 });
             }
@@ -674,18 +662,7 @@ impl App {
         let tx = self.tx.clone();
         let cwd = self.cwd.clone();
         thread::spawn(move || {
-            let result = (|| {
-                let settings = crate::settings::Settings::load(Path::new(&cwd))
-                    .map_err(|e| format!("{e:#}"))?;
-                let listing = crate::ai::backend(&backend)
-                    .and_then(|b| b.list_models(&settings))
-                    .map_err(|e| format!("{e:#}"))?;
-                Ok((
-                    listing.models.into_iter().map(|m| m.id).collect::<Vec<_>>(),
-                    listing.truncated,
-                    listing.undated,
-                ))
-            })();
+            let result = fetch_model_ids(&cwd, Some(backend));
             let _ = tx.send(Msg::ModelsFetched {
                 setting,
                 generation,
@@ -874,6 +851,27 @@ impl Launch {
         }
         args
     }
+}
+
+/// The provider-listing fetch both TUI pickers share (the launch modal's model cycle and the
+/// config picker): load the cwd's settings, resolve the backend — an explicit choice, else the
+/// configured default, else the built-in default (the same resolution a run performs) — list its
+/// models, and flatten to what the pickers consume: ids + the listing's caveats (truncation flag,
+/// undated count). One implementation, so the two fetch paths can't drift.
+fn fetch_model_ids(
+    cwd: &str,
+    backend: Option<String>,
+) -> Result<(Vec<String>, bool, usize), String> {
+    let settings = crate::settings::Settings::load(Path::new(cwd)).map_err(|e| format!("{e:#}"))?;
+    let name = backend
+        .or_else(|| settings.default_backend.clone())
+        .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
+    let listing = crate::ai::backend(&name)
+        .and_then(|b| b.list_models(&settings))
+        .map_err(|e| format!("{e:#}"))?;
+    let (truncated, undated) = (listing.truncated, listing.undated);
+    let ids = listing.models.into_iter().map(|m| m.id).collect();
+    Ok((ids, truncated, undated))
 }
 
 /// The launch gate's model-listing state — fetched lazily (the first `m` press), per backend.
