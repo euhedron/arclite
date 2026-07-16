@@ -9,7 +9,7 @@ use crate::output::emit;
 /// arc's own GitHub owner + repo — the single base for every release URL: the git remote (releases are
 /// `v*` tags this check reads via `git ls-remote`), the human Releases page, and the release-asset URL
 /// (`--apply` pulls the per-OS binary). One home so the three can't drift.
-const OWNER: &str = "nikganderson";
+const OWNER: &str = "euhedron";
 const REPO: &str = "arclite";
 
 /// The GitHub web/git host and the REST API host — single-sourced alongside OWNER/REPO so the URL
