@@ -31,6 +31,11 @@ const ERRORED_EXIT: u8 = 1;
 
 const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
 
+/// How many schema-mismatch problems the local re-check names before eliding the rest (with a
+/// disclosed "… and N more" count). The first few identify the shape drift; a flood of repeats
+/// past this adds noise, not signal.
+const SCHEMA_PROBLEMS_LISTED: usize = 5;
+
 /// The single key for every command's structured output: a `results` array. Defined once — the
 /// schema is built from it ([`results_schema`]), the gate reads it, and multi-run unions it — so it
 /// can't drift across schema and code.
@@ -1282,7 +1287,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             // The first few name the shape drift; the rest are elided *disclosed* — a count, not a
             // silent cap that would read as the full list.
             let total = problems.len();
-            problems.truncate(5);
+            problems.truncate(SCHEMA_PROBLEMS_LISTED);
             let elided = total - problems.len();
             let more = if elided > 0 {
                 format!("; … and {elided} more")

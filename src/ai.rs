@@ -204,6 +204,27 @@ pub(crate) fn join_models(models: &[String]) -> String {
     models.join(" + ")
 }
 
+/// The four token counters summed across a payload's `modelUsage` entries, as one tuple
+/// (input, output, cache-creation, cache-read) — the single summation both of `parse_result`'s
+/// payload paths read (the error payload's real spend, the incomplete payload's salvage), so how
+/// modelUsage totals are computed can't drift between them.
+fn model_usage_totals(
+    model_usage: &std::collections::BTreeMap<String, PerModelUsage>,
+) -> (u64, u64, u64, u64) {
+    (
+        model_usage.values().map(|m| m.input_tokens).sum(),
+        model_usage.values().map(|m| m.output_tokens).sum(),
+        model_usage
+            .values()
+            .map(|m| m.cache_creation_input_tokens)
+            .sum(),
+        model_usage
+            .values()
+            .map(|m| m.cache_read_input_tokens)
+            .sum(),
+    )
+}
+
 /// The model identity a payload supports: a non-empty confirmed set (the response's own per-model
 /// usage) becomes the identity that ran, [`ModelSource::Reported`]; an empty one falls back to the
 /// requested id, disclosed as [`ModelSource::Requested`] — never presented as confirmed. The single
@@ -244,22 +265,16 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
         // modelUsage rather than reading the zeros, and the failure is carried as a value (logged), not
         // bailed (which would lose the spend).
         let (model, models, model_source) = model_identity(&confirmed, requested_model);
+        let (input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens) =
+            model_usage_totals(&parsed.model_usage);
         let usage = Usage {
             model,
             models,
             model_source,
-            input_tokens: parsed.model_usage.values().map(|m| m.input_tokens).sum(),
-            output_tokens: parsed.model_usage.values().map(|m| m.output_tokens).sum(),
-            cache_creation_input_tokens: parsed
-                .model_usage
-                .values()
-                .map(|m| m.cache_creation_input_tokens)
-                .sum(),
-            cache_read_input_tokens: parsed
-                .model_usage
-                .values()
-                .map(|m| m.cache_read_input_tokens)
-                .sum(),
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
             cost_usd: parsed.total_cost_usd,
             cost_partial: false,
             // With no modelUsage entries at all, the zeros are placeholders (nothing was measured);
@@ -308,22 +323,7 @@ pub fn parse_result(json: &str, requested_model: &str) -> anyhow::Result<Synthes
     // block when present, else the modelUsage sums — so an incomplete payload salvages every parsed
     // field rather than discarding one source because the other is missing.
     let salvaged_tokens = parsed.usage.as_ref().map_or_else(
-        || {
-            (
-                parsed.model_usage.values().map(|m| m.input_tokens).sum(),
-                parsed.model_usage.values().map(|m| m.output_tokens).sum(),
-                parsed
-                    .model_usage
-                    .values()
-                    .map(|m| m.cache_creation_input_tokens)
-                    .sum(),
-                parsed
-                    .model_usage
-                    .values()
-                    .map(|m| m.cache_read_input_tokens)
-                    .sum(),
-            )
-        },
+        || model_usage_totals(&parsed.model_usage),
         |u| {
             (
                 u.input_tokens,
