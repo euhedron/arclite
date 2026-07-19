@@ -1356,32 +1356,41 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
         }
     });
 
-    // The cockpit's target directory (shown on home) — surface a genuine failure to read it rather
-    // than masking it. The app keeps the original sender, cloned into each launch worker.
-    let cwd = std::env::current_dir()
-        .context("cannot determine the working directory")?
-        .display()
-        .to_string();
-    let mut app = App::new(tx, cwd);
-    while !app.should_quit {
-        terminal.draw(|frame| render(frame, &app))?;
-        // `recv` errors only when every sender has dropped; the tick thread keeps one alive for the
-        // whole loop, so an error here means a sender thread panicked — surface that loudly (the panic
-        // hook restores the terminal) rather than exiting as if the user quit, which would hide the bug.
-        let msg = rx
-            .recv()
-            .expect("a sender thread panicked (input/tick hold a sender for the loop's lifetime)");
-        update(&mut app, msg);
-    }
+    // The fallible drive loop, closed over so every exit — the cwd probe (already past the input
+    // thread's spawn), a draw error, a normal quit — funnels through the one teardown below
+    // rather than `?`-returning around it. Its result is consumed only after the join.
+    let drive = move || -> anyhow::Result<Option<String>> {
+        // The cockpit's target directory (shown on home) — surface a genuine failure to read it
+        // rather than masking it. The app keeps the original sender, cloned into each launch worker.
+        let cwd = std::env::current_dir()
+            .context("cannot determine the working directory")?
+            .display()
+            .to_string();
+        let mut app = App::new(tx, cwd);
+        while !app.should_quit {
+            terminal.draw(|frame| render(frame, &app))?;
+            // `recv` errors only when every sender has dropped; the tick thread keeps one alive for
+            // the whole loop, so an error here means a sender thread panicked — surface that loudly
+            // (the panic hook restores the terminal) rather than exiting as if the user quit, which
+            // would hide the bug.
+            let msg = rx.recv().expect(
+                "a sender thread panicked (input/tick hold a sender for the loop's lifetime)",
+            );
+            update(&mut app, msg);
+        }
+        Ok(app.input_error.take())
+    };
+    let outcome = drive();
     // Stop and JOIN the input reader before the caller restores the terminal: stdin must have no
-    // reader left when the shell gets it back (the poll interval bounds the wait).
+    // reader left when the shell gets it back (the poll interval bounds the wait) — on the error
+    // exits above no less than on a quit.
     input_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     input_thread
         .join()
         .expect("the input thread panicked while shutting down");
     // An input-stream failure exited the loop; it's an error, not a quit — surfaced after the
     // terminal is restored (the caller prints it), never silently swallowed into a normal exit.
-    if let Some(e) = app.input_error {
+    if let Some(e) = outcome? {
         anyhow::bail!("the terminal input stream failed: {e}");
     }
     Ok(())

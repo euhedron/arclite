@@ -22,17 +22,26 @@ fi
 
 # A tag-only push moves no branch: its commits are already on the remote, gated when they landed, so
 # re-running the gate would only re-sample identical code (each fresh audit is a new judgment — a
-# release tag shouldn't be a lottery ticket on code that already passed). Gate pushes that move a
-# branch ref; the refs arrive on stdin as `<local ref> <local sha> <remote ref> <remote sha>` lines.
+# release tag shouldn't be a lottery ticket on code that already passed). But that premise must be
+# PROVED, not assumed: a tag can carry commits origin/main never received (e.g. one this gate just
+# blocked), and skipping on the ref name alone once let exactly that slip through — so a tag whose
+# target isn't an ancestor of origin/main gates like a branch push. A deletion pushes no commits at
+# all (its stdin line carries the zero sha) — nothing to gate. The refs arrive on stdin as
+# `<local ref> <local sha> <remote ref> <remote sha>` lines.
+zero=0000000000000000000000000000000000000000
 branch_push=0
-while read -r local_ref _rest; do
+while read -r local_ref local_sha _rest; do
+    [ "$local_sha" = "$zero" ] && continue # a deletion — pushes no commits
     case "$local_ref" in
-    refs/tags/*) ;;
+    refs/tags/*)
+        # The skip's premise, verified: the tagged commit already landed on the gated branch.
+        git merge-base --is-ancestor "$local_sha" origin/main 2>/dev/null || branch_push=1
+        ;;
     *) branch_push=1 ;;
     esac
 done
 if [ "$branch_push" -eq 0 ]; then
-    echo "arclite gate: tag-only push — its commits were gated when they landed; skipping" >&2
+    echo "arclite gate: push moves no ungated commits (landed tags / deletions) — skipping" >&2
     exit 0
 fi
 
