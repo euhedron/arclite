@@ -328,12 +328,24 @@ fn gather_includes(
         let mut unreadable = 0usize;
         let mut duplicate = 0usize;
         let mut excluded = 0usize;
+        // The largest excluded file, by on-disk size (the file is never read, so bytes, not chars).
+        // A bare count can hide a whole source file inside an --exclude sweep; naming the biggest
+        // drop keeps the coverage hole visible and the follow-up (--include it) derivable.
+        let mut excluded_largest: Option<(String, u64)> = None;
         for file in &files {
             if excluder
                 .matched_path_or_any_parents(file, false)
                 .is_ignore()
             {
                 excluded += 1;
+                // An unprobeable size just isn't ranked — the count above still records the drop.
+                if let Ok(meta) = file.metadata()
+                    && excluded_largest
+                        .as_ref()
+                        .is_none_or(|(_, max)| meta.len() > *max)
+                {
+                    excluded_largest = Some((file.display().to_string(), meta.len()));
+                }
                 continue; // dropped by an --exclude pattern
             }
             let label = file.display().to_string();
@@ -361,8 +373,14 @@ fn gather_includes(
             ));
         }
         if excluded > 0 {
+            // Disclose the largest drop beside the count (see excluded_largest above); when no
+            // excluded file's size was probeable, the count stands alone rather than guessing.
+            let largest = excluded_largest
+                .take()
+                .map(|(label, bytes)| format!(" (largest: {label}, {bytes} bytes)"))
+                .unwrap_or_default();
             sources.push(format!(
-                "{excluded} file(s) under {} excluded by --exclude — skipped",
+                "{excluded} file(s) under {} excluded by --exclude — skipped{largest}",
                 path.display()
             ));
         }
