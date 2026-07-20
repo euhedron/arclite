@@ -116,6 +116,14 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        key: "defaults.cursor_model",
+        read: |s| s.default_cursor_model.clone(),
+        parse: parse_model_id,
+        space: |_| ValueSpace::Remote {
+            backend: crate::ai::CURSOR,
+        },
+    },
+    Setting {
         key: "defaults.codex_reasoning_effort",
         read: |s| s.default_codex_reasoning_effort.clone(),
         parse: |v| {

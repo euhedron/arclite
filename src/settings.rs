@@ -22,6 +22,8 @@ pub struct Settings {
     pub default_codex_model: Option<String>,
     /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
     pub default_codex_reasoning_effort: Option<String>,
+    /// Cursor backend's default model (`defaults.cursor_model`); `None` uses the built-in cursor default.
+    pub default_cursor_model: Option<String>,
     /// Rule ids disabled for this scope (`disabled_rules` at the settings root — a list, so it sits
     /// beside `defaults`/`rulesets` rather than under the scalar defaults). Filtered out of every
     /// resolved ruleset, with the filtering disclosed wherever rules are reported.
@@ -72,6 +74,7 @@ struct RawDefaults {
     max_budget_usd: Option<f64>,
     codex_model: Option<String>,
     codex_reasoning_effort: Option<String>,
+    cursor_model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -135,6 +138,7 @@ impl Settings {
             raw.defaults.max_budget_usd,
         );
         overlay(&mut self.default_codex_model, raw.defaults.codex_model);
+        overlay(&mut self.default_cursor_model, raw.defaults.cursor_model);
         if let Some(e) = &raw.defaults.codex_reasoning_effort {
             crate::ai::validate_reasoning_effort(e).with_context(|| {
                 format!(
