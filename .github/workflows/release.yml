@@ -17,12 +17,16 @@ permissions:
   contents: write
 
 jobs:
-  # Create the Release once, before the matrix uploads race to attach assets to it.
+  # Create the Release once, as a draft, before the matrix uploads race to attach assets to it.
+  # A draft stays mutable while the binaries are assembled; the final job publishes it only after
+  # every upload succeeds. That order is required when repository release immutability is enabled.
   # Context values reach every `run:` below as environment variables, never inline `${{ }}`
   # interpolation into the script text: a ref name is repo-controlled input, and a tag like
   # `v1$(cmd)` is valid to git — as an env var it's inert data the shell quotes, not grammar.
   create-release:
     runs-on: ubuntu-latest
+    outputs:
+      already_published: ${{ steps.release.outputs.already_published }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate the tag — a safe path segment that matches Cargo.toml's version
@@ -46,23 +50,34 @@ jobs:
             echo "tag '$TAG' does not match Cargo.toml's version 'v$CARGO_VERSION' — refusing to release a mislabeled binary" >&2
             exit 1
           fi
-      - name: Create the release (idempotent)
+      - name: Create the draft release (idempotent)
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
-        # Idempotent by *confirming the release exists* when create fails — a re-run's
-        # already-exists is benign, while an auth/network/tag failure still fails the job
-        # (a bare `|| true` would mask those too).
-        run: >
-          gh release create "$TAG"
-          --repo "$REPO"
-          --title "$TAG"
-          --notes "arc $TAG"
-          --verify-tag || gh release view "$TAG" --repo "$REPO" >/dev/null
+        # A failed run can resume an existing draft. A re-run of an already-published release is a
+        # no-op: its assets may be immutable, so the upload jobs must not try to clobber them.
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            IS_DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft)
+            if [ "$IS_DRAFT" = "false" ]; then
+              echo "already_published=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
+              --notes "arc $TAG" \
+              --verify-tag \
+              --draft
+          fi
+          echo "already_published=false" >> "$GITHUB_OUTPUT"
 
   upload:
     needs: create-release
+    if: needs.create-release.outputs.already_published != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -110,3 +125,15 @@ jobs:
         run: >
           gh release upload "$TAG" "$ASSET"
           --repo "$REPO" --clobber
+
+  publish-release:
+    needs: [create-release, upload]
+    if: needs.create-release.outputs.already_published != 'true' && success()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false
