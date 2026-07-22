@@ -28,7 +28,7 @@ jobs:
     outputs:
       already_published: ${{ steps.release.outputs.already_published }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate the tag — a safe path segment that matches Cargo.toml's version
         env:
           TAG: ${{ github.ref_name }}
@@ -111,7 +111,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Add the Rust target
         run: rustup target add "$TARGET"
       - run: cargo build --release --locked --target "$TARGET"
