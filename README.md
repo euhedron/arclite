@@ -12,7 +12,7 @@ Open source (MIT), built by [Euhedron](https://euhedron.com) — shipped as **Ar
 
 ## Getting started
 
-**Prerequisites:** a Rust toolchain (`cargo`; Rust as new as the crate's `rust-version`, for let-chains); an agent CLI on `PATH` for the AI commands — the Claude Code CLI (`claude`, the default) or the Codex CLI (`codex`, via `--backend codex`); and `git` (used by `--changed`, `arc init --hook`, `arc update`, and to stamp each run's commit provenance); `curl` is needed by `arc update --apply` and the provider model listings (`arc models`, the TUI's model pickers). `arc doctor` checks for all of these.
+**Prerequisites:** a Rust toolchain (`cargo`; Rust as new as the crate's `rust-version`, for let-chains); a current agent CLI on `PATH` for the AI commands — the Claude Code CLI (`claude`, the default) or the Codex CLI (`codex`, via `--backend codex`); and `git` (used by `--changed`, `arc init --hook`, `arc update`, and to stamp each run's commit provenance); `curl` is needed by `arc update --apply` and the provider model listings (`arc models`, the TUI's model pickers). The execution boundary below is audited against Claude Code 2.1.216 and Codex CLI 0.144.4; an older CLI that does not recognize a required flag/config key fails the run instead of silently weakening it. `arc doctor` checks that the tools are present.
 
 **Install.** Two ways:
 
