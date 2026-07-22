@@ -324,6 +324,21 @@ fn record_strings(run: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Render a new decomposed boundary record. Older logs predate this object and fall back to their
+/// legacy `memory` label in [`stored_human`], so the log browser stays backwards-readable.
+fn stored_boundary(boundary: &Value) -> Option<String> {
+    let object = boundary.as_object()?;
+    let value = |key: &str| object.get(key).and_then(Value::as_str).unwrap_or("?");
+    Some(format!(
+        "customizations={}; tools={}; repo={}; session={}; inherited={}",
+        value("customizations"),
+        value("tool_runtime"),
+        value("repository_access"),
+        value("session"),
+        value("inherited")
+    ))
+}
+
 /// A stored run for humans: identity, the run's shape and ground-truth usage, the context it was given
 /// (the source list + prompt size), then the result body (structured if present, else text). Shared
 /// with the TUI's `log` detail view, so a run reads the same there. The verbatim prompt is stored in
@@ -360,7 +375,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
         let blocked = crate::log::is_blocked(&run);
         meta.push_str(&format!(" · gate: {}", crate::log::gate_label(blocked)));
     }
-    // Run shape: runs (vs. requested), memory isolation, the budget cap, codex reasoning effort.
+    // Run shape: runs (vs. requested), decomposed boundary, budget cap, codex reasoning effort.
     let runs = run.get("runs").and_then(Value::as_u64).unwrap_or(1) as usize;
     let requested = run
         .get("runs_requested")
@@ -372,12 +387,30 @@ pub(crate) fn stored_human(v: &Value) -> String {
     }
     let budget =
         crate::log::budget_display(run.get("max_budget_usd").and_then(Value::as_f64), requested);
-    meta.push_str(&format!(
-        "memory={} · budget={budget}",
-        field(&run, "memory")
-    ));
+    let boundary = run.get("boundary");
+    if let Some(boundary) = boundary {
+        let ambient = if boundary
+            .get("ambient")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "on"
+        } else {
+            "off"
+        };
+        meta.push_str(&format!("ambient={ambient} · budget={budget}"));
+    } else {
+        // Backward compatibility for records written before the boundary object existed.
+        meta.push_str(&format!(
+            "memory={} (legacy) · budget={budget}",
+            field(&run, "memory")
+        ));
+    }
     if let Some(effort) = run.get("reasoning_effort").and_then(Value::as_str) {
         meta.push_str(&format!(" · reasoning={effort}"));
+    }
+    if let Some(boundary) = boundary.and_then(stored_boundary) {
+        meta.push_str(&format!("\nboundary: {boundary}"));
     }
     // Ground-truth token usage + cost (no fabricated zeros for records predating the usage field).
     let usage = match run.get("usage") {
@@ -434,7 +467,7 @@ pub(crate) fn stored_human(v: &Value) -> String {
         crate::join_or(&sources, "(none)")
     ));
     meta.push_str(&format!(
-        "\ntools: {}",
+        "\ntool grants: {}",
         crate::join_or(&record_strings(&run, "tools"), "none")
     ));
     let body = crate::synth::body_display(

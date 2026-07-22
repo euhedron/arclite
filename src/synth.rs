@@ -202,7 +202,8 @@ pub struct SynthOptions<'a> {
     pub ranked: bool,
     /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
     pub kinds: bool,
-    /// Claude tools to allow (empty = none).
+    /// Arc-requested Claude tool grants (empty = none). Provider-owned tools are reported separately
+    /// in the run boundary.
     pub allowed_tools: &'a [String],
     /// Repository root for the run — see [`crate::ai::Request`] for how it reaches allowed tools.
     pub dir: &'a Path,
@@ -216,8 +217,8 @@ pub struct SynthOptions<'a> {
     pub command: &'a str,
     /// Optional directory to also write the synthesis into, as `<command>.md`.
     pub output: Option<&'a Path>,
-    /// Load the agent's ambient project memory — claude's CLAUDE.md + auto-memory, codex's AGENTS.md —
-    /// instead of isolating (default: isolate).
+    /// Opt into target/user ambient customizations. The exact backend-specific additions and the
+    /// residual provider-managed inputs are decomposed in the run boundary.
     pub ambient_memory: bool,
     /// JSON Schema for structured output (set whenever the verb declares a shape), or `None` for a
     /// prose verb's free-form narrative.
@@ -981,11 +982,11 @@ struct RunReport<'a> {
     /// How many runs were requested (`--runs N`). When it exceeds `runs`, some failed and were
     /// skipped — surfaced here so a `--json` consumer sees the drop in the payload, not just on stderr.
     runs_requested: usize,
+    /// Arc-requested tool grants (currently Claude-only). This is not a claim that a provider has no
+    /// built-in/managed tools; [`ai::RunBoundary::tool_runtime`] carries that separate fact.
     tools: Vec<&'a str>,
-    /// "isolated" (default — no ambient agent memory: claude's CLAUDE.md/auto-memory, codex's AGENTS.md)
-    /// or "ambient" (loaded). Surfaced because it shapes what the model sees: "isolated" means the
-    /// context list below is authoritative.
-    memory: &'a str,
+    /// The decomposed execution boundary: what Arc suppresses or grants, plus what still inherits.
+    boundary: ai::RunBoundary,
     /// The hard cost cap in effect, or `None` — surfaced every run so an uncapped run says so.
     max_budget_usd: Option<f64>,
     /// Codex reasoning effort in effect, surfaced because it shapes cost; `None` for backends without it.
@@ -1030,13 +1031,13 @@ impl RunReport<'_> {
             Some(crate::ai::ModelSource::Reported) | None => "",
         };
         let mut line = format!(
-            "model={}{model_source}{}  backend={}{}  tools={}  memory={}  budget={}{}{}  context=[{}]",
+            "model={}{model_source}{}  backend={}{}  tool_grants={}  ambient={}  budget={}{}{}  context=[{}]",
             self.model,
             runs,
             self.backend,
             reasoning,
             tools,
-            self.memory,
+            if self.boundary.ambient { "on" } else { "off" },
             budget,
             if self.ranked { "  ranked" } else { "" },
             if self.kinds { "  kinds" } else { "" },
@@ -1049,6 +1050,7 @@ impl RunReport<'_> {
         if !self.excluded.is_empty() {
             line.push_str(&format!("  excluded=[{}]", self.excluded.join(", ")));
         }
+        line.push_str(&format!("\nboundary: {}", self.boundary.human()));
         line.push_str(&format!(
             "\nconfig: {}",
             crate::join_or(self.config, crate::settings::NO_LAYERS)
@@ -1098,11 +1100,12 @@ struct RunRecord<'a> {
     runs: usize,
     /// Runs requested (`--runs N`) — exceeds `runs` when some failed, so the durable trace shows the drop too.
     runs_requested: usize,
-    memory: &'a str,
+    boundary: ai::RunBoundary,
     max_budget_usd: Option<f64>,
     /// Codex reasoning effort recorded (cost-shaping); `None` for backends without it.
     reasoning_effort: Option<&'a str>,
-    /// Claude tools allowed during the run (empty = none — the default, isolated shape).
+    /// Arc-requested Claude tool grants (empty = none). Provider-owned tools are disclosed by
+    /// `boundary`, not inferred from this list.
     tools: &'a [String],
     ranked: bool,
     kinds: bool,
@@ -1201,6 +1204,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let requested = opts.model;
     // The report names the model that actually ran (set from the response after the call); until
     // then it holds the requested model — all a dry run can name, since nothing runs.
+    let boundary = ai::run_boundary(opts.backend, opts.ambient_memory, opts.allowed_tools)?;
     let mut report = RunReport {
         model: requested.to_owned(),
         // No source verdict until a response exists — a real run sets it from the usage; a dry run
@@ -1210,11 +1214,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         runs: opts.runs,
         runs_requested: opts.runs,
         tools: opts.allowed_tools.iter().map(String::as_str).collect(),
-        memory: if opts.ambient_memory {
-            "ambient"
-        } else {
-            "isolated"
-        },
+        boundary,
         max_budget_usd: opts.max_budget_usd,
         reasoning_effort: opts.reasoning_effort,
         ranked: opts.ranked,
@@ -1440,7 +1440,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             backend: opts.backend,
             runs,
             runs_requested: opts.runs,
-            memory: report.memory,
+            boundary: report.boundary,
             max_budget_usd: opts.max_budget_usd,
             reasoning_effort: opts.reasoning_effort,
             tools: opts.allowed_tools,

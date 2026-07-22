@@ -456,11 +456,93 @@ pub struct Request<'a> {
     pub reasoning_effort: Option<&'a str>,
 }
 
+/// The execution boundary arclite asks a backend CLI to enforce. This is deliberately decomposed:
+/// a single "isolated" bit would blur Arc-controlled inputs with provider-managed policy, bundled
+/// instructions, and the tools a backend owns. Serialized into dry runs and durable run records so
+/// those residual inputs stay visible instead of hiding behind a stronger word than the CLI earns.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RunBoundary {
+    pub ambient: bool,
+    pub customizations: &'static str,
+    pub tool_runtime: &'static str,
+    pub repository_access: &'static str,
+    pub session: &'static str,
+    pub inherited: &'static str,
+}
+
+impl RunBoundary {
+    pub(crate) fn human(&self) -> String {
+        format!(
+            "customizations={}; tools={}; repo={}; session={}; inherited={}",
+            self.customizations,
+            self.tool_runtime,
+            self.repository_access,
+            self.session,
+            self.inherited
+        )
+    }
+}
+
 /// Each backend's name, named once: the [`BACKENDS`] registry rows, [`DEFAULT_BACKEND`], and every
 /// cross-module reference (the config table's provider-listing rows) derive from these, so a rename
 /// is one edit here — never a scattered literal hunt.
 pub(crate) const CLAUDE: &str = "claude";
 pub(crate) const CODEX: &str = "codex";
+
+/// Describe the same backend policy the command builders below enforce. Keeping this next to those
+/// builders makes the report reviewable against argv, while tests assert both halves together.
+pub(crate) fn run_boundary(
+    backend: &str,
+    ambient: bool,
+    allowed_tools: &[String],
+) -> anyhow::Result<RunBoundary> {
+    let tool_grants = !allowed_tools.is_empty();
+    Ok(match backend {
+        CLAUDE => RunBoundary {
+            ambient,
+            customizations: if ambient {
+                "user/project customizations enabled; inherited MCP disabled"
+            } else {
+                "user/project customizations disabled"
+            },
+            tool_runtime: if tool_grants {
+                "explicit built-in allowlist"
+            } else {
+                "built-in tools disabled"
+            },
+            repository_access: if tool_grants {
+                "target granted to allowlisted tools"
+            } else if ambient {
+                "target is working directory; no built-in tools"
+            } else {
+                "prompt only; no target-directory grant"
+            },
+            session: "CLI session files disabled",
+            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
+        },
+        CODEX => RunBoundary {
+            ambient,
+            customizations: if ambient {
+                "target project config/instructions/skills enabled; user config/rules ignored; ordinary hooks/plugins/apps/web search disabled"
+            } else {
+                "project config/instructions/skills and user config/rules suppressed; ordinary hooks/plugins/apps/web search disabled"
+            },
+            tool_runtime: if ambient {
+                "ordinary shell/delegation/app tools disabled; remaining local tools confined read-only to target + minimal runtime; network denied"
+            } else {
+                "ordinary shell/delegation/app tools disabled; remaining local tools confined to fresh run dir + minimal runtime; network denied"
+            },
+            repository_access: if ambient {
+                "target readable by local tools"
+            } else {
+                "prompt only; target denied to local tools"
+            },
+            session: "CLI session files disabled",
+            inherited: "auth, provider base instructions, user/admin/bundled skills, and managed policy/tools",
+        },
+        _ => anyhow::bail!("unknown synthesis backend `{backend}`"),
+    })
+}
 
 /// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
 pub const DEFAULT_BACKEND: &str = CLAUDE;
@@ -798,10 +880,10 @@ fn openai_key(settings: &Settings) -> anyhow::Result<Option<(String, String)>> {
     )
 }
 
-/// The Claude Code CLI backend — `claude -p` with a controlled, isolated context: an explicit model,
-/// no inherited MCP servers (`--strict-mcp-config`), and — unless `ambient_memory` is set — no ambient
-/// memory, with the prompt passed over stdin (avoiding shell-quoting pitfalls). So by default the
-/// sources arclite reports are authoritative, modulo Claude Code's own fixed base (date, env, tools).
+/// The Claude Code CLI backend — `claude -p` with an explicit model and tools, no persisted session,
+/// and no inherited MCP. Unless `ambient_memory` is set, Claude safe mode also suppresses ordinary
+/// user/project customizations. Admin-managed policy and the provider's own base still apply, which
+/// [`RunBoundary`] discloses rather than collapsing the whole shape into an "isolated" claim.
 pub struct ClaudeBackend;
 
 impl Backend for ClaudeBackend {
@@ -860,11 +942,12 @@ struct Driven {
 
 fn drive(
     mut cmd: Command,
+    cwd: &Path,
     prompt: &str,
     launch_err: &'static str,
     mut on_event: impl FnMut(&str, &serde_json::Value, &str),
 ) -> Result<Driven, DriveError> {
-    cmd.current_dir(std::env::temp_dir()) // neutral cwd; the agent's working root is set per-backend
+    cmd.current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -941,11 +1024,9 @@ fn drive(
     })
 }
 
-/// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
-fn synthesize_claude(
-    req: &Request,
-    mut progress: Option<crate::runs::Active>,
-) -> anyhow::Result<Synthesis> {
+/// Build the complete Claude invocation without spawning it. Keeping policy construction separate
+/// from process driving makes the security boundary deterministically testable at zero spend.
+fn claude_command(req: &Request) -> anyhow::Result<Command> {
     let mut cmd = command("claude")?;
     // stream-json + --verbose + partial messages: stream events as the run proceeds — `assistant`
     // events at turn boundaries plus fine-grained `content_block_delta`s — so live stats update
@@ -959,12 +1040,16 @@ fn synthesize_claude(
         "--model",
         req.model,
         "--strict-mcp-config",
+        "--no-session-persistence",
     ]);
-    cmd.arg("--allowedTools");
+    // `--allowedTools` only changes permission prompts; it does not remove tool schemas. `--tools`
+    // is the availability boundary, and an empty value is Claude's documented disable-all shape.
+    cmd.arg("--tools");
     if req.allowed_tools.is_empty() {
-        cmd.arg(""); // allowlist of none → no tool schemas loaded (minimal context)
+        cmd.arg("");
     } else {
         cmd.args(req.allowed_tools);
+        cmd.arg("--allowedTools").args(req.allowed_tools);
         // cwd is neutral (below), so grant the allowed tools read access to the repo.
         cmd.arg("--add-dir").arg(req.dir);
     }
@@ -978,20 +1063,36 @@ fn synthesize_claude(
     if let Some(schema) = req.json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
-    // Isolation covers the agent's whole ambient configuration, and `--ambient-memory` re-enables
-    // the whole of it — memory AND settings — which the flag's help says in as many words, so
-    // nothing rides back in undisclosed. Memory: user/project CLAUDE.md + auto-memory (a neutral cwd
-    // alone does NOT stop the user-level one). Settings: `--setting-sources ""`, or hooks and other
-    // behavior-shaping config would load under a run arclite states explicitly. Auth is a separate
-    // store, unaffected either way (confirmed by exercise).
+    // Safe mode is Claude's current all-customizations boundary (CLAUDE.md, skills, plugins, hooks,
+    // MCP, commands/agents/styles, and related user/project setup). The older source-specific
+    // switches remain as fail-closed defense in depth. Admin-managed policy, auth, the provider base,
+    // permissions, and explicitly selected tools still apply and are disclosed in RunBoundary.
     if !req.ambient_memory {
+        cmd.arg("--safe-mode");
         cmd.env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
         cmd.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         cmd.args(["--setting-sources", ""]);
     }
+    Ok(cmd)
+}
+
+/// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
+fn synthesize_claude(
+    req: &Request,
+    mut progress: Option<crate::runs::Active>,
+) -> anyhow::Result<Synthesis> {
+    let cmd = claude_command(req)?;
+    // Ambient mode deliberately uses the target as Claude's cwd so its project customizations can
+    // load. Default mode starts from a neutral directory; safe mode suppresses user/project sources.
+    let cwd = if req.ambient_memory {
+        req.dir.to_path_buf()
+    } else {
+        std::env::temp_dir()
+    };
     let mut result_line: Option<String> = None;
     let driven = drive(
         cmd,
+        &cwd,
         req.prompt,
         "failed to launch `claude` — is the Claude Code CLI installed and on PATH?",
         |kind, event, raw| match kind {
@@ -1163,11 +1264,10 @@ pub(crate) fn validate_reasoning_effort(value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The Codex CLI backend — `codex exec` with a read-only sandbox and a JSON event stream, the second
-/// [`Backend`]. Codex reports token usage but no dollar cost, so the [`Usage`]'s `cost_usd` is `None`;
-/// `--output-schema` takes a file path (claude takes the schema inline), so the request's schema is
-/// materialized to a per-run temp file; and the final structured result is read from the `-o`
-/// artifact, not scraped from the event stream (in `--json` mode stdout is events, not the answer).
+/// The Codex CLI backend — `codex exec` with an ephemeral session, a least-privilege permission
+/// profile, and a JSON event stream. Codex reports token usage but no dollar cost, so [`Usage`]'s
+/// `cost_usd` is `None`; `--output-schema` takes a file path (claude takes it inline), so the schema
+/// is materialized to a fresh run directory and the final result is read from `-o`, not stdout.
 pub struct CodexBackend;
 
 impl Backend for CodexBackend {
@@ -1304,6 +1404,80 @@ impl Drop for CodexTemp {
     }
 }
 
+const CODEX_ARCLITE_PERMISSION_PROFILE: &str = "arclite";
+const CODEX_ARCLITE_FILESYSTEM: &str =
+    "permissions.arclite.filesystem={\":minimal\"=\"read\",\":workspace_roots\"={\".\"=\"read\"}}";
+
+/// Build the complete Codex invocation without spawning it. Its permission profile is intentionally
+/// narrower than `--sandbox read-only`: read-only prevents writes but can still read broadly, while
+/// this profile grants only the minimal runtime and the selected workspace root. In default mode
+/// that root is the fresh run directory, not the target repository.
+fn codex_command(
+    req: &Request,
+    work: &Path,
+    out_path: &Path,
+    schema_path: Option<&Path>,
+) -> anyhow::Result<Command> {
+    let mut cmd = command("codex")?;
+    let agent_root = if req.ambient_memory { req.dir } else { work };
+    cmd.arg("exec")
+        .arg("--json")
+        .arg("--strict-config") // fail closed when the installed CLI cannot honor a policy key
+        .arg("--ephemeral") // no resumable session files
+        .arg("--skip-git-repo-check") // arclite points at any dir, not necessarily a git repo
+        .arg("--ignore-user-config") // auth still uses CODEX_HOME; config.toml does not
+        .arg("--ignore-rules") // skip user/project execpolicy; local execution is disabled below
+        .arg("--model")
+        .arg(req.model)
+        .arg("-c")
+        .arg("approval_policy=\"never\"") // a headless run must never pause for approval
+        .arg("-c")
+        .arg(format!(
+            "default_permissions=\"{CODEX_ARCLITE_PERMISSION_PROFILE}\""
+        ))
+        .arg("-c")
+        .arg(CODEX_ARCLITE_FILESYSTEM)
+        .arg("-c")
+        .arg("permissions.arclite.network.enabled=false")
+        .arg("-c")
+        .arg("web_search=\"disabled\"")
+        .arg("-c")
+        .arg("allow_managed_hooks_only=true")
+        // This is a synthesis call, not an autonomous coding session. Disable ordinary extension,
+        // persistence, delegation, and local-command surfaces explicitly; the permission profile
+        // remains defense in depth for any provider/managed local tool that still exists.
+        .args(["--disable", "apps"])
+        .args(["--disable", "goals"])
+        .args(["--disable", "hooks"])
+        .args(["--disable", "memories"])
+        .args(["--disable", "multi_agent"])
+        .args(["--disable", "plugins"])
+        .args(["--disable", "remote_plugin"])
+        .args(["--disable", "shell_snapshot"])
+        .args(["--disable", "shell_tool"])
+        .args(["--disable", "unified_exec"])
+        .arg("--cd")
+        .arg(agent_root)
+        .arg("-o")
+        .arg(out_path);
+    // Reasoning effort is cost-shaping, so the caller resolves + surfaces it (the codex backend
+    // always supplies one via `reasoning_effort()`) and it is applied here, never inherited.
+    if let Some(effort) = req.reasoning_effort {
+        cmd.arg("-c")
+            .arg(format!("model_reasoning_effort={effort}"));
+    }
+    // Zero covers the global + project AGENTS.md instruction chain. A neutral agent root also keeps
+    // target project config and skills undiscoverable. Ambient mode deliberately opts into the
+    // target root and its project customizations instead.
+    if !req.ambient_memory {
+        cmd.arg("-c").arg("project_doc_max_bytes=0");
+    }
+    if let Some(schema_path) = schema_path {
+        cmd.arg("--output-schema").arg(schema_path);
+    }
+    Ok(cmd)
+}
+
 /// Drive `codex exec` for one [`Request`] — the [`CodexBackend`] implementation. Costs real tokens.
 fn synthesize_codex(
     req: &Request,
@@ -1311,46 +1485,22 @@ fn synthesize_codex(
 ) -> anyhow::Result<Synthesis> {
     let work = CodexTemp::new()?;
     let out_path = work.0.join("out.txt");
-    let mut cmd = command("codex")?;
-    cmd.arg("exec")
-        .arg("--json")
-        .arg("--sandbox")
-        .arg("read-only") // arclite never has codex mutate the repo
-        .arg("--skip-git-repo-check") // arclite points at any dir, not necessarily a git repo
-        .arg("--ignore-user-config") // ignore ~/.codex/config.toml — arclite sets the run explicitly, so it's reproducible (auth.json is separate, so it still applies)
-        .arg("--ignore-rules") // skip project .rules execpolicy (arclite runs read-only regardless)
-        .arg("--model")
-        .arg(req.model)
-        .arg("-c")
-        .arg("approval_policy=never") // a headless run must never pause for approval (not an exec flag, so set via config)
-        .arg("--cd")
-        .arg(req.dir)
-        .arg("-o")
-        .arg(&out_path);
-    // Reasoning effort is cost-shaping, so the caller resolves + surfaces it (the codex backend always
-    // supplies one via `reasoning_effort()`) and it's applied here, not hidden as a fixed default.
-    if let Some(effort) = req.reasoning_effort {
-        cmd.arg("-c")
-            .arg(format!("model_reasoning_effort={effort}"));
-    }
-    // Isolate the repo's AGENTS.md (codex's ambient-memory analog) by default — embed 0 bytes of it —
-    // mirroring claude's CLAUDE.md isolation; `--ambient-memory` opts into loading it.
-    if !req.ambient_memory {
-        cmd.arg("-c").arg("project_doc_max_bytes=0");
-    }
     // Structured output: codex validates the final message against a schema *file* (claude takes it
     // inline), so materialize the request's schema to the run's temp dir.
-    if let Some(schema) = req.json_schema {
+    let schema_path = if let Some(schema) = req.json_schema {
         let schema_path = work.0.join("schema.json");
         std::fs::write(&schema_path, schema)
             .with_context(|| format!("cannot write codex schema to {}", schema_path.display()))?;
-        cmd.arg("--output-schema").arg(&schema_path);
-    }
-    // codex runs read-only with no tools here (--sandbox read-only, no MCP configured).
+        Some(schema_path)
+    } else {
+        None
+    };
+    let cmd = codex_command(req, &work.0, &out_path, schema_path.as_deref())?;
     let mut usage_raw: Option<serde_json::Value> = None;
     let mut failure: Option<String> = None;
     let driven = drive(
         cmd,
+        &work.0,
         req.prompt,
         "failed to launch `codex` — is the Codex CLI installed and on PATH?",
         |kind, event, _raw| match kind {
@@ -1518,6 +1668,145 @@ fn synthesize_codex(
     })
 }
 
-// AI-output handling (parse_result) and the prompt estimate are exercised by
-// using `summarize` — its cost/usage output makes any breakage immediately
-// apparent — rather than via unit tests.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request<'a>(tools: &'a [String], ambient: bool) -> Request<'a> {
+        Request {
+            prompt: "prompt",
+            model: "model-id",
+            allowed_tools: tools,
+            dir: Path::new("target-repo"),
+            ambient_memory: ambient,
+            json_schema: Some("{}"),
+            max_budget_usd: Some(1.25),
+            reasoning_effort: Some("high"),
+        }
+    }
+
+    fn args(cmd: &Command) -> Vec<String> {
+        cmd.get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn has_pair(args: &[String], option: &str, value: &str) -> bool {
+        args.windows(2)
+            .any(|pair| pair[0] == option && pair[1] == value)
+    }
+
+    fn env(cmd: &Command, key: &str) -> Option<String> {
+        cmd.get_envs().find_map(|(name, value)| {
+            (name == key).then(|| value.map(|v| v.to_string_lossy().into_owned()))
+        })?
+    }
+
+    #[test]
+    fn claude_default_disables_customizations_tools_and_session_persistence() {
+        let req = request(&[], false);
+        let cmd = claude_command(&req).unwrap();
+        let args = args(&cmd);
+
+        assert!(args.iter().any(|a| a == "--safe-mode"));
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+        assert!(args.iter().any(|a| a == "--no-session-persistence"));
+        assert!(has_pair(&args, "--tools", ""));
+        assert!(!args.iter().any(|a| a == "--allowedTools"));
+        assert!(!args.iter().any(|a| a == "--add-dir"));
+        assert!(has_pair(&args, "--setting-sources", ""));
+        assert_eq!(
+            env(&cmd, "CLAUDE_CODE_DISABLE_CLAUDE_MDS").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            env(&cmd, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(),
+            Some("1")
+        );
+
+        let boundary = run_boundary(CLAUDE, false, &[]).unwrap();
+        assert!(!boundary.ambient);
+        assert_eq!(boundary.tool_runtime, "built-in tools disabled");
+    }
+
+    #[test]
+    fn claude_grants_only_the_requested_tools_and_target() {
+        let tools = vec!["Read".to_owned(), "Bash(git status)".to_owned()];
+        let req = request(&tools, false);
+        let args = args(&claude_command(&req).unwrap());
+
+        let available = args.iter().position(|a| a == "--tools").unwrap();
+        assert_eq!(&args[available + 1..available + 3], tools.as_slice());
+        let allowed = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(&args[allowed + 1..allowed + 3], tools.as_slice());
+        assert!(has_pair(&args, "--add-dir", "target-repo"));
+    }
+
+    #[test]
+    fn claude_ambient_is_explicit_but_tools_and_sessions_stay_bounded() {
+        let req = request(&[], true);
+        let cmd = claude_command(&req).unwrap();
+        let args = args(&cmd);
+
+        assert!(!args.iter().any(|a| a == "--safe-mode"));
+        assert!(!args.iter().any(|a| a == "--setting-sources"));
+        assert!(has_pair(&args, "--tools", ""));
+        assert!(args.iter().any(|a| a == "--no-session-persistence"));
+        assert_eq!(env(&cmd, "CLAUDE_CODE_DISABLE_CLAUDE_MDS"), None);
+        assert!(run_boundary(CLAUDE, true, &[]).unwrap().ambient);
+    }
+
+    #[test]
+    fn codex_default_uses_a_fresh_least_privilege_root() {
+        let req = request(&[], false);
+        let cmd = codex_command(
+            &req,
+            Path::new("fresh-run"),
+            Path::new("fresh-run/out.txt"),
+            Some(Path::new("fresh-run/schema.json")),
+        )
+        .unwrap();
+        let args = args(&cmd);
+
+        assert!(args.iter().any(|a| a == "--strict-config"));
+        assert!(args.iter().any(|a| a == "--ephemeral"));
+        assert!(!args.iter().any(|a| a == "--sandbox"));
+        assert!(has_pair(&args, "--cd", "fresh-run"));
+        assert!(args.iter().any(|a| a == "default_permissions=\"arclite\""));
+        assert!(args.iter().any(|a| a == CODEX_ARCLITE_FILESYSTEM));
+        assert!(
+            args.iter()
+                .any(|a| a == "permissions.arclite.network.enabled=false")
+        );
+        assert!(args.iter().any(|a| a == "web_search=\"disabled\""));
+        assert!(args.iter().any(|a| a == "project_doc_max_bytes=0"));
+        assert!(has_pair(&args, "--disable", "shell_tool"));
+        assert!(has_pair(&args, "--disable", "plugins"));
+        assert!(has_pair(&args, "--output-schema", "fresh-run/schema.json"));
+
+        let boundary = run_boundary(CODEX, false, &[]).unwrap();
+        assert!(!boundary.ambient);
+        assert!(boundary.repository_access.contains("target denied"));
+    }
+
+    #[test]
+    fn codex_ambient_opens_only_the_target_read_boundary() {
+        let req = request(&[], true);
+        let args = args(
+            &codex_command(
+                &req,
+                Path::new("fresh-run"),
+                Path::new("fresh-run/out.txt"),
+                None,
+            )
+            .unwrap(),
+        );
+
+        assert!(has_pair(&args, "--cd", "target-repo"));
+        assert!(!args.iter().any(|a| a == "project_doc_max_bytes=0"));
+        assert!(has_pair(&args, "--disable", "shell_tool"));
+        let boundary = run_boundary(CODEX, true, &[]).unwrap();
+        assert!(boundary.ambient);
+        assert!(boundary.repository_access.contains("target readable"));
+    }
+}
