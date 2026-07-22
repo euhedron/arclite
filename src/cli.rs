@@ -375,11 +375,10 @@ pub struct SynthArgs {
     /// directory is created if needed). Stdout output is unchanged; `--dry-run` writes nothing.
     #[arg(long, value_name = "DIR")]
     pub output: Option<PathBuf>,
-    /// Load the agent's ambient configuration into the synthesis — claude: your user/project
-    /// `CLAUDE.md` + auto-memory AND your user/project settings (hooks included); codex: the repo's
-    /// `AGENTS.md`. Default: off — arclite isolates the run so the reported context is authoritative
-    /// and reproducible across machines. Enable to deliberately apply your own ambient setup; the
-    /// run report shows `memory=ambient` when you do.
+    /// Load target/user ambient customizations into synthesis — claude: user/project CLAUDE.md,
+    /// memory, and settings; codex: target project config/instructions/skills plus read-only target
+    /// access. Default: off. Arc reports the exact boundary and residual provider-managed/bundled
+    /// inputs instead of claiming the listed context is the model's entire environment.
     #[arg(long)]
     pub ambient_memory: bool,
     /// Gate on the command's results: exit non-zero if its structured `results` array is
