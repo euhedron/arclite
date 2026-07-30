@@ -40,7 +40,7 @@ pub struct Structure {
 }
 
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
-const GROUNDING: &str = "\n\nGround everything you report in the context above; include nothing you cannot point to in it.";
+const GROUNDING: &str = "\n\nGround everything you report in the context above; include nothing you cannot point to in it. For version-control claims, obey the Version-control truth block: a path reference is not evidence that the referenced path exists, is tracked, or is committed.";
 
 /// Appended by `--ranked`: order the results by significance (the array order is the ranking).
 const RANKED_NOTE: &str =

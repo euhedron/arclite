@@ -3,7 +3,8 @@
 //! `--dry-run` previews the prompt + estimate at zero spend; real calls report actual cost + cache
 //! usage; and every run echoes the full parameter set it used (model, tools, context sources).
 
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Serialize;
@@ -313,7 +314,7 @@ fn gather_includes(
     paths: &[PathBuf],
     max: Option<usize>,
     excluder: &ignore::gitignore::Gitignore,
-    seen: &mut Vec<PathBuf>,
+    seen: &mut SeenFiles,
     sources: &mut Vec<String>,
 ) -> anyhow::Result<String> {
     let mut ctx = String::new();
@@ -593,6 +594,23 @@ enum Added {
     Missing,
 }
 
+/// A successfully-read repository-content file. Keep the original path spelling alongside the
+/// canonical dedup identity: Git classifies the path the user/repo named, not the symlink target
+/// canonicalization may lead to.
+struct IncludedFile {
+    path: PathBuf,
+    label: String,
+    canonical: Option<PathBuf>,
+}
+
+/// Both views of the files already placed in context: canonical identities prevent duplicate
+/// content, while the successfully-read paths feed the Git-state inventory once gathering is done.
+#[derive(Default)]
+struct SeenFiles {
+    identities: Vec<PathBuf>,
+    included: Vec<IncludedFile>,
+}
+
 /// Add `path` to the context unless it's already there: skip if its canonical path is in `seen`,
 /// else append it (as `label`, capped at `max`) and record it in `seen`. The single place a context
 /// file is appended and deduped — README/manifests and every `--include`/`--changed` file share it,
@@ -603,19 +621,24 @@ fn add_unless_seen(
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
-    seen: &mut Vec<PathBuf>,
+    seen: &mut SeenFiles,
 ) -> Added {
     let canon = canonical(path);
     if let Some(c) = &canon
-        && seen.contains(c)
+        && seen.identities.contains(c)
     {
         return Added::Duplicate;
     }
     match append_file(label, path, max, text, sources) {
         Ok(true) => {
-            if let Some(c) = canon {
-                seen.push(c);
+            if let Some(c) = &canon {
+                seen.identities.push(c.clone());
             }
+            seen.included.push(IncludedFile {
+                path: path.to_path_buf(),
+                label: label.to_owned(),
+                canonical: canon,
+            });
             Added::Ok
         }
         Ok(false) => Added::Missing,
@@ -631,11 +654,383 @@ fn add_file(
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
-    seen: &mut Vec<PathBuf>,
+    seen: &mut SeenFiles,
 ) {
     if let Added::Unreadable = add_unless_seen(path, label, max, text, sources, seen) {
         sources.push(unreadable_label(label));
     }
+}
+
+/// The non-inference rule carried inside every Git-state block. The motivating failure was exactly
+/// this category error: a tracked project file mentioned an ignored signing key, and the mention was
+/// mistaken for evidence that the key itself was committed.
+const GIT_REFERENCE_RULE: &str = "Only paths explicitly named by this block have known Git state. A path merely mentioned inside included content has unknown Git state; never infer that a tracked referencing file makes its target tracked or committed.";
+
+#[derive(Default)]
+struct GitPathSet {
+    paths: BTreeSet<String>,
+    undecodable: usize,
+}
+
+struct GitSnapshot {
+    tracked: GitPathSet,
+    dirty: GitPathSet,
+    untracked: GitPathSet,
+    ignored: GitPathSet,
+}
+
+struct GitTruthContext {
+    text: String,
+    source: String,
+}
+
+/// Run Git in the target directory with a pinned message locale. Paths are consumed only from `-z`
+/// stdout below; stderr is human diagnostic text and is never interpreted except for the shared
+/// not-a-repository distinction on the initial probe.
+fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    ai::command("git")
+        .map_err(|e| format!("could not prepare git: {e:#}"))?
+        .env("LC_ALL", "C")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = git_output(root, args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "`git {}` exited {}: {}",
+            args.join(" "),
+            output.status,
+            stderr.trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+/// Parse Git's NUL-delimited path output without lossy decoding. A path that cannot be represented
+/// in the JSON prompt is omitted and counted; turning it into replacement characters would name a
+/// different path and manufacture false evidence.
+fn git_path_set(bytes: &[u8]) -> GitPathSet {
+    let mut set = GitPathSet::default();
+    for raw in bytes
+        .split(|&byte| byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        match std::str::from_utf8(raw) {
+            Ok(path) => {
+                // When the target itself is an outer worktree's untracked directory, Git collapses
+                // the whole requested scope to `./`. Normalize that sentinel for JSON and matching.
+                set.paths.insert(if path == "./" {
+                    ".".to_owned()
+                } else {
+                    path.to_owned()
+                });
+            }
+            Err(_) => set.undecodable += 1,
+        }
+    }
+    set
+}
+
+fn query_git_paths(root: &Path, args: &[&str]) -> Result<GitPathSet, String> {
+    git_stdout(root, args).map(|stdout| git_path_set(&stdout))
+}
+
+/// Collect the target-relative index and exception sets. `ls-files` emits paths relative to the
+/// `-C` directory, and `git diff --relative` does the same, avoiding any need to parse/strip a
+/// newline-delimited worktree prefix. Directory entries in the untracked/ignored sets stay collapsed.
+fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
+    let probe = git_output(root, &["rev-parse", "--is-inside-work-tree"])?;
+    if !probe.status.success() {
+        let stderr = String::from_utf8_lossy(&probe.stderr);
+        if probe.status.code() == Some(128) && crate::git_stderr_says_not_a_repo(&stderr) {
+            return Err("target is not a Git work tree".to_owned());
+        }
+        return Err(format!(
+            "Git work-tree probe failed ({}): {}",
+            probe.status,
+            stderr.trim()
+        ));
+    }
+    if probe.stdout.as_slice().trim_ascii() != b"true" {
+        return Err("target is not a Git work tree".to_owned());
+    }
+
+    // A target directory ignored by an ancestor worktree makes collapsed `ls-files --ignored`
+    // fail in Git itself. Probe the scope root directly and represent it with `.`; exact tracked
+    // entries still win during classification (a force-added file can live under an ignored dir).
+    let root_ignore = git_output(root, &["check-ignore", "--quiet", "--no-index", "--", "."])?;
+    let root_ignored = match root_ignore.status.code() {
+        Some(0) => true,
+        Some(1) => false,
+        _ => {
+            return Err(format!(
+                "`git check-ignore` exited {}: {}",
+                root_ignore.status,
+                String::from_utf8_lossy(&root_ignore.stderr).trim()
+            ));
+        }
+    };
+
+    let tracked = query_git_paths(root, &["ls-files", "--cached", "-z", "--", "."])?;
+    let mut dirty = query_git_paths(
+        root,
+        &["ls-files", "--modified", "--deleted", "-z", "--", "."],
+    )?;
+    let staged = query_git_paths(
+        root,
+        &[
+            "diff",
+            "--cached",
+            "--name-only",
+            "--relative",
+            "--no-renames",
+            "-z",
+            "--",
+            ".",
+        ],
+    )?;
+    dirty.paths.extend(staged.paths);
+    dirty.undecodable += staged.undecodable;
+    let untracked = query_git_paths(
+        root,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+            "-z",
+            "--",
+            ".",
+        ],
+    )?;
+    let ignored = if root_ignored {
+        GitPathSet {
+            paths: BTreeSet::from([".".to_owned()]),
+            undecodable: 0,
+        }
+    } else {
+        query_git_paths(
+            root,
+            &[
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "--no-empty-directory",
+                "-z",
+                "--",
+                ".",
+            ],
+        )?
+    };
+    Ok(GitSnapshot {
+        tracked,
+        dirty,
+        untracked,
+        ignored,
+    })
+}
+
+/// Translate a successfully-read path into Git's target-relative spelling. A lexical escape is
+/// outside scope; a non-UTF-8 spelling is unknown because the JSON channel cannot name it exactly.
+fn git_relative_path(root: &Path, path: &Path) -> Result<String, &'static str> {
+    let relative = path.strip_prefix(root).map_err(|_| "outside_target")?;
+    let mut normalized = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir if normalized.pop() => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("outside_target");
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err("outside_target");
+    }
+    normalized
+        .to_str()
+        // Git prints `/` separators even on Windows; on Unix this is a no-op and leaves literal
+        // backslashes untouched.
+        .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"))
+        .ok_or("unknown")
+}
+
+/// `ls-files --directory` collapses an untracked/ignored directory to `dir/`; a context file below
+/// it inherits that state even though its full path is intentionally absent from the compact set.
+fn path_or_collapsed_parent_is_listed(paths: &BTreeSet<String>, path: &str) -> bool {
+    paths.contains(".")
+        || paths.contains(path)
+        || paths
+            .iter()
+            .any(|candidate| candidate.ends_with('/') && path.starts_with(candidate))
+}
+
+/// Whether this exact spelling (or a non-root collapsed parent) has a specific Git fact. The `.`
+/// scope sentinel is deliberately excluded: a canonical spelling that matches a tracked entry must
+/// beat the blanket ignored/untracked state of its target directory.
+fn path_has_specific_state(snapshot: &GitSnapshot, path: &str) -> bool {
+    snapshot.tracked.paths.contains(path)
+        || snapshot.ignored.paths.contains(path)
+        || snapshot.untracked.paths.contains(path)
+        || snapshot
+            .ignored
+            .paths
+            .iter()
+            .chain(&snapshot.untracked.paths)
+            .any(|candidate| {
+                candidate != "." && candidate.ends_with('/') && path.starts_with(candidate)
+            })
+}
+
+fn git_state_for_path(snapshot: &GitSnapshot, path: &str) -> &'static str {
+    if snapshot.tracked.paths.contains(path) {
+        if snapshot.dirty.paths.contains(path) {
+            "index_tracked_dirty"
+        } else {
+            "index_tracked_clean"
+        }
+    } else if path_or_collapsed_parent_is_listed(&snapshot.ignored.paths, path) {
+        "ignored_untracked"
+    } else if path_or_collapsed_parent_is_listed(&snapshot.untracked.paths, path) {
+        "untracked"
+    } else {
+        // A submodule/nested-worktree descendant and an entry omitted from a partial query both land
+        // here. Absence is not evidence of ordinary untracked state.
+        "unknown"
+    }
+}
+
+fn unknown_git_rows(root: &Path, included: &[IncludedFile]) -> Vec<serde_json::Value> {
+    included
+        .iter()
+        .map(|file| match git_relative_path(root, &file.path) {
+            Ok(path) => serde_json::json!({"path": path, "git_state": "unknown"}),
+            Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+        })
+        .collect()
+}
+
+fn render_git_truth(value: &serde_json::Value, source: String) -> GitTruthContext {
+    GitTruthContext {
+        text: format!(
+            "\nVersion-control truth (JSON; path names and metadata only):\n{}\n",
+            serde_json::to_string_pretty(value)
+                .expect("the in-memory Git truth value always serializes")
+        ),
+        source,
+    }
+}
+
+/// Build the default-on, deterministic Git grounding that constrains every synthesis verb. The
+/// exception lists close the reference gap: ignored/untracked paths can be named even though their
+/// contents were correctly absent from the ordinary ignore-aware context walk.
+fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
+    let snapshot = match git_snapshot(root) {
+        Ok(snapshot) => snapshot,
+        Err(reason) => {
+            let value = serde_json::json!({
+                "available": false,
+                "reason": reason,
+                "included_repository_files": unknown_git_rows(root, included),
+                "claim_rule": GIT_REFERENCE_RULE,
+            });
+            return render_git_truth(
+                &value,
+                "git state: unavailable (make no tracking or commit claims)".to_owned(),
+            );
+        }
+    };
+
+    let canonical_root = canonical(root);
+    let rows: Vec<serde_json::Value> = included
+        .iter()
+        .map(|file| {
+            let primary = git_relative_path(root, &file.path);
+            let canonical = canonical_root
+                .as_deref()
+                .zip(file.canonical.as_deref())
+                .map(|(canonical_root, path)| git_relative_path(canonical_root, path));
+            // `a/../b` cannot be collapsed lexically when `a` may be a symlink: the filesystem first
+            // follows `a`, so the actual file can be outside the target. Canonical identity must drive
+            // any path containing `..`; if it cannot be established, its Git state remains unknown.
+            let has_parent = file
+                .path
+                .strip_prefix(root)
+                .is_ok_and(|path| path.components().any(|c| c == Component::ParentDir));
+            if has_parent {
+                return match canonical.unwrap_or(Err("unknown")) {
+                    Ok(path) => serde_json::json!({
+                        "git_state": git_state_for_path(&snapshot, &path),
+                        "path": path,
+                    }),
+                    Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+                };
+            }
+            match primary {
+                Ok(path) => {
+                    // Preserve the supplied spelling when Git knows it (notably symlinks). A
+                    // canonical fallback recovers harmless aliases such as case-only spellings on
+                    // case-insensitive filesystems without overriding a real Git entry.
+                    let path = if path_has_specific_state(&snapshot, &path) {
+                        path
+                    } else {
+                        canonical
+                            .and_then(Result::ok)
+                            .filter(|path| path_has_specific_state(&snapshot, path))
+                            .unwrap_or(path)
+                    };
+                    let state = git_state_for_path(&snapshot, &path);
+                    serde_json::json!({"path": path, "git_state": state})
+                }
+                Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+            }
+        })
+        .collect();
+
+    let omitted = snapshot.tracked.undecodable
+        + snapshot.dirty.undecodable
+        + snapshot.untracked.undecodable
+        + snapshot.ignored.undecodable;
+    let dirty_count = snapshot.dirty.paths.len();
+    let untracked_count = snapshot.untracked.paths.len();
+    let ignored_count = snapshot.ignored.paths.len();
+    let value = serde_json::json!({
+        "available": true,
+        "scope": "Git-listed paths are target-relative; an included file outside the target keeps its supplied path and is labeled outside_target",
+        "included_repository_files": rows,
+        "changed_paths": snapshot.dirty.paths,
+        "changed_path_semantics": "A changed path may be modified, added, deleted, or the old side of a rename; its presence here alone does not prove the path currently exists or is index-tracked.",
+        "untracked_present": snapshot.untracked.paths,
+        "ignored_untracked_present": snapshot.ignored.paths,
+        "undecodable_path_records_omitted": omitted,
+        "semantics": {
+            "index_tracked_clean": "present in Git's index with no staged or unstaged change reported; this alone does not prove the displayed bytes exist in HEAD",
+            "index_tracked_dirty": "present in Git's index and changed; the displayed bytes are not proven committed",
+            "untracked": "reported present and untracked by Git",
+            "ignored_untracked": "reported present, untracked, and ignored by Git",
+            "unknown": "Git state was not established; do not infer it",
+            "outside_target": "outside this Git snapshot's target scope",
+        },
+        "claim_rule": GIT_REFERENCE_RULE,
+        "content_disclosure": "The snapshot adds path/index metadata only; it does not add the contents of listed untracked or ignored paths.",
+    });
+    render_git_truth(
+        &value,
+        format!(
+            "git state: path names only ({} repository file(s) classified; {dirty_count} changed path(s); {untracked_count} untracked; {ignored_count} ignored; {omitted} undecodable record(s) omitted; snapshot adds no file contents)",
+            included.len()
+        ),
+    )
 }
 
 /// Assembled repo context, a record of every source and what was excluded, and the repo
@@ -813,8 +1208,10 @@ pub struct ContextSpec<'a> {
 
 /// Assemble the repo context shared by every synthesis command: unless `scan` is false, the scan
 /// summary + the manifests an inspect walk detects; the README; any `--include`d files/dirs (and, with
-/// `changed`, git-changed files); rules; and the open ledger (with `findings`, framed to hunt past it; with `recheck_findings`, framed to re-check it) — tracking each source (and what's excluded) for the run
-/// report. `max` is the optional caller cap; by default files are read whole. The prompt differs per command.
+/// `changed`, git-changed files); deterministic Git state; rules; and the open ledger (with `findings`,
+/// framed to hunt past it; with `recheck_findings`, framed to re-check it) — tracking each source (and
+/// what's excluded) for the run report. `max` is the optional caller cap; by default files are read
+/// whole. The prompt differs per command.
 pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context> {
     let &ContextSpec {
         includes,
@@ -829,8 +1226,8 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         from_runs,
     } = spec;
     // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
-    // (scan=false) drops both — and the walk itself — so a diff-scoped run's cost tracks the diff, not a
-    // fixed whole-repo baseline; the root still resolves directly, for --include/--changed and the README.
+    // (scan=false) drops both — and the content walk itself; the root still resolves directly for
+    // --include/--changed, the README, and the target-wide Git path-state snapshot.
     let (report, root) = if scan {
         let (report, root) = crate::commands::inspect::gather(path)?;
         (Some(report), root)
@@ -849,7 +1246,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
 
     let mut text = String::new();
     let mut sources: Vec<String> = Vec::new();
-    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut seen = SeenFiles::default();
 
     if let Some(report) = &report {
         text = format!(
@@ -933,6 +1330,9 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         &mut seen,
         &mut sources,
     )?);
+    let git_truth = gather_git_truth(&root, &seen.included);
+    text.push_str(&git_truth.text);
+    sources.push(git_truth.source);
     text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
@@ -1785,4 +2185,293 @@ fn write_output(
     std::fs::write(&path, &body)
         .map_err(|e| anyhow::anyhow!("could not write {}: {e}", path.display()))?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    const GIT_TRUTH_MARKER: &str =
+        "\nVersion-control truth (JSON; path names and metadata only):\n";
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "arclite-{label}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).expect("create isolated test directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run git in test repository");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_git(root: &Path) {
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.name", "Arclite Test"]);
+        git(
+            root,
+            &["config", "user.email", "arclite-test@example.invalid"],
+        );
+        git(root, &["config", "commit.gpgsign", "false"]);
+        git(root, &["config", "core.hooksPath", ".git/no-hooks"]);
+    }
+
+    fn context(root: &Path, includes: &[PathBuf]) -> Context {
+        gather_context(
+            root,
+            &ContextSpec {
+                includes,
+                rule_sources: &[],
+                disabled_rules: &[],
+                max: None,
+                changed: false,
+                exclude: &[],
+                scan: false,
+                findings: false,
+                recheck_findings: false,
+                from_runs: &[],
+            },
+        )
+        .expect("gather deterministic test context")
+    }
+
+    fn git_truth(ctx: &Context) -> serde_json::Value {
+        let start = ctx
+            .text
+            .rfind(GIT_TRUTH_MARKER)
+            .expect("context carries Git truth")
+            + GIT_TRUTH_MARKER.len();
+        serde_json::from_str(ctx.text[start..].trim()).expect("Git truth is valid JSON")
+    }
+
+    fn included_state<'a>(truth: &'a serde_json::Value, path: &str) -> &'a str {
+        truth["included_repository_files"]
+            .as_array()
+            .expect("included files array")
+            .iter()
+            .find(|row| row["path"].as_str() == Some(path))
+            .and_then(|row| row["git_state"].as_str())
+            .expect("included path has a Git state")
+    }
+
+    fn string_array_contains(value: &serde_json::Value, key: &str, needle: &str) -> bool {
+        value[key]
+            .as_array()
+            .expect("Git path-set array")
+            .iter()
+            .any(|path| path.as_str() == Some(needle))
+    }
+
+    #[test]
+    fn git_truth_closes_the_referenced_ignored_file_gap() {
+        let dir = TestDir::new("git-truth");
+        init_git(dir.path());
+
+        std::fs::write(dir.path().join(".gitignore"), "*.pfx\n").unwrap();
+        std::fs::write(
+            dir.path().join("project.csproj"),
+            "<SignAssemblyKeyFile>signing.pfx</SignAssemblyKeyFile>\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("dirty.txt"), "committed\n").unwrap();
+        std::fs::write(dir.path().join("tracked.log"), "tracked\n").unwrap();
+        std::fs::create_dir(dir.path().join("alias")).unwrap();
+        git(dir.path(), &["add", "--", "."]);
+        git(dir.path(), &["commit", "-qm", "fixture"]);
+
+        // A tracked file remains tracked when a later ignore rule matches its name.
+        std::fs::write(dir.path().join(".gitignore"), "*.pfx\n*.log\n").unwrap();
+        git(dir.path(), &["add", "--", ".gitignore"]);
+        git(dir.path(), &["commit", "-qm", "ignore logs"]);
+
+        std::fs::write(dir.path().join("dirty.txt"), "working tree change\n").unwrap();
+        std::fs::write(dir.path().join("signing.pfx"), "IGNORED-SECRET-CONTENTS").unwrap();
+        std::fs::write(dir.path().join("loose.txt"), "ordinary untracked\n").unwrap();
+
+        let includes = vec![
+            PathBuf::from("alias/../project.csproj"),
+            PathBuf::from("dirty.txt"),
+            PathBuf::from("tracked.log"),
+        ];
+        let ctx = context(dir.path(), &includes);
+        let truth = git_truth(&ctx);
+
+        assert!(ctx.text.contains("signing.pfx</SignAssemblyKeyFile>"));
+        assert!(!ctx.text.contains("IGNORED-SECRET-CONTENTS"));
+        assert_eq!(
+            included_state(&truth, "project.csproj"),
+            "index_tracked_clean"
+        );
+        assert_eq!(included_state(&truth, "dirty.txt"), "index_tracked_dirty");
+        assert_eq!(included_state(&truth, "tracked.log"), "index_tracked_clean");
+        assert!(string_array_contains(
+            &truth,
+            "ignored_untracked_present",
+            "signing.pfx"
+        ));
+        assert!(string_array_contains(
+            &truth,
+            "untracked_present",
+            "loose.txt"
+        ));
+        assert!(string_array_contains(&truth, "changed_paths", "dirty.txt"));
+        assert!(
+            truth["claim_rule"]
+                .as_str()
+                .is_some_and(|rule| rule.contains("merely mentioned"))
+        );
+        assert!(ctx.sources.iter().any(|source| {
+            source.contains("git state: path names only")
+                && source.contains("snapshot adds no file contents")
+        }));
+
+        // On a case-insensitive filesystem, preserve Git's canonical index spelling rather than
+        // turning a readable case-only alias into an unknown path. Case-sensitive hosts skip this.
+        let case_alias = PathBuf::from("PROJECT.CSPROJ");
+        if dir.path().join(&case_alias).try_exists().unwrap() {
+            let alias_ctx = context(dir.path(), &[case_alias]);
+            assert_eq!(
+                included_state(&git_truth(&alias_ctx), "project.csproj"),
+                "index_tracked_clean"
+            );
+        }
+    }
+
+    #[test]
+    fn target_root_sentinels_classify_untracked_and_ignored_descendants() {
+        let dir = TestDir::new("git-root-sentinel");
+        init_git(dir.path());
+        let ignored_root = dir.path().join("ignored-scope");
+        std::fs::create_dir(&ignored_root).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "/ignored-scope/\n").unwrap();
+        std::fs::write(ignored_root.join("tracked.txt"), "force tracked\n").unwrap();
+        git(dir.path(), &["add", "--", ".gitignore"]);
+        git(
+            dir.path(),
+            &["add", "-f", "--", "ignored-scope/tracked.txt"],
+        );
+        git(dir.path(), &["commit", "-qm", "fixture"]);
+        std::fs::write(ignored_root.join("ignored.txt"), "ignored\n").unwrap();
+
+        let ignored_ctx = context(
+            &ignored_root,
+            &[PathBuf::from("tracked.txt"), PathBuf::from("ignored.txt")],
+        );
+        let ignored_truth = git_truth(&ignored_ctx);
+        assert_eq!(
+            included_state(&ignored_truth, "tracked.txt"),
+            "index_tracked_clean"
+        );
+        assert_eq!(
+            included_state(&ignored_truth, "ignored.txt"),
+            "ignored_untracked"
+        );
+        assert!(string_array_contains(
+            &ignored_truth,
+            "ignored_untracked_present",
+            "."
+        ));
+
+        let untracked_root = dir.path().join("untracked-scope");
+        std::fs::create_dir(&untracked_root).unwrap();
+        std::fs::write(untracked_root.join("note.txt"), "untracked\n").unwrap();
+        let untracked_ctx = context(&untracked_root, &[PathBuf::from("note.txt")]);
+        let untracked_truth = git_truth(&untracked_ctx);
+        assert_eq!(included_state(&untracked_truth, "note.txt"), "untracked");
+        assert!(string_array_contains(
+            &untracked_truth,
+            "untracked_present",
+            "."
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_after_symlink_cannot_borrow_a_tracked_paths_state() {
+        use std::os::unix::fs::symlink;
+
+        let repo = TestDir::new("git-symlink-parent");
+        init_git(repo.path());
+        std::fs::write(repo.path().join("project.csproj"), "tracked copy\n").unwrap();
+        git(repo.path(), &["add", "--", "project.csproj"]);
+        git(repo.path(), &["commit", "-qm", "fixture"]);
+
+        let external = TestDir::new("git-symlink-parent-external");
+        std::fs::create_dir(external.path().join("subdir")).unwrap();
+        std::fs::write(external.path().join("project.csproj"), "external copy\n").unwrap();
+        symlink(external.path().join("subdir"), repo.path().join("alias")).unwrap();
+
+        // Filesystem resolution follows `alias` before applying `..`, so this reads the external copy,
+        // not the tracked file with the same basename in the repository.
+        let ctx = context(repo.path(), &[PathBuf::from("alias/../project.csproj")]);
+        assert!(ctx.text.contains("external copy"));
+        let truth = git_truth(&ctx);
+        assert!(
+            truth["included_repository_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["git_state"] == "outside_target")
+        );
+        assert!(
+            !truth["included_repository_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["git_state"] == "index_tracked_clean")
+        );
+    }
+
+    #[test]
+    fn non_git_context_marks_tracking_unknown() {
+        let dir = TestDir::new("no-git-truth");
+        std::fs::write(dir.path().join("included.txt"), "plain directory\n").unwrap();
+        let ctx = context(dir.path(), &[PathBuf::from("included.txt")]);
+        let truth = git_truth(&ctx);
+
+        assert_eq!(truth["available"], false);
+        assert_eq!(included_state(&truth, "included.txt"), "unknown");
+        assert!(
+            truth["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("not a Git work tree"))
+        );
+        assert!(
+            ctx.sources.iter().any(
+                |source| source == "git state: unavailable (make no tracking or commit claims)"
+            )
+        );
+    }
 }
