@@ -355,10 +355,12 @@ pub struct SynthArgs {
     /// `--include`. Works with any command. Default: off.
     #[arg(long)]
     pub changed: bool,
-    /// Skip the automatic repo scan — the scan summary and the manifests it detects, plus the walk
-    /// that builds them — leaving only the README, any `--include`/`--changed` files, and the rules.
-    /// For diff-scoped runs (e.g. a pre-push gate) whose cost should track the diff, not a fixed
-    /// whole-repo baseline. Default: the scan is included. The skip is echoed in the run's excluded list.
+    /// Skip the automatic content scan — its summary, detected manifests, and filesystem walk —
+    /// leaving the README, any `--include`/`--changed` files, rules, and the target-wide Git path-state
+    /// snapshot. That snapshot adds path names/metadata to the prompt, not the listed files' contents;
+    /// its name inventory remains target-wide and unbounded. Useful when source-content cost should
+    /// track a diff rather than a fixed whole-repo baseline. Default: the scan is included. The skip is
+    /// echoed in the run's excluded list.
     #[arg(long)]
     pub no_scan: bool,
     /// Feed this repo's open findings ledger (`.arc/findings/open/`) into context, with an instruction
