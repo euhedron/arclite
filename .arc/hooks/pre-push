@@ -109,7 +109,7 @@ if [ -n "$adv_outs" ]; then
 fi
 
 if [ "$gate" -ne 0 ]; then
-    echo "arclite gate: push BLOCKED (arc audit exit $gate). Fix the findings above, or override with 'ARC_GATE=0 git push'." >&2
+    echo "arclite gate: push blocked (arc audit exit $gate) · findings: arc log --last --command audit · skip once: ARC_GATE=0 git push" >&2
     exit "$gate"
 fi
 
