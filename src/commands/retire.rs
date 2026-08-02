@@ -75,22 +75,22 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         if v.get("verdict").and_then(Value::as_str) != Some("resolved") {
             continue; // only resolved findings retire; reproduces/indeterminate stay open
         }
-        // A resolved verdict without its required id (or reason) slipped the declared schema.
-        // Malformed data must not masquerade as "nothing actionable" — fail closed before any
-        // ledger move, naming the item (revalidate the structured channel at the acting boundary).
+        // Use-time reads, not shape re-judgment: the move is named by `id` and the resolution note
+        // is written from `reason`, so a record missing either can't be acted on — fail closed
+        // before any ledger move rather than let it masquerade as "nothing actionable".
         let Some(id) = v
             .get("id")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         else {
             anyhow::bail!(
-                "resolved verdict #{} carries no `id` — the run's structured output slipped the schema; nothing was retired",
+                "resolved verdict #{} carries no `id` to name its ledger entry — nothing was retired",
                 i + 1
             );
         };
         let Some(reason) = v.get("reason").and_then(Value::as_str) else {
             anyhow::bail!(
-                "resolved verdict `{id}` carries no `reason` — the run's structured output slipped the schema; nothing was retired"
+                "resolved verdict `{id}` carries no `reason` to write into its resolution note — nothing was retired"
             );
         };
         // The id rode through the model — validate it as an untrusted path segment before joining it to

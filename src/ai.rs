@@ -503,17 +503,6 @@ pub(crate) fn boundary_human(
 /// never a scattered literal hunt.
 pub(crate) const CLAUDE: &str = "claude";
 pub(crate) const CODEX: &str = "codex";
-pub(crate) const CURSOR: &str = "cursor";
-
-/// The cursor backend's executable. Unlike claude/codex the backend name and the binary differ:
-/// `cursor` on PATH is the IDE launcher; the agent CLI ships as `cursor-agent` — so every spawn and
-/// probe goes through [`Backend::program`], never the backend's display name.
-pub(crate) const CURSOR_PROGRAM: &str = "cursor-agent";
-
-/// Where cursor's model access comes from — the login session, not a provider API key arclite
-/// manages. One home for the fact, shared by `model_key_source` and the `cursor_models` listing,
-/// so the two reports can't drift apart in wording.
-const CURSOR_KEY_SOURCE: &str = "cursor-agent login session (no provider API key)";
 
 /// The backends actually installed: each registry row whose [`Backend::program`] resolves on
 /// `PATH`. A pure lookup, no spawn — cheap enough for an error path or a TUI frame-adjacent probe
@@ -570,11 +559,6 @@ const BACKENDS: &[(&str, BackendFactory, &str)] = &[
         CODEX,
         || Box::new(CodexBackend),
         "reports tokens only — no dollar cost, no native budget cap, no tool grants",
-    ),
-    (
-        CURSOR,
-        || Box::new(CursorBackend),
-        "the Cursor subscription via cursor-agent; tokens only — no dollar cost, no budget cap, no tool grants",
     ),
 ];
 
@@ -729,9 +713,9 @@ pub trait Backend {
     /// set. Per-backend because the backends' model families differ.
     fn default_model(&self) -> &'static str;
 
-    /// The executable this backend spawns — what `doctor` probes and error hints name. Usually the
-    /// backend's own name (`claude`, `codex`); distinct where they differ (`cursor` runs
-    /// [`CURSOR_PROGRAM`], since bare `cursor` on PATH is the IDE launcher, not the agent CLI).
+    /// The executable this backend spawns — what `doctor` probes and error hints name. Today each
+    /// backend's binary matches its name; the indirection stays so a backend whose binary differs
+    /// from its display name declares that in one place.
     fn program(&self) -> &'static str;
 
     /// Describe the execution boundary this backend's command builder enforces for a run shaped by
@@ -775,18 +759,17 @@ pub trait Backend {
         explicit.or(default)
     }
 
-    /// Reject, before any spend — and before any preview, so a dry run can't show a shape the real
-    /// run would refuse — a requested capability this backend can't honor, surfaced as an error,
-    /// never silently dropped. Default: honor everything, but no backend accepts a tool name shaped
-    /// like an option: the names ride a variadic CLI flag, so a leading-dash value would escape its
-    /// argument slot into the agent CLI's own grammar (guard-values-interpolated-into-commands).
+    /// Reject, before any spend, a requested capability this backend can't honor — surfaced as an
+    /// error, never silently dropped. Default: honor everything, but no backend accepts a tool name
+    /// shaped like an option: the names ride a variadic CLI flag, so a leading-dash value would
+    /// escape its argument slot into the agent CLI's own grammar
+    /// (guard-values-interpolated-into-commands).
     fn reject_unsupported(
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
-        ambient: bool,
     ) -> anyhow::Result<()> {
-        let _ = (max_budget_usd, ambient);
+        let _ = max_budget_usd;
         for tool in allowed_tools {
             anyhow::ensure!(
                 !tool.starts_with('-') && !tool.is_empty(),
@@ -798,7 +781,8 @@ pub trait Backend {
 
     /// The reasoning effort this backend runs at, given any configured value — surfaced in the report
     /// and applied to the call, because it shapes cost. Default: `None` (the backend has no such knob).
-    /// A backend with one returns the effective value (the configured one, else its own default).
+    /// A backend with one returns the configured value to pass; unset means nothing is passed and
+    /// the backend CLI applies its own default (arc ships no effort opinion).
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         let _ = configured;
         None
@@ -1051,8 +1035,8 @@ fn drive(
         };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
             // Non-JSON stdout, forwarded with an empty kind rather than dropped: usually noise (a
-            // stdin warning), but some CLIs print their *failures* as prose (cursor-agent does,
-            // with exit 0), and a backend that discards it loses the only failure detail there is.
+            // stdin warning), but a CLI may print failure detail as prose, and a backend that
+            // discards it loses the only failure detail there is.
             on_event("", &serde_json::Value::Null, &line);
             continue;
         };
@@ -1277,18 +1261,12 @@ fn synthesize_claude(
     Ok(synthesis)
 }
 
-/// The codex backend's *default* reasoning effort, used when the `codex_reasoning_effort` setting isn't
-/// set — specified explicitly (not read from codex's `config.toml`) so a run is self-contained, and
-/// surfaced in the run report since it shapes cost. A deliberately high tier for the audit/critique
-/// role, where judgment quality matters more than latency — one step below the lineup's `max`,
-/// which stays an explicit opt-in via the setting rather than a default spend.
-const CODEX_REASONING_EFFORT: &str = "xhigh";
-
-/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference;
-/// update as the lineup changes). [`CODEX_REASONING_EFFORT`] (the default) must be one of these.
-/// Shared with the config key's option list, so the picker and the validator can't drift.
-pub(crate) const CODEX_REASONING_EFFORTS: &[&str] =
-    &["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference,
+/// <https://learn.chatgpt.com/docs/config-file/config-reference>, verified 2026-08-02; update as
+/// the lineup changes). Shared with the config key's option list, so the picker and the validator
+/// can't drift. arclite ships no effort opinion of its own: unset, nothing is passed and codex
+/// applies its own default — the `codex_reasoning_effort` setting is the operator's slot.
+pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
 /// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.
@@ -1380,9 +1358,7 @@ impl Backend for CodexBackend {
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
-        ambient: bool,
     ) -> anyhow::Result<()> {
-        let _ = ambient; // codex maps --ambient-memory (see its boundary/builder)
         anyhow::ensure!(
             max_budget_usd.is_none(),
             "--max-budget-usd requests a native per-run spend cap, which the codex backend has no equivalent for"
@@ -1394,10 +1370,11 @@ impl Backend for CodexBackend {
         Ok(())
     }
 
-    /// codex bills by reasoning effort, so the effective value (configured, else the default) is
-    /// surfaced and applied — never a hidden cost-shaping knob.
+    /// codex bills by reasoning effort, so a configured value is surfaced and applied — never a
+    /// hidden cost-shaping knob. Unset, arclite passes nothing and codex applies its own default:
+    /// the tuning is the operator's, not an arc opinion.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
-        Some(configured.unwrap_or(CODEX_REASONING_EFFORT).to_owned())
+        configured.map(str::to_owned)
     }
 
     /// codex reports token usage but no dollar cost — its records are tokens-only by design.
@@ -1895,382 +1872,6 @@ mod tests {
         assert!(boundary.ambient);
         assert!(boundary.repository_access.contains("target readable"));
     }
-
-    #[test]
-    fn cursor_boundary_claims_ask_mode_and_discloses_what_it_cannot_suppress() {
-        let boundary = CursorBackend.boundary(false, &[]);
-        assert!(!boundary.ambient);
-        assert!(boundary.tool_runtime.contains("read-only"));
-        assert!(boundary.repository_access.contains("prompt only"));
-        // The truthfulness edge: cursor exposes no switches for user-level rules or chat
-        // persistence, and the boundary must say so instead of absorbing them into isolation.
-        assert!(boundary.customizations.contains("not suppressed"));
-        assert!(boundary.session.contains("not suppressed"));
-    }
-}
-
-/// The cursor backend's default model — a concrete id, not `auto`: cursor's router would pick a
-/// different (undisclosed) model per run, and an auditing tool must be able to say which model
-/// judged (report-the-identity-that-ran; the id is still Requested — the result payload echoes no
-/// model). Present in the CLI's own listing (confirmed 2026-07-19 via `cursor-agent --list-models`);
-/// update as the lineup advances, or set `cursor_model`.
-const DEFAULT_CURSOR_MODEL: &str = "gpt-5.3-codex-high";
-
-pub struct CursorBackend;
-
-impl Backend for CursorBackend {
-    fn default_model(&self) -> &'static str {
-        DEFAULT_CURSOR_MODEL
-    }
-
-    fn program(&self) -> &'static str {
-        CURSOR_PROGRAM
-    }
-
-    /// The boundary [`synthesize_cursor`] enforces with its inline argv (cursor has no separate
-    /// command builder) — kept in this impl so the description stays reviewable against that argv.
-    /// Claims only what the run passes: ask mode from a neutral cwd; cursor exposes no switches for
-    /// user-level rules/config or chat persistence, so those are disclosed as not suppressed rather
-    /// than absorbed into an isolation claim.
-    fn boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
-        RunBoundary {
-            // An --ambient-memory run is rejected by reject_unsupported before preview or spend,
-            // so a recorded cursor boundary always carries ambient: false in practice.
-            ambient,
-            customizations: "project rules/AGENTS.md never load (neutral working directory); user-level Cursor rules/config not suppressed (no CLI switch)",
-            tool_runtime: "ask mode — read-only, no tool use; tool grants rejected before spend",
-            repository_access: "prompt only; the target is never the working directory",
-            session: "chat persistence not suppressed (no CLI switch)",
-            inherited: "login-session auth, provider base instructions, user-level Cursor rules/config, and managed policy",
-        }
-    }
-
-    fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
-        settings.cursor_model.as_deref()
-    }
-
-    /// Unlike claude/codex, the listing needs no provider API key: `cursor-agent --list-models`
-    /// enumerates the login session's own lineup — the same account the runs bill to.
-    fn list_models(&self, _settings: &Settings) -> anyhow::Result<ModelListing> {
-        cursor_models()
-    }
-
-    /// cursor authenticates by login session (or `CURSOR_API_KEY`), not a provider API key arclite
-    /// manages — reported as that fact, never as "no key" (which reads as unconfigured).
-    fn model_key_source(&self, _settings: &Settings) -> anyhow::Result<Option<String>> {
-        Ok(Some(CURSOR_KEY_SOURCE.to_owned()))
-    }
-
-    /// cursor exposes no native per-run spend cap, so none applies (an explicit one is refused below).
-    fn resolve_budget(&self, _explicit: Option<f64>, _default: Option<f64>) -> Option<f64> {
-        None
-    }
-
-    fn reject_unsupported(
-        &self,
-        max_budget_usd: Option<f64>,
-        allowed_tools: &[String],
-        ambient: bool,
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            max_budget_usd.is_none(),
-            "--max-budget-usd requests a native per-run spend cap, which the cursor backend has no equivalent for"
-        );
-        anyhow::ensure!(
-            allowed_tools.is_empty(),
-            "--allow-tool (a claude-style tool-name allowlist) isn't mapped onto cursor's tool model yet — cursor runs tool-less (--mode ask)"
-        );
-        // Rejected here — before preview or spend — so a dry run can't show an ambient shape the
-        // real run would refuse.
-        anyhow::ensure!(
-            !ambient,
-            "--ambient-memory isn't mapped onto the cursor backend — no cursor switch reopens the target as an ambient root (runs stay prompt-only from a neutral directory)"
-        );
-        Ok(())
-    }
-
-    /// cursor bakes reasoning effort into its model ids (`…-high`, `…-xhigh`), so there is no
-    /// separate effort knob to surface.
-    fn reasoning_effort(&self, _configured: Option<&str>) -> Option<String> {
-        None
-    }
-
-    /// cursor reports token usage but no dollar cost — subscription-billed, tokens-only records.
-    fn reports_cost(&self) -> bool {
-        false
-    }
-
-    fn synthesize(
-        &self,
-        req: &Request,
-        progress: Option<crate::runs::Active>,
-    ) -> anyhow::Result<Synthesis> {
-        synthesize_cursor(req, progress)
-    }
-}
-
-/// The model listing per `cursor-agent --list-models` — the account's own lineup, one `id - label`
-/// line per model after an "Available models" header (format confirmed empirically 2026-07-19).
-/// A non-zero exit surfaces the CLI's message (typically "run cursor-agent login") rather than an
-/// empty list that would read as "no models exist".
-fn cursor_models() -> anyhow::Result<ModelListing> {
-    let output = command(CURSOR_PROGRAM)?
-        .arg("--list-models")
-        .output()
-        .with_context(|| format!("could not run `{CURSOR_PROGRAM} --list-models`"))?;
-    anyhow::ensure!(
-        output.status.success(),
-        "`{CURSOR_PROGRAM} --list-models` failed ({}): {}{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim(),
-        String::from_utf8_lossy(&output.stdout).trim(),
-    );
-    let text = String::from_utf8_lossy(&output.stdout);
-    let models: Vec<ModelEntry> = text
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            // `id - label` rows only; the header, blank lines, and the trailing "Tip: …" carry no id.
-            let (id, label) = line.split_once(" - ")?;
-            let id = id.trim();
-            (!id.is_empty() && !id.contains(' ')).then(|| ModelEntry {
-                id: id.to_owned(),
-                display_name: Some(label.trim().to_owned()),
-            })
-        })
-        .collect();
-    anyhow::ensure!(
-        !models.is_empty(),
-        "`{CURSOR_PROGRAM} --list-models` returned no parseable `id - label` rows — its output format may have changed"
-    );
-    Ok(ModelListing {
-        models,
-        key_source: CURSOR_KEY_SOURCE.to_owned(),
-        // The CLI prints one complete list; no pagination signal exists to read.
-        truncated: false,
-        // No timestamps in the listing — nothing is date-sorted, so no undated caveat applies.
-        undated: 0,
-    })
-}
-
-/// `cursor-agent`'s final `result` JSON payload (`--output-format json` emits exactly one), plus
-/// its `usage` token block — shapes confirmed empirically 2026-07-19. Unknown fields are ignored
-/// deliberately: the payload is a moving CLI's output, and the fields read here are the contract
-/// arclite depends on.
-#[derive(Deserialize)]
-struct CursorJson {
-    #[serde(default)]
-    subtype: Option<String>,
-    #[serde(default)]
-    is_error: Option<bool>,
-    #[serde(default)]
-    result: Option<String>,
-    #[serde(default)]
-    usage: Option<CursorUsage>,
-}
-
-#[derive(Deserialize)]
-struct CursorUsage {
-    #[serde(rename = "inputTokens", default)]
-    input_tokens: u64,
-    #[serde(rename = "outputTokens", default)]
-    output_tokens: u64,
-    #[serde(rename = "cacheReadTokens", default)]
-    cache_read_tokens: u64,
-    #[serde(rename = "cacheWriteTokens", default)]
-    cache_write_tokens: u64,
-}
-
-impl CursorUsage {
-    /// The one CursorUsage → [`Usage`] mapping — every cursor return path reports through it.
-    /// cursor echoes no model id in its payload, so the model is the *requested* one, marked
-    /// [`ModelSource::Requested`] — disclosed, never presented as response-confirmed identity.
-    fn into_usage(self, model: &str) -> Usage {
-        Usage {
-            model: model.to_owned(),
-            models: vec![model.to_owned()],
-            model_source: ModelSource::Requested,
-            input_tokens: self.input_tokens,
-            output_tokens: self.output_tokens,
-            cache_creation_input_tokens: self.cache_write_tokens,
-            cache_read_input_tokens: self.cache_read_tokens,
-            cost_usd: None, // subscription-billed: tokens only, no fabricated dollar cost
-            cost_partial: false,
-            spend_unknown: false,
-        }
-    }
-}
-
-/// Drive `cursor-agent -p` for one [`Request`] — the [`CursorBackend`] implementation. Costs real
-/// (subscription) tokens.
-fn synthesize_cursor(
-    req: &Request,
-    mut progress: Option<crate::runs::Active>,
-) -> anyhow::Result<Synthesis> {
-    // An ambient request was already refused by CursorBackend::reject_unsupported — before any
-    // preview or spend — so by here the run is always the neutral-cwd, prompt-only shape.
-    let mut cmd = command(CURSOR_PROGRAM)?;
-    cmd.arg("-p")
-        .arg("--output-format")
-        .arg("json")
-        // Q&A mode: read-only, no tool use — arclite's synthesis is tool-less on this backend and
-        // the context arrives inline in the prompt, so the agent needs no repo access at all.
-        .arg("--mode")
-        .arg("ask")
-        // drive() runs the child in a neutral temp cwd; --trust answers the CLI's workspace-trust
-        // prompt for that directory (headless runs must never pause on interactive questions).
-        .arg("--trust")
-        .arg("--model")
-        .arg(req.model);
-    // No native schema flag: the schema contract rides the prompt, and the returned text must parse
-    // as JSON below — with synth's local re-check validating the shape either way, the same
-    // trust-the-channel-less posture the other backends get.
-    let prompt_owned;
-    let prompt = match req.json_schema {
-        Some(schema) => {
-            prompt_owned = format!(
-                "{}\n\nReturn ONLY a JSON object (no prose, no code fences) that validates against this JSON Schema:\n{schema}",
-                req.prompt
-            );
-            prompt_owned.as_str()
-        }
-        None => req.prompt,
-    };
-    // `--output-format json` emits exactly one JSON line (the result payload) — no streamed events,
-    // so there is no live text/turn progress to record; the run's marker still tracks liveness.
-    let mut result_line: Option<String> = None;
-    let mut prose_tail: Option<String> = None;
-    let driven = drive(
-        cmd,
-        // Always the neutral temp cwd: cursor has no ambient mode (rejected above), so no run ever
-        // starts from the target — mirroring claude's non-ambient posture.
-        &std::env::temp_dir(),
-        prompt,
-        "failed to launch `cursor-agent` — is the Cursor CLI installed and on PATH (and logged in)?",
-        |kind, _event, raw| {
-            if kind == "result" {
-                result_line = Some(raw.to_owned());
-                if let Some(p) = progress.as_mut() {
-                    p.record_turn(0);
-                }
-            } else if kind.is_empty() {
-                // Non-JSON stdout: cursor prints failures as prose AND exits 0 (confirmed with a
-                // bogus --model), so the last prose line is the only failure detail there is.
-                prose_tail = Some(raw.to_owned());
-            }
-        },
-    );
-    let Driven {
-        status,
-        stderr,
-        prompt_write_error,
-    } = match driven {
-        Ok(driven) => driven,
-        Err(DriveError::Launch(e)) => return Err(e),
-        Err(DriveError::AfterSpawn(e)) => {
-            // The stream died — but a captured result payload's usage is real, parsed spend:
-            // record that (as an errored run naming the failure) over unknown-zeros.
-            if let Some(line) = &result_line
-                && let Ok(parsed) = serde_json::from_str::<CursorJson>(line)
-                && let Some(usage) = parsed.usage
-            {
-                return Ok(Synthesis {
-                    text: String::new(),
-                    usage: usage.into_usage(req.model),
-                    structured: None,
-                    error: Some(format!("cursor-agent's stream failed after spend: {e:#}")),
-                });
-            }
-            return Ok(errored_without_usage(
-                req.model,
-                format!("cursor-agent's stream failed after launch — spend unknown: {e:#}"),
-            ));
-        }
-    };
-    let Some(result_line) = result_line else {
-        // No result payload at all. cursor's failure shape (confirmed): prose on stdout with exit
-        // 0 — so the prose tail, then stderr, is the best failure detail available.
-        let detail = prose_tail
-            .or_else(|| {
-                let s = stderr.trim();
-                (!s.is_empty()).then(|| s.to_owned())
-            })
-            .unwrap_or_else(|| format!("exit {status}, no detail on either stream"));
-        return Ok(errored_without_usage(
-            req.model,
-            format!("cursor-agent produced no `result` payload — spend unknown: {detail}"),
-        ));
-    };
-    let parsed: CursorJson = match serde_json::from_str(&result_line) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            return Ok(errored_without_usage(
-                req.model,
-                format!("cursor-agent's result payload didn't parse — spend unknown: {e}"),
-            ));
-        }
-    };
-    // Usage salvaged first, shared by every path below: with it, even a failed run records its
-    // real spend; without it, the zeros are marked unknown (never a measured-zero record).
-    let usage = parsed.usage.map_or_else(
-        || unknown_spend_usage(req.model),
-        |u| u.into_usage(req.model),
-    );
-    let spend_unknown = usage.spend_unknown;
-    let errored = |message: String| Synthesis {
-        text: String::new(),
-        usage: usage.clone(),
-        structured: None,
-        error: Some(message),
-    };
-    if parsed.is_error.unwrap_or(false) || !status.success() {
-        let detail = parsed
-            .result
-            .filter(|r| !r.trim().is_empty())
-            .or(parsed.subtype)
-            .unwrap_or_else(|| format!("exit {status}: {}", stderr.trim()));
-        return Ok(errored(format!("cursor-agent reported an error: {detail}")));
-    }
-    let Some(text) = parsed.result.filter(|r| !r.trim().is_empty()) else {
-        return Ok(errored(
-            "cursor-agent succeeded but returned an empty `result`".to_owned(),
-        ));
-    };
-    if spend_unknown {
-        // A success payload without its usage block is semantically incomplete — recorded as an
-        // errored run with the absence disclosed, mirroring the claude incomplete-payload path.
-        return Ok(errored(
-            "cursor-agent's success payload carried no `usage` block — spend unknown".to_owned(),
-        ));
-    }
-    let structured = if req.json_schema.is_some() {
-        match serde_json::from_str(text.trim()) {
-            Ok(value) => Some(value),
-            Err(e) => {
-                return Ok(errored(format!(
-                    "cursor-agent did not return the expected JSON for the requested schema: {e}"
-                )));
-            }
-        }
-    } else {
-        None
-    };
-    if let Some(e) = prompt_write_error {
-        return Ok(Synthesis {
-            text: String::new(),
-            usage,
-            structured: None,
-            error: Some(format!(
-                "cursor-agent completed but stopped reading the prompt partway ({e}) — the result reflects a truncated prompt"
-            )),
-        });
-    }
-    Ok(Synthesis {
-        text,
-        usage,
-        structured,
-        error: None, // a completed run; failures returned above, carrying their captured usage
-    })
 }
 
 // AI-output handling (parse_result) and the prompt estimate are exercised by

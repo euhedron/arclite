@@ -139,9 +139,9 @@ pub fn run_synthesis(
     if let Some(cap) = args.max_budget_usd {
         crate::settings::validate_budget(cap).context("invalid --max-budget-usd")?;
     }
-    // Reject, before any spend or preview, a requested capability this backend can't honor —
-    // surfaced as an error, never silently dropped (and never shown viable by a dry run).
-    backend.reject_unsupported(args.max_budget_usd, &args.allow_tool, args.ambient_memory)?;
+    // Reject, before any spend, a requested capability this backend can't honor — surfaced as an
+    // error, never silently dropped.
+    backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;
     let model = backend.resolve_model(args.model.as_deref(), backend.configured_model(&settings));
     // The resolved id — whichever of flag/config/default supplied it — rides argv as `--model`'s
     // value; reject an option-shaped or empty one here, before any spend, rather than let it

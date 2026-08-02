@@ -327,8 +327,8 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
                 .iter()
                 .map(|&name| BackendTool {
                     name: name.to_owned(),
-                    // Probe the executable the backend actually spawns — for cursor that's
-                    // `cursor-agent`, not the `cursor` IDE launcher a bare-name probe would hit.
+                    // Probe the executable the backend actually spawns (its `program()`), not its
+                    // display name — the two can differ for a future backend.
                     status: probe(
                         crate::ai::backend(name)
                             .expect("known_backends yields registered names")
