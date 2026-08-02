@@ -781,8 +781,9 @@ pub trait Backend {
 
     /// The reasoning effort this backend runs at, given any configured value — surfaced in the report
     /// and applied to the call, because it shapes cost. Default: `None` (the backend has no such knob).
-    /// A backend with one returns the configured value to pass; unset means nothing is passed and
-    /// the backend CLI applies its own default (arc ships no effort opinion).
+    /// A backend with one returns the value to pass — the configured one, layered over any built-in
+    /// default its impl declares (none do today); unset with no built-in means nothing is passed
+    /// and the backend CLI applies its own default.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         let _ = configured;
         None
@@ -1264,8 +1265,9 @@ fn synthesize_claude(
 /// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference,
 /// <https://learn.chatgpt.com/docs/config-file/config-reference>, verified 2026-08-02; update as
 /// the lineup changes). Shared with the config key's option list, so the picker and the validator
-/// can't drift. arclite ships no effort opinion of its own: unset, nothing is passed and codex
-/// applies its own default — the `codex_reasoning_effort` setting is the operator's slot.
+/// can't drift. The built-in default is currently empty — unset, nothing is passed and codex
+/// applies its own default; adopting one is a single value in [`Backend::reasoning_effort`]'s
+/// codex impl.
 pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
@@ -1371,8 +1373,8 @@ impl Backend for CodexBackend {
     }
 
     /// codex bills by reasoning effort, so a configured value is surfaced and applied — never a
-    /// hidden cost-shaping knob. Unset, arclite passes nothing and codex applies its own default:
-    /// the tuning is the operator's, not an arc opinion.
+    /// hidden cost-shaping knob. Unset, arclite passes nothing and codex applies its own default;
+    /// a built-in arc default, if one is ever adopted, is a single `.or(..)` here.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         configured.map(str::to_owned)
     }
