@@ -495,6 +495,11 @@ pub(crate) const CURSOR: &str = "cursor";
 /// probe goes through [`Backend::program`], never the backend's display name.
 pub(crate) const CURSOR_PROGRAM: &str = "cursor-agent";
 
+/// Where cursor's model access comes from — the login session, not a provider API key arclite
+/// manages. One home for the fact, shared by `model_key_source` and the `cursor_models` listing,
+/// so the two reports can't drift apart in wording.
+const CURSOR_KEY_SOURCE: &str = "cursor-agent login session (no provider API key)";
+
 /// The backends actually installed: each registry row whose [`Backend::program`] resolves on
 /// `PATH`. A pure lookup, no spawn — cheap enough for an error path or a TUI frame-adjacent probe
 /// (`doctor` stays the deeper `--version` probe).
@@ -755,17 +760,18 @@ pub trait Backend {
         explicit.or(default)
     }
 
-    /// Reject, before any spend, a requested capability this backend can't honor — surfaced as an
-    /// error, never silently dropped. Default: honor everything, but no backend accepts a tool name
-    /// shaped like an option: the names ride a variadic CLI flag, so a leading-dash value would
-    /// escape its argument slot into the agent CLI's own grammar
-    /// (guard-values-interpolated-into-commands).
+    /// Reject, before any spend — and before any preview, so a dry run can't show a shape the real
+    /// run would refuse — a requested capability this backend can't honor, surfaced as an error,
+    /// never silently dropped. Default: honor everything, but no backend accepts a tool name shaped
+    /// like an option: the names ride a variadic CLI flag, so a leading-dash value would escape its
+    /// argument slot into the agent CLI's own grammar (guard-values-interpolated-into-commands).
     fn reject_unsupported(
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
+        ambient: bool,
     ) -> anyhow::Result<()> {
-        let _ = max_budget_usd;
+        let _ = (max_budget_usd, ambient);
         for tool in allowed_tools {
             anyhow::ensure!(
                 !tool.starts_with('-') && !tool.is_empty(),
@@ -1358,7 +1364,9 @@ impl Backend for CodexBackend {
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
+        ambient: bool,
     ) -> anyhow::Result<()> {
+        let _ = ambient; // codex maps --ambient-memory (see its boundary/builder)
         anyhow::ensure!(
             max_budget_usd.is_none(),
             "--max-budget-usd requests a native per-run spend cap, which the codex backend has no equivalent for"
@@ -1903,14 +1911,15 @@ impl Backend for CursorBackend {
         CURSOR_PROGRAM
     }
 
-    /// The boundary [`cursor_command`] enforces — kept beside that builder so the description stays
-    /// reviewable against the argv it claims. Claims only what the builder passes: ask mode from a
-    /// neutral cwd; cursor exposes no switches for user-level rules/config or chat persistence, so
-    /// those are disclosed as not suppressed rather than absorbed into an isolation claim.
+    /// The boundary [`synthesize_cursor`] enforces with its inline argv (cursor has no separate
+    /// command builder) — kept in this impl so the description stays reviewable against that argv.
+    /// Claims only what the run passes: ask mode from a neutral cwd; cursor exposes no switches for
+    /// user-level rules/config or chat persistence, so those are disclosed as not suppressed rather
+    /// than absorbed into an isolation claim.
     fn boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
         RunBoundary {
-            // An --ambient-memory run is rejected before spend (no cursor mapping exists), so a
-            // recorded cursor boundary always carries ambient: false in practice.
+            // An --ambient-memory run is rejected by reject_unsupported before preview or spend,
+            // so a recorded cursor boundary always carries ambient: false in practice.
             ambient,
             customizations: "project rules/AGENTS.md never load (neutral working directory); user-level Cursor rules/config not suppressed (no CLI switch)",
             tool_runtime: "ask mode — read-only, no tool use; tool grants rejected before spend",
@@ -1933,9 +1942,7 @@ impl Backend for CursorBackend {
     /// cursor authenticates by login session (or `CURSOR_API_KEY`), not a provider API key arclite
     /// manages — reported as that fact, never as "no key" (which reads as unconfigured).
     fn model_key_source(&self, _settings: &Settings) -> anyhow::Result<Option<String>> {
-        Ok(Some(
-            "cursor-agent login session (no provider API key)".to_owned(),
-        ))
+        Ok(Some(CURSOR_KEY_SOURCE.to_owned()))
     }
 
     /// cursor exposes no native per-run spend cap, so none applies (an explicit one is refused below).
@@ -1947,6 +1954,7 @@ impl Backend for CursorBackend {
         &self,
         max_budget_usd: Option<f64>,
         allowed_tools: &[String],
+        ambient: bool,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
             max_budget_usd.is_none(),
@@ -1955,6 +1963,12 @@ impl Backend for CursorBackend {
         anyhow::ensure!(
             allowed_tools.is_empty(),
             "--allow-tool (a claude-style tool-name allowlist) isn't mapped onto cursor's tool model yet — cursor runs tool-less (--mode ask)"
+        );
+        // Rejected here — before preview or spend — so a dry run can't show an ambient shape the
+        // real run would refuse.
+        anyhow::ensure!(
+            !ambient,
+            "--ambient-memory isn't mapped onto the cursor backend — no cursor switch reopens the target as an ambient root (runs stay prompt-only from a neutral directory)"
         );
         Ok(())
     }
@@ -2015,7 +2029,7 @@ fn cursor_models() -> anyhow::Result<ModelListing> {
     );
     Ok(ModelListing {
         models,
-        key_source: "cursor-agent login session".to_owned(),
+        key_source: CURSOR_KEY_SOURCE.to_owned(),
         // The CLI prints one complete list; no pagination signal exists to read.
         truncated: false,
         // No timestamps in the listing — nothing is date-sorted, so no undated caveat applies.
@@ -2077,14 +2091,8 @@ fn synthesize_cursor(
     req: &Request,
     mut progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
-    // No cursor mapping exists for re-enabling ambient memory: the run executes in a neutral cwd
-    // (drive's temp dir), where no project rules/AGENTS.md exist to load, and the CLI has no
-    // "load this directory's config" flag to opt back in with. Refused before spend rather than
-    // silently accepted as a no-op (reject-unsupported-option-before-acting).
-    anyhow::ensure!(
-        !req.ambient_memory,
-        "--ambient-memory isn't mapped onto the cursor backend — cursor runs fully isolated (no project rules/AGENTS.md load in its neutral working directory)"
-    );
+    // An ambient request was already refused by CursorBackend::reject_unsupported — before any
+    // preview or spend — so by here the run is always the neutral-cwd, prompt-only shape.
     let mut cmd = command(CURSOR_PROGRAM)?;
     cmd.arg("-p")
         .arg("--output-format")
