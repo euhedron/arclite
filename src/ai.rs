@@ -472,15 +472,30 @@ pub struct RunBoundary {
 
 impl RunBoundary {
     pub(crate) fn human(&self) -> String {
-        format!(
-            "customizations={}; tools={}; repo={}; session={}; inherited={}",
+        boundary_human(
             self.customizations,
             self.tool_runtime,
             self.repository_access,
             self.session,
-            self.inherited
+            self.inherited,
         )
     }
+}
+
+/// The boundary's one human rendering — the format string and its field→label mapping
+/// (`tool_runtime`→`tools`, `repository_access`→`repo`) live here alone, shared by
+/// [`RunBoundary::human`] and the log browser's re-rendering of stored records, so the live and
+/// stored displays can't drift.
+pub(crate) fn boundary_human(
+    customizations: &str,
+    tool_runtime: &str,
+    repository_access: &str,
+    session: &str,
+    inherited: &str,
+) -> String {
+    format!(
+        "customizations={customizations}; tools={tool_runtime}; repo={repository_access}; session={session}; inherited={inherited}"
+    )
 }
 
 /// Each backend's name, named once: the [`BACKENDS`] registry rows and every cross-module reference
