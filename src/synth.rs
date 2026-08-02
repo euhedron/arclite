@@ -1604,7 +1604,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     let requested = opts.model;
     // The report names the model that actually ran (set from the response after the call); until
     // then it holds the requested model — all a dry run can name, since nothing runs.
-    let boundary = ai::run_boundary(opts.backend, opts.ambient_memory, opts.allowed_tools)?;
+    let boundary = ai::backend(opts.backend)?.boundary(opts.ambient_memory, opts.allowed_tools);
     let mut report = RunReport {
         model: requested.to_owned(),
         // No source verdict until a response exists — a real run sets it from the usage; a dry run
