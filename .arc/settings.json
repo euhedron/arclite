@@ -1,8 +1,6 @@
 {
-  "defaults": {
-    "max_budget_usd": 10.0,
-    "ruleset": "self"
-  },
+  "max_budget_usd": 10.0,
+  "ruleset": "self",
   "rulesets": {
     "rule-quality": {
       "sources": [

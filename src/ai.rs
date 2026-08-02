@@ -483,9 +483,9 @@ impl RunBoundary {
     }
 }
 
-/// Each backend's name, named once: the [`BACKENDS`] registry rows, [`DEFAULT_BACKEND`], and every
-/// cross-module reference (the config table's provider-listing rows) derive from these, so a rename
-/// is one edit here — never a scattered literal hunt.
+/// Each backend's name, named once: the [`BACKENDS`] registry rows and every cross-module reference
+/// (the config table's provider-listing rows) derive from these, so a rename is one edit here —
+/// never a scattered literal hunt.
 pub(crate) const CLAUDE: &str = "claude";
 pub(crate) const CODEX: &str = "codex";
 pub(crate) const CURSOR: &str = "cursor";
@@ -550,8 +550,42 @@ pub(crate) fn run_boundary(
     })
 }
 
-/// arclite's default synthesis backend, used when neither `--backend` nor `defaults.backend` is set.
-pub const DEFAULT_BACKEND: &str = CLAUDE;
+/// The backends actually installed: each registry row whose [`Backend::program`] resolves on
+/// `PATH`. A pure lookup, no spawn — cheap enough for an error path or a TUI frame-adjacent probe
+/// (`doctor` stays the deeper `--version` probe).
+pub(crate) fn detected_backends() -> Vec<&'static str> {
+    BACKENDS
+        .iter()
+        .filter(|(_, factory, _)| which::which(factory().program()).is_ok())
+        .map(|(name, _, _)| *name)
+        .collect()
+}
+
+/// The error for a run with no backend selected. arclite ships **no built-in default backend** —
+/// the backend is the thing that spends, so it is always the operator's choice (`--backend` per
+/// run, or their `backend` setting); an unset backend errors with what's detected and how to
+/// choose, never a silent vendor pick. One construction site, so the CLI and the TUI can't drift.
+pub(crate) fn no_backend_selected() -> anyhow::Error {
+    let detected = detected_backends();
+    let known = known_backends();
+    let inventory = if detected.is_empty() {
+        format!(
+            "none of the {} known backend CLIs ({}) is on PATH — install one",
+            known.len(),
+            known.join(", ")
+        )
+    } else {
+        format!(
+            "{} of {} backend CLIs detected: {}",
+            detected.len(),
+            known.len(),
+            detected.join(", ")
+        )
+    };
+    anyhow::anyhow!(
+        "no backend selected — {inventory}; pick one per run with `--backend <name>` or set yours with `arc config set backend <name>`"
+    )
+}
 
 /// Constructs a backend instance — the factory half of a [`BACKENDS`] registry row.
 type BackendFactory = fn() -> Box<dyn Backend>;
@@ -584,22 +618,17 @@ pub(crate) fn known_backends() -> Vec<&'static str> {
     BACKENDS.iter().map(|(name, _, _)| *name).collect()
 }
 
-/// The `--backend` flag's help text, derived from the [`BACKENDS`] registry rows (names, default
-/// marker, capability blurbs) — so the CLI's enumeration can't go stale against the registry.
+/// The `--backend` flag's help text, derived from the [`BACKENDS`] registry rows (names and
+/// capability blurbs) — so the CLI's enumeration can't go stale against the registry.
 pub(crate) fn backends_help() -> String {
     let list = BACKENDS
         .iter()
-        .map(|(name, _, blurb)| {
-            let default = if *name == DEFAULT_BACKEND {
-                " (default)"
-            } else {
-                ""
-            };
-            format!("`{name}`{default}: {blurb}")
-        })
+        .map(|(name, _, blurb)| format!("`{name}`: {blurb}"))
         .collect::<Vec<_>>()
         .join(". ");
-    format!("Synthesis backend — {list}. Overrides the configured `defaults.backend`")
+    format!(
+        "Synthesis backend — {list}. Overrides the configured `backend` setting; with neither, the run errors (there is no built-in default)"
+    )
 }
 
 /// The providers' model-listing endpoints and Anthropic's pinned API version (the value the API
@@ -740,8 +769,8 @@ pub trait Backend {
     /// [`CURSOR_PROGRAM`], since bare `cursor` on PATH is the IDE launcher, not the agent CLI).
     fn program(&self) -> &'static str;
 
-    /// This backend's configured default model from settings (`defaults.model` for claude,
-    /// `defaults.codex_model` for codex), or `None` if unset. Required, so model resolution never
+    /// This backend's configured model from settings (`claude_model` for claude, `codex_model`
+    /// for codex), or `None` if unset. Required, so model resolution never
     /// branches on the backend name and a new backend must declare its own key rather than inherit one.
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str>;
 
@@ -912,7 +941,7 @@ impl Backend for ClaudeBackend {
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
-        settings.default_model.as_deref()
+        settings.claude_model.as_deref()
     }
 
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
@@ -1247,7 +1276,7 @@ fn synthesize_claude(
     Ok(synthesis)
 }
 
-/// The codex backend's *default* reasoning effort, used when `defaults.codex_reasoning_effort` isn't
+/// The codex backend's *default* reasoning effort, used when the `codex_reasoning_effort` setting isn't
 /// set — specified explicitly (not read from codex's `config.toml`) so a run is self-contained, and
 /// surfaced in the run report since it shapes cost. The highest tier, matching the audit/critique role
 /// where judgment quality matters more than latency.
@@ -1304,7 +1333,7 @@ impl Backend for CodexBackend {
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
-        settings.default_codex_model.as_deref()
+        settings.codex_model.as_deref()
     }
 
     fn list_models(&self, settings: &Settings) -> anyhow::Result<ModelListing> {
@@ -1843,7 +1872,7 @@ mod tests {
 /// different (undisclosed) model per run, and an auditing tool must be able to say which model
 /// judged (report-the-identity-that-ran; the id is still Requested — the result payload echoes no
 /// model). Present in the CLI's own listing (confirmed 2026-07-19 via `cursor-agent --list-models`);
-/// update as the lineup advances, or set `defaults.cursor_model`.
+/// update as the lineup advances, or set `cursor_model`.
 const DEFAULT_CURSOR_MODEL: &str = "gpt-5.3-codex-high";
 
 pub struct CursorBackend;
@@ -1858,7 +1887,7 @@ impl Backend for CursorBackend {
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
-        settings.default_cursor_model.as_deref()
+        settings.cursor_model.as_deref()
     }
 
     /// Unlike claude/codex, the listing needs no provider API key: `cursor-agent --list-models`
@@ -2055,6 +2084,9 @@ fn synthesize_cursor(
     let mut prose_tail: Option<String> = None;
     let driven = drive(
         cmd,
+        // Always the neutral temp cwd: cursor has no ambient mode (rejected above), so no run ever
+        // starts from the target — mirroring claude's non-ambient posture.
+        &std::env::temp_dir(),
         prompt,
         "failed to launch `cursor-agent` — is the Cursor CLI installed and on PATH (and logged in)?",
         |kind, _event, raw| {

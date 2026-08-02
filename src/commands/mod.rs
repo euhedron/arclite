@@ -121,15 +121,17 @@ pub fn run_synthesis(
     let settings = crate::settings::Settings::load(&args.path)?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
-    // Backend: the `--backend` flag over the configured default, else arclite's default. The resolved
-    // instance owns the per-backend policy below — which model default applies, whether a native spend
-    // cap is honored, and which requested capabilities it can't — so this function never branches on
-    // the backend name (that lives only in `ai::backend`, the single home of the known backends).
+    // Backend: the `--backend` flag over the configured `backend` setting — and nothing beneath
+    // (no built-in default: the backend is the thing that spends, so an unselected one errors with
+    // what's detected rather than silently picking a vendor). The resolved instance owns the
+    // per-backend policy below — which model default applies, whether a native spend cap is
+    // honored, and which requested capabilities it can't — so this function never branches on the
+    // backend name (that lives only in `ai::backend`, the single home of the known backends).
     let backend_name = args
         .backend
         .clone()
-        .or_else(|| settings.default_backend.clone())
-        .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
+        .or_else(|| settings.backend.clone())
+        .ok_or_else(crate::ai::no_backend_selected)?;
     let backend = crate::ai::backend(&backend_name)?;
     // Validate an explicit cap at the boundary — the same rule `config set` and the settings loader
     // apply — so a zero/negative/non-finite value is rejected before any spend rather than riding
@@ -145,22 +147,20 @@ pub fn run_synthesis(
     // value; reject an option-shaped or empty one here, before any spend, rather than let it
     // escape its value slot in the child CLI's grammar.
     crate::ai::validate_model_id(&model)?;
-    let max_budget_usd =
-        backend.resolve_budget(args.max_budget_usd, settings.default_max_budget_usd);
+    let max_budget_usd = backend.resolve_budget(args.max_budget_usd, settings.max_budget_usd);
     // A configured budget cap the backend can't honor is surfaced, never silently dropped. An explicit
     // --max-budget-usd is already rejected above; a configured default would otherwise just vanish here
     // (e.g. codex has no native cap), leaving the user's safety lever silently inactive.
     if args.max_budget_usd.is_none()
-        && let Some(cap) = settings.default_max_budget_usd
+        && let Some(cap) = settings.max_budget_usd
         && max_budget_usd.is_none()
     {
         eprintln!(
-            "arclite: defaults.max_budget_usd ({}) not applied — the {backend_name} backend has no native budget cap",
+            "arclite: the max_budget_usd setting ({}) not applied — the {backend_name} backend has no native budget cap",
             crate::log::cost_display(cap)
         );
     }
-    let reasoning_effort =
-        backend.reasoning_effort(settings.default_codex_reasoning_effort.as_deref());
+    let reasoning_effort = backend.reasoning_effort(settings.codex_reasoning_effort.as_deref());
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
@@ -267,15 +267,15 @@ pub fn run_synthesis(
     outcome
 }
 
-/// What `--rules`/`--ruleset`/`defaults.ruleset` resolved to: a human description of the selection
-/// (for reporting) plus the source paths to load. Shared by `run_synthesis` and `arc rules`.
+/// What `--rules`/`--ruleset`/the `ruleset` setting resolved to: a human description of the
+/// selection (for reporting) plus the source paths to load. Shared by `run_synthesis` and `arc rules`.
 pub(crate) struct RuleResolution {
     pub description: String,
     pub sources: Vec<std::path::PathBuf>,
 }
 
 /// Resolve which rule sources to load, in precedence order: an ad-hoc `--rules <path>`, else a
-/// named `--ruleset <id>` (or the configured `defaults.ruleset`) from settings, else none.
+/// named `--ruleset <id>` (or the configured `ruleset` setting), else none.
 pub(crate) fn resolve_rule_sources(
     rules: Option<&std::path::Path>,
     ruleset: Option<&str>,
@@ -288,14 +288,14 @@ pub(crate) fn resolve_rule_sources(
         });
     }
     let from_flag = ruleset.is_some();
-    let Some(id) = ruleset.or(settings.default_ruleset.as_deref()) else {
+    let Some(id) = ruleset.or(settings.ruleset.as_deref()) else {
         return Ok(RuleResolution {
             description: "no ruleset selected".to_owned(),
             sources: Vec::new(),
         });
     };
     let sources = settings
-        .ruleset(id)
+        .ruleset_sources(id)
         .map(<[std::path::PathBuf]>::to_vec)
         .ok_or_else(|| anyhow::anyhow!("ruleset `{id}` is not defined in .arc/settings.json"))?;
     Ok(RuleResolution {
@@ -304,7 +304,7 @@ pub(crate) fn resolve_rule_sources(
             if from_flag {
                 "--ruleset"
             } else {
-                "defaults.ruleset"
+                "the `ruleset` setting"
             }
         ),
         sources,

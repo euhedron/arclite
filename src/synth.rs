@@ -30,7 +30,7 @@ pub(crate) const GATE_BLOCKED_EXIT: u8 = 2;
 /// success, so a hook or script can tell "the run broke" from "the run ran and found problems".
 const ERRORED_EXIT: u8 = 1;
 
-const LOGGING_OFF_NOTE: &str = "\nlogging: off (defaults.logging = false)";
+const LOGGING_OFF_NOTE: &str = "\nlogging: off (the `logging` setting is false)";
 
 /// How many schema-mismatch problems the local re-check names before eliding the rest (with a
 /// disclosed "… and N more" count). The first few identify the shape drift; a flood of repeats

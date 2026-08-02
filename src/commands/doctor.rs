@@ -9,9 +9,19 @@ pub(crate) struct Report {
     runtime: Runtime,
     cwd: String,
     tools: Tools,
+    backend: BackendSelection,
     api_keys: ApiKeys,
     logs: Logs,
     gate: Gate,
+}
+
+/// The backend a run from this cwd would use — the configured `backend` setting, or none. There is
+/// **no built-in default**, so "none selected" is a fact doctor must surface (with the fix), not an
+/// implicit claude. A settings-load failure is its own state, distinct from "not selected".
+#[derive(Serialize)]
+struct BackendSelection {
+    selected: Option<String>,
+    error: Option<String>,
 }
 
 /// Each backend's provider-API key status — the model listings' prerequisite (`arc models`, the
@@ -299,6 +309,9 @@ pub fn run(_args: &DoctorArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 /// facts from one place.
 pub(crate) fn gather() -> anyhow::Result<Report> {
     let runs = crate::log::count();
+    // One load feeds both the backend-selection line and the api-key statuses, so the two report
+    // the same settings state rather than racing separate reads.
+    let settings = crate::settings::Settings::load(std::path::Path::new("."));
     Ok(Report {
         arclite: env!("CARGO_PKG_VERSION"),
         runtime: Runtime {
@@ -324,14 +337,24 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
                 })
                 .collect(),
         },
-        api_keys: match crate::settings::Settings::load(std::path::Path::new(".")) {
+        backend: match &settings {
+            Ok(settings) => BackendSelection {
+                selected: settings.backend.clone(),
+                error: None,
+            },
+            Err(e) => BackendSelection {
+                selected: None,
+                error: Some(format!("{e:#}")),
+            },
+        },
+        api_keys: match &settings {
             Ok(settings) => ApiKeys {
                 statuses: crate::ai::known_backends()
                     .iter()
                     .map(|&name| {
                         let resolved = crate::ai::backend(name)
                             .expect("known_backends yields registered names")
-                            .model_key_source(&settings);
+                            .model_key_source(settings);
                         let (source, error) = match resolved {
                             Ok(source) => (source, None),
                             Err(e) => (None, Some(format!("{e:#}"))),
@@ -401,15 +424,21 @@ pub(crate) fn human(report: &Report) -> String {
         ),
     ];
     for b in &report.tools.backends {
-        // A non-default backend is optional, so qualify its "not found"; a present-but-broken one
-        // still surfaces as an error (via `display`), never as merely missing.
-        let absent = if b.name == crate::ai::DEFAULT_BACKEND {
-            "not found".to_owned()
-        } else {
-            format!("not found (needed only for --backend {})", b.name)
-        };
+        // Every backend is optional until selected (there is no default one), so each "not found"
+        // is qualified; a present-but-broken one still surfaces as an error (via `display`), never
+        // as merely missing.
+        let absent = format!("not found (needed only when {} is selected)", b.name);
         lines.push(row(&b.name, &b.status.display(&absent)));
     }
+    let backend_line = match (&report.backend.selected, &report.backend.error) {
+        (Some(name), _) => name.clone(),
+        (None, Some(e)) => format!("settings unreadable: {e}"),
+        (None, None) => {
+            "(none selected — --backend <name> per run, or `arc config set backend <name>`)"
+                .to_owned()
+        }
+    };
+    lines.push(row("backend", &backend_line));
     let api_keys_line = if let Some(e) = &report.api_keys.error {
         format!("settings unreadable: {e}")
     } else {

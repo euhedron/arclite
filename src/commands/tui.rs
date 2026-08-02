@@ -341,6 +341,11 @@ struct App {
     /// A newer published release the startup check found (`Some(version)`), surfaced in the footer;
     /// `None` until the check reports, and when up to date or the check failed.
     update: Option<String>,
+    /// Whether no backend is selected anywhere (no `backend` setting in any layer — arclite ships
+    /// no built-in default), flagged in the footer since every AI launch errors until one is chosen.
+    /// Computed at startup and refreshed after each config write; an unreadable settings file keeps
+    /// it `false` (the config view owns surfacing that error).
+    backend_unset: bool,
     /// The doctor view's report as rendered text, loaded when the view is opened; `None` until then.
     /// `Err` if the environment probe failed (e.g. an unreadable cwd), shown in the view.
     doctor: Option<Result<String, String>>,
@@ -356,6 +361,7 @@ impl App {
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         let cwd_note = cwd_warning(Path::new(&cwd));
         let cwd_display = crate::display_path(&cwd);
+        let backend_unset = backend_unset(&cwd);
         // Check for a newer release off the main thread (it's a network call); the footer flags it when
         // the result arrives. Best-effort — a failed check (offline, etc.) simply never notifies.
         let update_tx = tx.clone();
@@ -380,6 +386,7 @@ impl App {
             cwd_note,
             cwd_display,
             update: None,
+            backend_unset,
             doctor: None,
             rules: None,
             report_scroll: 0,
@@ -393,11 +400,16 @@ impl App {
         // The `r` cycle's options, captured at gate-open. Absent settings are genuinely "no rulesets
         // to cycle", but an *unreadable* settings file must not be read as that — the failure rides
         // the gate's notice line (the run itself re-resolves settings and errors the same way).
-        let (rulesets, settings_error) = match crate::settings::Settings::load(Path::new(&self.cwd))
-        {
-            Ok(s) => (s.ruleset_ids(), None),
-            Err(e) => (Vec::new(), Some(format!("{e:#}"))),
-        };
+        let (rulesets, configured_backend, settings_error) =
+            match crate::settings::Settings::load(Path::new(&self.cwd)) {
+                Ok(s) => (s.ruleset_ids(), s.backend.clone(), None),
+                Err(e) => (Vec::new(), None, Some(format!("{e:#}"))),
+            };
+        // With no backend configured (and none shaped yet), the run below can only error — say so
+        // up front with the same wording the run would use, plus the gate's own affordance. Probed
+        // once at gate-open (PATH lookups), not per frame.
+        let no_backend_notice = (settings_error.is_none() && configured_backend.is_none())
+            .then(|| format!("{:#}", crate::ai::no_backend_selected()));
         self.launch_generation += 1;
         self.launch = Some(Launch {
             verb,
@@ -407,6 +419,7 @@ impl App {
             ruleset: None,
             rulesets,
             settings_error,
+            no_backend_notice,
             models: ModelsState::Unfetched,
             generation: self.launch_generation,
         });
@@ -448,8 +461,9 @@ impl App {
         self.spawn_preview();
     }
 
-    /// Cycle the launch's backend override through the registry (ending back at the configured
-    /// default). A shaped model belongs to the old backend, so it drops with the fetched listing.
+    /// Cycle the launch's backend override through the registry (ending back at unset — the
+    /// configured `backend` setting if one exists, else the no-backend notice returns). A shaped
+    /// model belongs to the old backend, so it drops with the fetched listing.
     fn cycle_launch_backend(&mut self) {
         {
             let Some(launch) = self.launch.as_mut() else {
@@ -645,7 +659,11 @@ impl App {
     /// on the info line.
     fn save_config(&mut self, key: &str, value: &str, keep: usize) {
         match crate::commands::config::set_value(Path::new(&self.cwd), key, value, false) {
-            Ok(_) => self.config = Some(load_config_view(&self.cwd, keep)),
+            Ok(_) => {
+                self.config = Some(load_config_view(&self.cwd, keep));
+                // The write may have (un)set the backend — refresh the footer's flag from disk.
+                self.backend_unset = backend_unset(&self.cwd);
+            }
             Err(e) => {
                 if let Some(ConfigView::Loaded { error, .. }) = self.config.as_mut() {
                     *error = Some(format!("{e:#}"));
@@ -817,7 +835,9 @@ struct Launch {
     stage: LaunchStage,
     /// Shaped overrides — `--backend`/`--model`/`--ruleset` — appended to both the dry-run and the
     /// confirmed run from one builder ([`Launch::shaped_args`]), so the previewed command is exactly
-    /// the fired one. `None` = the configured default applies (the preview echoes what resolved).
+    /// the fired one. `None` = the configured setting applies (the preview echoes what resolved) —
+    /// for the backend, which has no built-in default, `None` with nothing configured means the run
+    /// errors (see [`Launch::no_backend_notice`]).
     backend: Option<String>,
     model: Option<String>,
     ruleset: Option<String>,
@@ -827,6 +847,9 @@ struct Launch {
     /// A settings load failure at gate-open, shown on the notice line — an unreadable settings file
     /// must not masquerade as "no rulesets defined" (absent settings are simply empty options).
     settings_error: Option<String>,
+    /// Present when no backend was configured at gate-open: the run-side error wording, shown on the
+    /// notice line while no `b` override is shaped (there is no built-in default to fall back on).
+    no_backend_notice: Option<String>,
     /// The provider model listing for the launch's current backend, fetched on the first `m` press
     /// and reset when the backend cycles (a model id belongs to a backend).
     models: ModelsState,
@@ -855,17 +878,18 @@ impl Launch {
 
 /// The provider-listing fetch both TUI pickers share (the launch modal's model cycle and the
 /// config picker): load the cwd's settings, resolve the backend — an explicit choice, else the
-/// configured default, else the built-in default (the same resolution a run performs) — list its
-/// models, and flatten to what the pickers consume: ids + the listing's caveats (truncation flag,
-/// undated count). One implementation, so the two fetch paths can't drift.
+/// configured `backend` setting (the same resolution a run performs — no backend selected is the
+/// same error a run raises) — list its models, and flatten to what the pickers consume: ids + the
+/// listing's caveats (truncation flag, undated count). One implementation, so the two fetch paths
+/// can't drift.
 fn fetch_model_ids(
     cwd: &str,
     backend: Option<String>,
 ) -> Result<(Vec<String>, bool, usize), String> {
     let settings = crate::settings::Settings::load(Path::new(cwd)).map_err(|e| format!("{e:#}"))?;
     let name = backend
-        .or_else(|| settings.default_backend.clone())
-        .unwrap_or_else(|| crate::ai::DEFAULT_BACKEND.to_owned());
+        .or_else(|| settings.backend.clone())
+        .ok_or_else(|| format!("{:#}", crate::ai::no_backend_selected()))?;
     let listing = crate::ai::backend(&name)
         .and_then(|b| b.list_models(&settings))
         .map_err(|e| format!("{e:#}"))?;
@@ -1748,6 +1772,15 @@ fn cwd_warning(cwd: &Path) -> Option<String> {
     None
 }
 
+/// Whether no backend is selected in any settings layer — the footer's attention flag. An
+/// unreadable settings file reads as `false`: that failure is the config view's to surface, and a
+/// second copy of it in the footer would just crowd the one actionable fact this flag carries.
+fn backend_unset(cwd: &str) -> bool {
+    crate::settings::Settings::load(Path::new(cwd))
+        .map(|s| s.backend.is_none())
+        .unwrap_or(false)
+}
+
 /// The home view the TUI opens on — a compact masthead (name + version, the target directory, and a
 /// warning when that directory is a poor place to run arc). The footer carries live state and key
 /// hints, so home doesn't repeat them; the space below is the open launchpad.
@@ -2580,15 +2613,16 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let status = format!("{runs}  ·  {hints}");
-    let line = match &app.update {
-        // A newer release found at startup — flag it, undimmed, after the status and key hints.
-        Some(version) => Line::from(vec![
-            Span::from(status).dim(),
-            Span::from(format!("  ·  ⬆ arc {version}")).yellow(),
-        ]),
-        None => Line::from(status).dim(),
-    };
-    frame.render_widget(line, area);
+    // Attention flags ride after the dimmed status/hints, undimmed: no backend selected (every AI
+    // launch errors until one is chosen — there is no built-in default), and a newer release.
+    let mut spans = vec![Span::from(status).dim()];
+    if app.backend_unset {
+        spans.push(Span::from("  ·  no backend set (config → backend)").yellow());
+    }
+    if let Some(version) = &app.update {
+        spans.push(Span::from(format!("  ·  ⬆ arc {version}")).yellow());
+    }
+    frame.render_widget(Line::from(spans), area);
 }
 
 /// The `/` command palette: a centered popup with the typed query and the prefix-matched commands,
@@ -2660,6 +2694,13 @@ fn render_launch(frame: &mut Frame, launch: &Launch, area: Rect) {
     let mut notices: Vec<Line> = Vec::new();
     if let Some(e) = &launch.settings_error {
         notices.push(Line::from(format!("settings: {e}")).yellow());
+    }
+    // No backend configured and none shaped: the fire can only error — the run's own wording plus
+    // this gate's affordance. A shaped `b` override clears it (cycling back to unset restores it).
+    if launch.backend.is_none()
+        && let Some(n) = &launch.no_backend_notice
+    {
+        notices.push(Line::from(format!("{n} — or press b to pick for this run")).yellow());
     }
     match &launch.models {
         ModelsState::Fetching => notices.push(Line::from("fetching models…").dim()),
@@ -2786,6 +2827,7 @@ mod tests {
             cwd_note: None,
             cwd_display: ".".to_owned(),
             update: None,
+            backend_unset: false,
             doctor: None,
             rules: None,
             report_scroll: 0,
