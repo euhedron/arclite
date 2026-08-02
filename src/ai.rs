@@ -495,61 +495,6 @@ pub(crate) const CURSOR: &str = "cursor";
 /// probe goes through [`Backend::program`], never the backend's display name.
 pub(crate) const CURSOR_PROGRAM: &str = "cursor-agent";
 
-/// Describe the same backend policy the command builders below enforce. Keeping this next to those
-/// builders makes the report reviewable against argv, while tests assert both halves together.
-pub(crate) fn run_boundary(
-    backend: &str,
-    ambient: bool,
-    allowed_tools: &[String],
-) -> anyhow::Result<RunBoundary> {
-    let tool_grants = !allowed_tools.is_empty();
-    Ok(match backend {
-        CLAUDE => RunBoundary {
-            ambient,
-            customizations: if ambient {
-                "user/project customizations enabled; inherited MCP disabled"
-            } else {
-                "user/project customizations disabled"
-            },
-            tool_runtime: if tool_grants {
-                "explicit built-in allowlist"
-            } else {
-                "built-in tools disabled"
-            },
-            repository_access: if tool_grants {
-                "target granted to allowlisted tools"
-            } else if ambient {
-                "target is working directory; no built-in tools"
-            } else {
-                "prompt only; no target-directory grant"
-            },
-            session: "CLI session files disabled",
-            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
-        },
-        CODEX => RunBoundary {
-            ambient,
-            customizations: if ambient {
-                "target project config/instructions/skills enabled; user config/rules ignored; ordinary hooks/plugins/apps/web search disabled"
-            } else {
-                "project config/instructions/skills and user config/rules suppressed; ordinary hooks/plugins/apps/web search disabled"
-            },
-            tool_runtime: if ambient {
-                "ordinary shell/delegation/app tools disabled; remaining local tools confined read-only to target + minimal runtime; network denied"
-            } else {
-                "ordinary shell/delegation/app tools disabled; remaining local tools confined to fresh run dir + minimal runtime; network denied"
-            },
-            repository_access: if ambient {
-                "target readable by local tools"
-            } else {
-                "prompt only; target denied to local tools"
-            },
-            session: "CLI session files disabled",
-            inherited: "auth, provider base instructions, user/admin/bundled skills, and managed policy/tools",
-        },
-        _ => anyhow::bail!("unknown synthesis backend `{backend}`"),
-    })
-}
-
 /// The backends actually installed: each registry row whose [`Backend::program`] resolves on
 /// `PATH`. A pure lookup, no spawn — cheap enough for an error path or a TUI frame-adjacent probe
 /// (`doctor` stays the deeper `--version` probe).
@@ -769,6 +714,13 @@ pub trait Backend {
     /// [`CURSOR_PROGRAM`], since bare `cursor` on PATH is the IDE launcher, not the agent CLI).
     fn program(&self) -> &'static str;
 
+    /// Describe the execution boundary this backend's command builder enforces for a run shaped by
+    /// `ambient`/`allowed_tools` — the [`RunBoundary`] serialized into dry runs and run records.
+    /// Required, and implemented beside each builder so the report stays reviewable against argv
+    /// (tests assert both halves together): a new backend must declare its own boundary rather
+    /// than fall into a catch-all or inherit a stronger claim than its CLI earns.
+    fn boundary(&self, ambient: bool, allowed_tools: &[String]) -> RunBoundary;
+
     /// This backend's configured model from settings (`claude_model` for claude, `codex_model`
     /// for codex), or `None` if unset. Required, so model resolution never
     /// branches on the backend name and a new backend must declare its own key rather than inherit one.
@@ -938,6 +890,34 @@ impl Backend for ClaudeBackend {
 
     fn program(&self) -> &'static str {
         CLAUDE
+    }
+
+    /// The boundary [`claude_command`] enforces — kept beside that builder so the description stays
+    /// reviewable against the argv it claims (tests assert both halves together).
+    fn boundary(&self, ambient: bool, allowed_tools: &[String]) -> RunBoundary {
+        let tool_grants = !allowed_tools.is_empty();
+        RunBoundary {
+            ambient,
+            customizations: if ambient {
+                "user/project customizations enabled; inherited MCP disabled"
+            } else {
+                "user/project customizations disabled"
+            },
+            tool_runtime: if tool_grants {
+                "explicit built-in allowlist"
+            } else {
+                "built-in tools disabled"
+            },
+            repository_access: if tool_grants {
+                "target granted to allowlisted tools"
+            } else if ambient {
+                "target is working directory; no built-in tools"
+            } else {
+                "prompt only; no target-directory grant"
+            },
+            session: "CLI session files disabled",
+            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
+        }
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
@@ -1330,6 +1310,31 @@ impl Backend for CodexBackend {
 
     fn program(&self) -> &'static str {
         CODEX
+    }
+
+    /// The boundary [`codex_command`] enforces — kept beside that builder so the description stays
+    /// reviewable against the argv it claims (tests assert both halves together).
+    fn boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
+        RunBoundary {
+            ambient,
+            customizations: if ambient {
+                "target project config/instructions/skills enabled; user config/rules ignored; ordinary hooks/plugins/apps/web search disabled"
+            } else {
+                "project config/instructions/skills and user config/rules suppressed; ordinary hooks/plugins/apps/web search disabled"
+            },
+            tool_runtime: if ambient {
+                "ordinary shell/delegation/app tools disabled; remaining local tools confined read-only to target + minimal runtime; network denied"
+            } else {
+                "ordinary shell/delegation/app tools disabled; remaining local tools confined to fresh run dir + minimal runtime; network denied"
+            },
+            repository_access: if ambient {
+                "target readable by local tools"
+            } else {
+                "prompt only; target denied to local tools"
+            },
+            session: "CLI session files disabled",
+            inherited: "auth, provider base instructions, user/admin/bundled skills, and managed policy/tools",
+        }
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
@@ -1781,7 +1786,7 @@ mod tests {
             Some("1")
         );
 
-        let boundary = run_boundary(CLAUDE, false, &[]).unwrap();
+        let boundary = ClaudeBackend.boundary(false, &[]);
         assert!(!boundary.ambient);
         assert_eq!(boundary.tool_runtime, "built-in tools disabled");
     }
@@ -1810,7 +1815,7 @@ mod tests {
         assert!(has_pair(&args, "--tools", ""));
         assert!(args.iter().any(|a| a == "--no-session-persistence"));
         assert_eq!(env(&cmd, "CLAUDE_CODE_DISABLE_CLAUDE_MDS"), None);
-        assert!(run_boundary(CLAUDE, true, &[]).unwrap().ambient);
+        assert!(ClaudeBackend.boundary(true, &[]).ambient);
     }
 
     #[test]
@@ -1841,7 +1846,7 @@ mod tests {
         assert!(has_pair(&args, "--disable", "plugins"));
         assert!(has_pair(&args, "--output-schema", "fresh-run/schema.json"));
 
-        let boundary = run_boundary(CODEX, false, &[]).unwrap();
+        let boundary = CodexBackend.boundary(false, &[]);
         assert!(!boundary.ambient);
         assert!(boundary.repository_access.contains("target denied"));
     }
@@ -1862,9 +1867,21 @@ mod tests {
         assert!(has_pair(&args, "--cd", "target-repo"));
         assert!(!args.iter().any(|a| a == "project_doc_max_bytes=0"));
         assert!(has_pair(&args, "--disable", "shell_tool"));
-        let boundary = run_boundary(CODEX, true, &[]).unwrap();
+        let boundary = CodexBackend.boundary(true, &[]);
         assert!(boundary.ambient);
         assert!(boundary.repository_access.contains("target readable"));
+    }
+
+    #[test]
+    fn cursor_boundary_claims_ask_mode_and_discloses_what_it_cannot_suppress() {
+        let boundary = CursorBackend.boundary(false, &[]);
+        assert!(!boundary.ambient);
+        assert!(boundary.tool_runtime.contains("read-only"));
+        assert!(boundary.repository_access.contains("prompt only"));
+        // The truthfulness edge: cursor exposes no switches for user-level rules or chat
+        // persistence, and the boundary must say so instead of absorbing them into isolation.
+        assert!(boundary.customizations.contains("not suppressed"));
+        assert!(boundary.session.contains("not suppressed"));
     }
 }
 
@@ -1884,6 +1901,23 @@ impl Backend for CursorBackend {
 
     fn program(&self) -> &'static str {
         CURSOR_PROGRAM
+    }
+
+    /// The boundary [`cursor_command`] enforces — kept beside that builder so the description stays
+    /// reviewable against the argv it claims. Claims only what the builder passes: ask mode from a
+    /// neutral cwd; cursor exposes no switches for user-level rules/config or chat persistence, so
+    /// those are disclosed as not suppressed rather than absorbed into an isolation claim.
+    fn boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
+        RunBoundary {
+            // An --ambient-memory run is rejected before spend (no cursor mapping exists), so a
+            // recorded cursor boundary always carries ambient: false in practice.
+            ambient,
+            customizations: "project rules/AGENTS.md never load (neutral working directory); user-level Cursor rules/config not suppressed (no CLI switch)",
+            tool_runtime: "ask mode — read-only, no tool use; tool grants rejected before spend",
+            repository_access: "prompt only; the target is never the working directory",
+            session: "chat persistence not suppressed (no CLI switch)",
+            inherited: "login-session auth, provider base instructions, user-level Cursor rules/config, and managed policy",
+        }
     }
 
     fn configured_model<'s>(&self, settings: &'s Settings) -> Option<&'s str> {
