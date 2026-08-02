@@ -98,14 +98,6 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        key: "cursor_model",
-        read: |s| s.cursor_model.clone(),
-        parse: parse_model_id,
-        space: |_| ValueSpace::Remote {
-            backend: crate::ai::CURSOR,
-        },
-    },
-    Setting {
         key: "ruleset",
         read: |s| s.ruleset.clone(),
         parse: parse_string,

@@ -28,10 +28,9 @@ pub struct Settings {
     pub claude_model: Option<String>,
     /// Codex backend's model; `None` uses the built-in codex default.
     pub codex_model: Option<String>,
-    /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
+    /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); unset, arc passes nothing
+    /// and codex applies its own default.
     pub codex_reasoning_effort: Option<String>,
-    /// Cursor backend's model; `None` uses the built-in cursor default.
-    pub cursor_model: Option<String>,
     pub ruleset: Option<String>,
     pub logging: Option<bool>,
     pub max_budget_usd: Option<f64>,
@@ -59,7 +58,6 @@ struct Raw {
     claude_model: Option<String>,
     codex_model: Option<String>,
     codex_reasoning_effort: Option<String>,
-    cursor_model: Option<String>,
     ruleset: Option<String>,
     logging: Option<bool>,
     max_budget_usd: Option<f64>,
@@ -139,7 +137,6 @@ impl Settings {
         overlay(&mut self.backend, raw.backend);
         overlay(&mut self.claude_model, raw.claude_model);
         overlay(&mut self.codex_model, raw.codex_model);
-        overlay(&mut self.cursor_model, raw.cursor_model);
         overlay(&mut self.ruleset, raw.ruleset);
         overlay(&mut self.logging, raw.logging);
         // Validate a hand-edited cap on load too — `arc config set` checks it, but a malformed value
