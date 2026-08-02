@@ -1264,8 +1264,9 @@ fn synthesize_claude(
 
 /// The codex backend's *default* reasoning effort, used when the `codex_reasoning_effort` setting isn't
 /// set — specified explicitly (not read from codex's `config.toml`) so a run is self-contained, and
-/// surfaced in the run report since it shapes cost. The highest tier, matching the audit/critique role
-/// where judgment quality matters more than latency.
+/// surfaced in the run report since it shapes cost. A deliberately high tier for the audit/critique
+/// role, where judgment quality matters more than latency — one step below the lineup's `max`,
+/// which stays an explicit opt-in via the setting rather than a default spend.
 const CODEX_REASONING_EFFORT: &str = "xhigh";
 
 /// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference;
