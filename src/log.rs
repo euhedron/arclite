@@ -1,6 +1,6 @@
 //! Append-only per-run logging to `~/.arc/logs/runs.jsonl` — a record of every AI run (params,
 //! context, tokens, cost), plus each run's full result at `~/.arc/logs/results/<id>.json`. On by
-//! default; disable via `defaults.logging = false`. A write failure warns but never fails the command.
+//! default; disable via the `logging = false` setting. A write failure warns but never fails the command.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

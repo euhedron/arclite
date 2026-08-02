@@ -5,10 +5,10 @@ use crate::cli::{ConfigAction, ConfigArgs, GlobalArgs};
 use crate::output::emit;
 use crate::settings::Settings;
 
-/// One settable scalar default: its dotted key, how to read its resolved value, and how a raw `set`
+/// One settable scalar setting: its key, how to read its resolved value, and how a raw `set`
 /// value is validated and typed into the JSON to store. `get`, `set`, `list`, and validation all
 /// derive from this table; a new setting is one row here plus its typed field on
-/// [`Settings`]/`RawDefaults` (settings.rs), which own the load/merge side. (Rulesets are
+/// [`Settings`]/`Raw` (settings.rs), which own the load/merge side. (Rulesets are
 /// structured source-lists, not scalars, so they stay hand-edited or scaffolded.)
 struct Setting {
     key: &'static str,
@@ -50,16 +50,8 @@ fn parse_model_id(value: &str) -> anyhow::Result<serde_json::Value> {
 
 const SETTINGS: &[Setting] = &[
     Setting {
-        key: "defaults.model",
-        read: |s| s.default_model.clone(),
-        parse: parse_model_id,
-        space: |_| ValueSpace::Remote {
-            backend: crate::ai::CLAUDE,
-        },
-    },
-    Setting {
-        key: "defaults.backend",
-        read: |s| s.default_backend.clone(),
+        key: "backend",
+        read: |s| s.backend.clone(),
         parse: |v| {
             crate::ai::validate_backend(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
@@ -74,58 +66,24 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
-        key: "defaults.ruleset",
-        read: |s| s.default_ruleset.clone(),
-        parse: parse_string,
-        // The defined rulesets are the meaningful values; none defined -> free text (a future one).
-        space: |s| {
-            let ids = s.ruleset_ids();
-            if ids.is_empty() {
-                ValueSpace::Open
-            } else {
-                ValueSpace::Closed(ids)
-            }
+        key: "claude_model",
+        read: |s| s.claude_model.clone(),
+        parse: parse_model_id,
+        space: |_| ValueSpace::Remote {
+            backend: crate::ai::CLAUDE,
         },
     },
     Setting {
-        key: "defaults.logging",
-        read: |s| Some(s.logging_enabled().to_string()),
-        parse: |v| {
-            Ok(serde_json::Value::Bool(
-                v.parse::<bool>().context("expected `true` or `false`")?,
-            ))
-        },
-        space: |_| ValueSpace::Closed(vec!["true".to_owned(), "false".to_owned()]),
-    },
-    Setting {
-        key: "defaults.max_budget_usd",
-        read: |s| s.default_max_budget_usd.map(|v| v.to_string()),
-        parse: |v| {
-            let cap: f64 = v.parse().context("expected a dollar amount")?;
-            crate::settings::validate_budget(cap)?;
-            Ok(serde_json::Value::from(cap))
-        },
-        space: open_space,
-    },
-    Setting {
-        key: "defaults.codex_model",
-        read: |s| s.default_codex_model.clone(),
+        key: "codex_model",
+        read: |s| s.codex_model.clone(),
         parse: parse_model_id,
         space: |_| ValueSpace::Remote {
             backend: crate::ai::CODEX,
         },
     },
     Setting {
-        key: "defaults.cursor_model",
-        read: |s| s.default_cursor_model.clone(),
-        parse: parse_model_id,
-        space: |_| ValueSpace::Remote {
-            backend: crate::ai::CURSOR,
-        },
-    },
-    Setting {
-        key: "defaults.codex_reasoning_effort",
-        read: |s| s.default_codex_reasoning_effort.clone(),
+        key: "codex_reasoning_effort",
+        read: |s| s.codex_reasoning_effort.clone(),
         parse: |v| {
             crate::ai::validate_reasoning_effort(v)?;
             Ok(serde_json::Value::String(v.to_owned()))
@@ -139,9 +97,50 @@ const SETTINGS: &[Setting] = &[
             )
         },
     },
-    // A root-level key (a list beside `defaults`/`rulesets`, not a scalar default) — the dotted-path
-    // writer below handles the single-segment path the same way. Read/written as a comma-joined line;
-    // stored as a JSON array.
+    Setting {
+        key: "cursor_model",
+        read: |s| s.cursor_model.clone(),
+        parse: parse_model_id,
+        space: |_| ValueSpace::Remote {
+            backend: crate::ai::CURSOR,
+        },
+    },
+    Setting {
+        key: "ruleset",
+        read: |s| s.ruleset.clone(),
+        parse: parse_string,
+        // The defined rulesets are the meaningful values; none defined -> free text (a future one).
+        space: |s| {
+            let ids = s.ruleset_ids();
+            if ids.is_empty() {
+                ValueSpace::Open
+            } else {
+                ValueSpace::Closed(ids)
+            }
+        },
+    },
+    Setting {
+        key: "logging",
+        read: |s| Some(s.logging_enabled().to_string()),
+        parse: |v| {
+            Ok(serde_json::Value::Bool(
+                v.parse::<bool>().context("expected `true` or `false`")?,
+            ))
+        },
+        space: |_| ValueSpace::Closed(vec!["true".to_owned(), "false".to_owned()]),
+    },
+    Setting {
+        key: "max_budget_usd",
+        read: |s| s.max_budget_usd.map(|v| v.to_string()),
+        parse: |v| {
+            let cap: f64 = v.parse().context("expected a dollar amount")?;
+            crate::settings::validate_budget(cap)?;
+            Ok(serde_json::Value::from(cap))
+        },
+        space: open_space,
+    },
+    // A list beside the scalar settings — the dotted-path writer below handles a single-segment
+    // path the same way. Read/written as a comma-joined line; stored as a JSON array.
     Setting {
         key: "disabled_rules",
         read: |s| (!s.disabled_rules.is_empty()).then(|| s.disabled_rules.join(",")),
@@ -351,7 +350,7 @@ pub(crate) fn set_value(
         };
     let typed =
         (setting.parse)(value).with_context(|| format!("invalid value `{value}` for `{key}`"))?;
-    // Navigate (creating as needed) the dotted key path, e.g. `defaults.model`, and set the leaf.
+    // Navigate (creating as needed) the dotted key path, e.g. `api_keys.anthropic`, and set the leaf.
     let parts: Vec<&str> = key.split('.').collect();
     let (leaf, parents) = parts.split_last().expect("a settable key is never empty");
     let mut node = &mut root;

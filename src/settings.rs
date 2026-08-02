@@ -1,8 +1,12 @@
-//! Layered `.arc/settings.json` configuration: command defaults and named, composable rulesets,
-//! merged from the user (`~/.arc/`) then the project (`<repo>/.arc/`). Project overrides user for
-//! defaults; rulesets union, project winning on id collision. Because rules are *levers*, a ruleset
-//! composes **sources** (directories or files of Markdown rules — possibly shared pools), not a
-//! single directory — that's what lets "team core + this repo + my own" coexist.
+//! Layered `.arc/settings.json` configuration: flat, domain-named scalar settings and named,
+//! composable rulesets, merged from the user (`~/.arc/`) then the project (`<repo>/.arc/`). Project
+//! overrides user for scalars; rulesets union, project winning on id collision. The schema follows
+//! the settings model the surveyed peers (Claude Code, Codex, Gemini CLI, VS Code, git) share:
+//! built-in defaults live in code, the file holds only the operator's overrides as top-level
+//! domain-named keys — never wrapped in a "defaults" section, a word reserved for the built-ins.
+//! Because rules are *levers*, a ruleset composes **sources** (directories or files of Markdown
+//! rules — possibly shared pools), not a single directory — that's what lets "team core + this
+//! repo + my own" coexist.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,22 +14,28 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::Deserialize;
 
-/// Merged settings. Ruleset source paths are resolved to absolute at load time.
+/// Merged settings. Ruleset source paths are resolved to absolute at load time. Each field is one
+/// top-level key in `settings.json`, named for its domain (per-backend keys carry the backend's
+/// prefix); an unset field falls through to the built-in default in code — except `backend`, which
+/// has none: the thing that spends is always the operator's explicit choice.
 #[derive(Debug, Default)]
 pub struct Settings {
-    pub default_model: Option<String>,
-    pub default_backend: Option<String>,
-    pub default_ruleset: Option<String>,
-    pub default_logging: Option<bool>,
-    pub default_max_budget_usd: Option<f64>,
-    /// Codex backend's default model (`defaults.codex_model`); `None` uses the built-in codex default.
-    pub default_codex_model: Option<String>,
+    /// The selected synthesis backend. **No built-in default exists** — unset means unselected, and
+    /// a run without `--backend` errors via [`crate::ai::no_backend_selected`] instead of silently
+    /// picking a vendor.
+    pub backend: Option<String>,
+    /// Claude backend's model; `None` uses the built-in claude default.
+    pub claude_model: Option<String>,
+    /// Codex backend's model; `None` uses the built-in codex default.
+    pub codex_model: Option<String>,
     /// Codex reasoning effort (`minimal`|`low`|`medium`|`high`|`xhigh`); `None` uses the backend default.
-    pub default_codex_reasoning_effort: Option<String>,
-    /// Cursor backend's default model (`defaults.cursor_model`); `None` uses the built-in cursor default.
-    pub default_cursor_model: Option<String>,
-    /// Rule ids disabled for this scope (`disabled_rules` at the settings root — a list, so it sits
-    /// beside `defaults`/`rulesets` rather than under the scalar defaults). Filtered out of every
+    pub codex_reasoning_effort: Option<String>,
+    /// Cursor backend's model; `None` uses the built-in cursor default.
+    pub cursor_model: Option<String>,
+    pub ruleset: Option<String>,
+    pub logging: Option<bool>,
+    pub max_budget_usd: Option<f64>,
+    /// Rule ids disabled for this scope (a list beside the scalar settings). Filtered out of every
     /// resolved ruleset, with the filtering disclosed wherever rules are reported.
     pub disabled_rules: Vec<String>,
     /// Saved provider API keys for the model listings (`api_keys.anthropic` / `api_keys.openai`) —
@@ -45,8 +55,14 @@ pub struct Settings {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Raw {
-    #[serde(default)]
-    defaults: RawDefaults,
+    backend: Option<String>,
+    claude_model: Option<String>,
+    codex_model: Option<String>,
+    codex_reasoning_effort: Option<String>,
+    cursor_model: Option<String>,
+    ruleset: Option<String>,
+    logging: Option<bool>,
+    max_budget_usd: Option<f64>,
     #[serde(default)]
     rulesets: BTreeMap<String, RawRuleset>,
     #[serde(default)]
@@ -60,21 +76,6 @@ struct Raw {
 struct RawApiKeys {
     anthropic: Option<String>,
     openai: Option<String>,
-}
-
-/// Scalar command defaults as written in `settings.json`. Each key is a typed field here (+ a merge
-/// arm below) and one row in the settable-key table in `commands/config.rs`.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDefaults {
-    model: Option<String>,
-    backend: Option<String>,
-    ruleset: Option<String>,
-    logging: Option<bool>,
-    max_budget_usd: Option<f64>,
-    codex_model: Option<String>,
-    codex_reasoning_effort: Option<String>,
-    cursor_model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -111,46 +112,48 @@ impl Settings {
         let Some(text) = crate::read_optional(path).with_context(|| read_error(path))? else {
             return Ok(());
         };
-        let raw: Raw = serde_json::from_str(&text).with_context(|| parse_error(path))?;
+        let raw: Raw = match serde_json::from_str(&text) {
+            Ok(raw) => raw,
+            Err(e) => {
+                let mut err = anyhow::Error::new(e).context(parse_error(path));
+                // The pre-flatten schema wrapped the scalars in a `defaults` section; the unknown-key
+                // rejection alone would name the field without saying what to do about it.
+                if text.contains("\"defaults\"") {
+                    err = err.context(
+                        "the settings schema flattened: keys formerly under `defaults` now live at the top level (`model` is now `claude_model`; the rest keep their names) — run `arc config list` for the full key set",
+                    );
+                }
+                return Err(err);
+            }
+        };
         self.active.push(path.to_path_buf());
         let dir = path
             .parent()
             .expect("a .arc/settings.json path always has a parent");
-        overlay(&mut self.default_model, raw.defaults.model);
         // Validate a hand-edited backend on load too (`arc config set` checks it), so a typo errors at
         // load rather than only when a run resolves the backend.
-        if let Some(b) = &raw.defaults.backend {
+        if let Some(b) = &raw.backend {
             crate::ai::validate_backend(b)
-                .with_context(|| format!("invalid defaults.backend in {}", path.display()))?;
+                .with_context(|| format!("invalid backend in {}", path.display()))?;
         }
-        overlay(&mut self.default_backend, raw.defaults.backend);
-        overlay(&mut self.default_ruleset, raw.defaults.ruleset);
-        overlay(&mut self.default_logging, raw.defaults.logging);
+        overlay(&mut self.backend, raw.backend);
+        overlay(&mut self.claude_model, raw.claude_model);
+        overlay(&mut self.codex_model, raw.codex_model);
+        overlay(&mut self.cursor_model, raw.cursor_model);
+        overlay(&mut self.ruleset, raw.ruleset);
+        overlay(&mut self.logging, raw.logging);
         // Validate a hand-edited cap on load too — `arc config set` checks it, but a malformed value
         // typed straight into settings.json would otherwise silently disable the safety lever.
-        if let Some(cap) = raw.defaults.max_budget_usd {
-            validate_budget(cap).with_context(|| {
-                format!("invalid defaults.max_budget_usd in {}", path.display())
-            })?;
+        if let Some(cap) = raw.max_budget_usd {
+            validate_budget(cap)
+                .with_context(|| format!("invalid max_budget_usd in {}", path.display()))?;
         }
-        overlay(
-            &mut self.default_max_budget_usd,
-            raw.defaults.max_budget_usd,
-        );
-        overlay(&mut self.default_codex_model, raw.defaults.codex_model);
-        overlay(&mut self.default_cursor_model, raw.defaults.cursor_model);
-        if let Some(e) = &raw.defaults.codex_reasoning_effort {
-            crate::ai::validate_reasoning_effort(e).with_context(|| {
-                format!(
-                    "invalid defaults.codex_reasoning_effort in {}",
-                    path.display()
-                )
-            })?;
+        overlay(&mut self.max_budget_usd, raw.max_budget_usd);
+        if let Some(e) = &raw.codex_reasoning_effort {
+            crate::ai::validate_reasoning_effort(e)
+                .with_context(|| format!("invalid codex_reasoning_effort in {}", path.display()))?;
         }
-        overlay(
-            &mut self.default_codex_reasoning_effort,
-            raw.defaults.codex_reasoning_effort,
-        );
+        overlay(&mut self.codex_reasoning_effort, raw.codex_reasoning_effort);
         // The disabled list overlays whole, like the scalar defaults: a later layer that sets it wins,
         // one that omits it leaves the earlier layer's in place.
         if let Some(disabled) = raw.disabled_rules {
@@ -175,21 +178,22 @@ impl Settings {
         Ok(())
     }
 
-    /// The resolved source paths for ruleset `id`, if it is defined.
-    pub fn ruleset(&self, id: &str) -> Option<&[PathBuf]> {
+    /// The resolved source paths for ruleset `id`, if it is defined. (Named for what it returns —
+    /// the `ruleset` *field* is the configured default ruleset id.)
+    pub fn ruleset_sources(&self, id: &str) -> Option<&[PathBuf]> {
         self.rulesets.get(id).map(Vec::as_slice)
     }
 
-    /// The defined ruleset ids (sorted — the map is ordered) — the closed set `defaults.ruleset` can
-    /// meaningfully take, enumerated for the config picker.
+    /// The defined ruleset ids (sorted — the map is ordered) — the closed set the `ruleset` setting
+    /// can meaningfully take, enumerated for the config picker.
     pub fn ruleset_ids(&self) -> Vec<String> {
         self.rulesets.keys().cloned().collect()
     }
 
     /// Whether per-run logging is on: the default, unless explicitly disabled. Single source for the
-    /// "on unless `defaults.logging = false`" rule that `run_synthesis` gates on and `config` reports.
+    /// "on unless `logging = false`" rule that `run_synthesis` gates on and `config` reports.
     pub fn logging_enabled(&self) -> bool {
-        self.default_logging != Some(false)
+        self.logging != Some(false)
     }
 
     /// The active settings-file layers as absolute-path display strings (user then project) — the

@@ -215,7 +215,7 @@ pub struct ConfigArgs {
 pub enum ConfigAction {
     /// Show all resolved settings and the active settings layers.
     List,
-    /// Print one setting's resolved value (e.g. `defaults.model`).
+    /// Print one setting's resolved value (e.g. `backend`).
     Get {
         /// The setting key — `arc config list` shows the known keys.
         key: String,
@@ -323,7 +323,7 @@ pub struct SynthArgs {
     pub dry_run: bool,
     /// Hard per-run cost cap in dollars, enforced by the CLI between turns: the run stops as an
     /// error once its spend crosses the cap (the call in flight completes, so the total can
-    /// overshoot). Overrides the configured `defaults.max_budget_usd`; unset = no cap.
+    /// overshoot). Overrides the configured `max_budget_usd` setting; unset = no cap.
     #[arg(long, value_name = "USD")]
     pub max_budget_usd: Option<f64>,
     /// Allow a Claude tool during synthesis (repeatable). Default: none.
@@ -334,7 +334,7 @@ pub struct SynthArgs {
     #[arg(long, value_name = "PATH")]
     pub rules: Option<PathBuf>,
     /// Use a named ruleset from `.arc/settings.json` (composing its sources). Overrides the
-    /// configured `defaults.ruleset`; `--rules <DIR>` overrides both.
+    /// configured `ruleset` setting; `--rules <DIR>` overrides both.
     #[arg(long, value_name = "ID")]
     pub ruleset: Option<String>,
     /// Include a file or directory in the context (repeatable). Directories are walked
