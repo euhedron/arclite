@@ -25,7 +25,7 @@ const PROJECT_RULESET: &str = "project";
 fn starter_settings() -> String {
     format!(
         r#"{{
-  "defaults": {{ "ruleset": "{PROJECT_RULESET}" }},
+  "ruleset": "{PROJECT_RULESET}",
   "rulesets": {{ "{PROJECT_RULESET}": {{ "sources": ["{RULES_DIR}"] }} }}
 }}
 "#
