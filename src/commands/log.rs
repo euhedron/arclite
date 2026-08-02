@@ -324,18 +324,19 @@ fn record_strings(run: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Render a new decomposed boundary record. Older logs predate this object and fall back to their
-/// legacy `memory` label in [`stored_human`], so the log browser stays backwards-readable.
+/// Render a new decomposed boundary record via the shared [`crate::ai::boundary_human`] format (one
+/// home, so this stored rendering can't drift from the live one). A field a stored record lacks
+/// shows as `?` — older logs predate this object entirely and fall back to their legacy `memory`
+/// label in [`stored_human`], so the log browser stays backwards-readable.
 fn stored_boundary(boundary: &Value) -> Option<String> {
     let object = boundary.as_object()?;
     let value = |key: &str| object.get(key).and_then(Value::as_str).unwrap_or("?");
-    Some(format!(
-        "customizations={}; tools={}; repo={}; session={}; inherited={}",
+    Some(crate::ai::boundary_human(
         value("customizations"),
         value("tool_runtime"),
         value("repository_access"),
         value("session"),
-        value("inherited")
+        value("inherited"),
     ))
 }
 
