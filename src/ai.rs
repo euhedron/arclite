@@ -781,9 +781,8 @@ pub trait Backend {
 
     /// The reasoning effort this backend runs at, given any configured value — surfaced in the report
     /// and applied to the call, because it shapes cost. Default: `None` (the backend has no such knob).
-    /// A backend with one returns the value to pass — the configured one, layered over any built-in
-    /// default its impl declares (none do today); unset with no built-in means nothing is passed
-    /// and the backend CLI applies its own default.
+    /// A backend with one returns the value to pass: the configured one, layered over its built-in
+    /// default; `None` passes nothing and the backend CLI decides.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         let _ = configured;
         None
@@ -1102,6 +1101,12 @@ fn claude_command(req: &Request) -> anyhow::Result<Command> {
     if let Some(schema) = req.json_schema {
         cmd.arg("--json-schema").arg(schema);
     }
+    // A headless synthesis needs no background model calls (conversation titles, summarization):
+    // they spend tokens and add their helper model to the run's reported identity beside the model
+    // that actually judged. Presence-sensed by the CLI (any non-empty value enables it), per
+    // <https://code.claude.com/docs/en/env-vars> (verified 2026-08-02). Set in ambient mode too —
+    // ambient reopens project *customizations*, not background traffic.
+    cmd.env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
     // Safe mode is Claude's current all-customizations boundary (CLAUDE.md, skills, plugins, hooks,
     // MCP, commands/agents/styles, and related user/project setup). The older source-specific
     // switches remain as fail-closed defense in depth. Admin-managed policy, auth, the provider base,
@@ -1265,10 +1270,12 @@ fn synthesize_claude(
 /// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference,
 /// <https://learn.chatgpt.com/docs/config-file/config-reference>, verified 2026-08-02; update as
 /// the lineup changes). Shared with the config key's option list, so the picker and the validator
-/// can't drift. The built-in default is currently empty — unset, nothing is passed and codex
-/// applies its own default; adopting one is a single value in [`Backend::reasoning_effort`]'s
-/// codex impl.
+/// can't drift.
 pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+
+/// The built-in codex reasoning-effort default — `None` omits the flag, leaving the choice to the
+/// codex CLI itself.
+const DEFAULT_CODEX_REASONING_EFFORT: Option<&str> = None;
 
 /// Validate a configured / `config set` backend name against the known set — delegating to [`backend`],
 /// the single authority — so a typo is rejected at set + load time, not only when a run tries to use it.
@@ -1372,11 +1379,12 @@ impl Backend for CodexBackend {
         Ok(())
     }
 
-    /// codex bills by reasoning effort, so a configured value is surfaced and applied — never a
-    /// hidden cost-shaping knob. Unset, arclite passes nothing and codex applies its own default;
-    /// a built-in arc default, if one is ever adopted, is a single `.or(..)` here.
+    /// codex bills by reasoning effort, so the effective value (configured, else the built-in
+    /// default) is surfaced and applied — never a hidden cost-shaping knob.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
-        configured.map(str::to_owned)
+        configured
+            .or(DEFAULT_CODEX_REASONING_EFFORT)
+            .map(str::to_owned)
     }
 
     /// codex reports token usage but no dollar cost — its records are tokens-only by design.
