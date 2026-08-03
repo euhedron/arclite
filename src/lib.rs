@@ -142,6 +142,11 @@ pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
+/// The reserved ruleset id that always resolves: a project's own definition when it has one, else
+/// the built-in ruleset arc ships ([`rules::BUILTIN_SOURCE`]) — so a fresh `arc init` audits
+/// against real rules with zero curation.
+pub(crate) const DEFAULT_RULESET: &str = "default";
+
 /// Map a fallible read to optional: a `NotFound` error becomes `Ok(None)` (absent is benign), any
 /// other error propagates. The one statement of the "absent vs present-but-failed" distinction, so a
 /// permission/corruption failure can't masquerade as "nothing there yet"; each caller decides what

@@ -19,12 +19,35 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+include!(concat!(env!("OUT_DIR"), "/builtin_rules.rs"));
+
+/// The reserved source literal naming the **built-in ruleset** arc ships — the rules embedded at
+/// build time (see `build.rs`) from the same files arclite audits itself with. A ruleset lists it
+/// beside paths (`"sources": ["builtin", "rules"]` — later sources still win on id collisions),
+/// and the reserved `default` ruleset is exactly this source when a project defines no `default`
+/// of its own. (A real directory named `builtin` stays reachable as `./builtin`.)
+pub const BUILTIN_SOURCE: &str = "builtin";
+
+/// The built-in ruleset, materialized: the embedded `(id, body)` pairs as [`Rule`]s, their
+/// provenance the [`BUILTIN_SOURCE`] literal rather than a file path.
+pub fn builtin() -> Vec<Rule> {
+    BUILTIN_RULES
+        .iter()
+        .map(|(id, body)| Rule {
+            id: (*id).to_owned(),
+            body: (*body).to_owned(),
+            source: PathBuf::from(BUILTIN_SOURCE),
+        })
+        .collect()
+}
+
 /// A single rule: an `id`, its `body`, and the file it was loaded from.
 pub struct Rule {
     pub id: String,
     pub body: String,
-    /// The file this rule came from — its provenance, surfaced by `arc rules`. Carried on the rule
-    /// so the dedup in [`load_sources`] keeps the *winning* source when ids collide across sources.
+    /// Where this rule came from — a file path, or the [`BUILTIN_SOURCE`] literal — its provenance,
+    /// surfaced by `arc rules`. Carried on the rule so the dedup in [`load_sources`] keeps the
+    /// *winning* source when ids collide across sources.
     pub source: PathBuf,
 }
 
@@ -143,7 +166,11 @@ pub fn load_sources(
         }
     };
     for src in sources {
-        if crate::try_is_dir(src)
+        if src.as_os_str() == BUILTIN_SOURCE {
+            for rule in builtin() {
+                insert(rule, &mut overridden);
+            }
+        } else if crate::try_is_dir(src)
             .with_context(|| format!("cannot access rule source {}", src.display()))?
         {
             for rule in load(src)? {

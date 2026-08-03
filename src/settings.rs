@@ -181,10 +181,16 @@ impl Settings {
         self.rulesets.get(id).map(Vec::as_slice)
     }
 
-    /// The defined ruleset ids (sorted — the map is ordered) — the closed set the `ruleset` setting
-    /// can meaningfully take, enumerated for the config picker.
+    /// The ruleset ids the `ruleset` setting can meaningfully take, enumerated for the config
+    /// picker: the defined ids (sorted — the map is ordered) plus the reserved `default` (the
+    /// built-in ruleset, always selectable; a defined `default` overrides it and appears once).
     pub fn ruleset_ids(&self) -> Vec<String> {
-        self.rulesets.keys().cloned().collect()
+        let mut ids: Vec<String> = self.rulesets.keys().cloned().collect();
+        if !self.rulesets.contains_key(crate::DEFAULT_RULESET) {
+            ids.push(crate::DEFAULT_RULESET.to_owned());
+            ids.sort();
+        }
+        ids
     }
 
     /// Whether per-run logging is on: the default, unless explicitly disabled. Single source for the
@@ -244,7 +250,11 @@ pub(crate) const SET_MASK: &str = "(set)";
 
 /// Resolve a ruleset source via the shared [`crate::resolve_path`] rule — relative sources are
 /// relative to the settings file's own directory `dir` (so a repo's ruleset referencing `rules`
-/// means *its* `.arc/rules`).
+/// means *its* `.arc/rules`). The reserved [`crate::rules::BUILTIN_SOURCE`] literal names the
+/// built-in ruleset, not a path, and passes through unresolved.
 fn resolve(dir: &Path, src: &str) -> PathBuf {
+    if src == crate::rules::BUILTIN_SOURCE {
+        return PathBuf::from(src);
+    }
     crate::resolve_path(dir, Path::new(src))
 }
