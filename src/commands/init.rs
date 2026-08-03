@@ -16,19 +16,23 @@ const RULES_DIR: &str = "rules";
 /// directory and the activation can't drift.
 const HOOKS_SUBDIR: &str = "hooks";
 
-/// The scaffolded ruleset's name — referenced twice in the starter settings (as the configured
-/// default and as the ruleset's key), which must agree or the default resolves to nothing.
+/// The scaffolded ruleset's name — the repo's own curation surface, defined (sourcing the
+/// scaffolded rules dir) but not selected: the starter selection is the built-in `default`, so an
+/// audit finds real rules immediately.
 const PROJECT_RULESET: &str = "project";
 
-/// Starter project settings: a [`PROJECT_RULESET`] ruleset sourcing `.arc/rules` ([`RULES_DIR`]),
-/// set as the default, so the AI commands weigh the repo's own rules without further setup.
+/// Starter project settings: select the built-in `default` ruleset (real rules, zero curation —
+/// [`crate::DEFAULT_RULESET`]), and define a [`PROJECT_RULESET`] ruleset sourcing `.arc/rules`
+/// ([`RULES_DIR`]) as the ready surface for the repo's own rules — switch to it (or compose
+/// `"builtin"` with local sources) as curation starts.
 fn starter_settings() -> String {
     format!(
         r#"{{
-  "ruleset": "{PROJECT_RULESET}",
+  "ruleset": "{}",
   "rulesets": {{ "{PROJECT_RULESET}": {{ "sources": ["{RULES_DIR}"] }} }}
 }}
-"#
+"#,
+        crate::DEFAULT_RULESET
     )
 }
 

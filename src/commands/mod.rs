@@ -294,20 +294,33 @@ pub(crate) fn resolve_rule_sources(
             sources: Vec::new(),
         });
     };
-    let sources = settings
-        .ruleset_sources(id)
-        .map(<[std::path::PathBuf]>::to_vec)
-        .ok_or_else(|| anyhow::anyhow!("ruleset `{id}` is not defined in .arc/settings.json"))?;
+    let origin = if from_flag {
+        "--ruleset"
+    } else {
+        "the `ruleset` setting"
+    };
+    let Some(sources) = settings.ruleset_sources(id) else {
+        // The reserved `default` always resolves: undefined in settings, it is the built-in
+        // ruleset arc ships (a project defining its own `default` takes the branch above —
+        // the override is theirs by design, and the description names which one resolved).
+        if id == crate::DEFAULT_RULESET {
+            return Ok(RuleResolution {
+                description: format!(
+                    "ruleset `{id}` (from {origin}; built-in — the rules arc v{} ships)",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                sources: vec![std::path::PathBuf::from(crate::rules::BUILTIN_SOURCE)],
+            });
+        }
+        anyhow::bail!("ruleset `{id}` is not defined in .arc/settings.json");
+    };
     Ok(RuleResolution {
-        description: format!(
-            "ruleset `{id}` (from {})",
-            if from_flag {
-                "--ruleset"
-            } else {
-                "the `ruleset` setting"
-            }
-        ),
-        sources,
+        description: if id == crate::DEFAULT_RULESET {
+            format!("ruleset `{id}` (from {origin}; project-defined, overriding the built-in)")
+        } else {
+            format!("ruleset `{id}` (from {origin})")
+        },
+        sources: sources.to_vec(),
     })
 }
 
