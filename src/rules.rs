@@ -41,6 +41,29 @@ pub fn builtin() -> Vec<Rule> {
         .collect()
 }
 
+/// One active rule's identity at a moment in time: its `id` plus a fingerprint of its body — the
+/// pair every run records, so firing stats attribute exercise to the *version* of a rule that was
+/// actually in play (a sharpened rule keeps its id; the hash separates before from after).
+#[derive(serde::Serialize, Clone, PartialEq)]
+pub struct ActiveRule {
+    pub id: String,
+    pub hash: String,
+}
+
+/// Fingerprint a rule body: FNV-1a 64-bit as fixed-width hex. A stable, dependency-free content
+/// fingerprint for telling rule *versions* apart in durable records — not a cryptographic hash
+/// (provenance-grade hashing is the registry's concern, not this attribution key's).
+pub fn fingerprint(body: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for byte in body.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
 /// A single rule: an `id`, its `body`, and the file it was loaded from.
 pub struct Rule {
     pub id: String,

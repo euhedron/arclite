@@ -257,7 +257,15 @@ pub struct LogArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct UsageArgs {}
+pub struct UsageArgs {
+    /// Per-rule firing stats from the run log: how often each rule — by content version — actually
+    /// fired across the audit runs that exposed it, plus the never-fired tail. Curation signal.
+    #[arg(long)]
+    pub rules: bool,
+    /// Only audit runs whose repo path contains this (case-insensitive). Pairs with --rules.
+    #[arg(long, value_name = "TEXT")]
+    pub repo: Option<String>,
+}
 
 /// Arguments for `arc promote`.
 #[derive(Debug, Args)]
