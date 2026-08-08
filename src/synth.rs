@@ -133,6 +133,9 @@ pub struct SynthOptions<'a> {
     pub dir: &'a Path,
     /// Human-readable descriptions of the context pieces included (for the run report).
     pub sources: &'a [String],
+    /// The active rules (id + body fingerprint), recorded structured on the run — the exposure half
+    /// of firing stats, version-aware.
+    pub rules_active: &'a [crate::rules::ActiveRule],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
     /// The active `.arc/settings.json` layers (user then project); empty = built-in defaults only.
@@ -335,9 +338,9 @@ fn gather_rules(
     rule_sources: &[PathBuf],
     disabled_rules: &[String],
     sources: &mut Vec<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Vec<crate::rules::ActiveRule>)> {
     if rule_sources.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
     let (loaded, skipped, overridden) = crate::rules::load_sources(rule_sources)?;
     for src in &skipped {
@@ -380,19 +383,32 @@ fn gather_rules(
         } else {
             sources.push("rules: every resolved rule is disabled in settings".to_owned());
         }
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
-    let ids = rules
+    let active: Vec<crate::rules::ActiveRule> = rules
         .iter()
-        .map(|r| r.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    sources.push(format!("rules ({}): {ids}", rules.len()));
+        .map(|r| crate::rules::ActiveRule {
+            id: r.id.clone(),
+            hash: crate::rules::fingerprint(&r.body),
+        })
+        .collect();
+    sources.push(format!(
+        "rules ({}): {}",
+        rules.len(),
+        active
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     // The weigh-against-these framing travels with the block itself — stated once, present exactly
     // when rules are — rather than each command's prompt referencing rules that may not be in context.
-    Ok(format!(
-        "\nRules (the standards to weigh the repository against):\n{}\n",
-        crate::rules::render(&rules)
+    Ok((
+        format!(
+            "\nRules (the standards to weigh the repository against):\n{}\n",
+            crate::rules::render(&rules)
+        ),
+        active,
     ))
 }
 
@@ -963,6 +979,10 @@ pub struct Context {
     pub sources: Vec<String>,
     pub excluded: Vec<String>,
     pub root: PathBuf,
+    /// The active rules in the context (after the disabled-list filter) as (id, body-fingerprint)
+    /// pairs — recorded structured on the run so firing stats can join findings to the exposed
+    /// rule *version*, never by reparsing display prose.
+    pub rules_active: Vec<crate::rules::ActiveRule>,
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
@@ -1256,7 +1276,8 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     let git_truth = gather_git_truth(&root, &seen.included);
     text.push_str(&git_truth.text);
     sources.push(git_truth.source);
-    text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
+    let (rules_text, rules_active) = gather_rules(rule_sources, disabled_rules, &mut sources)?;
+    text.push_str(&rules_text);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
     }
@@ -1285,6 +1306,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         sources,
         excluded,
         root,
+        rules_active,
     })
 }
 
@@ -1437,6 +1459,10 @@ struct RunRecord<'a> {
     /// counterpart to the billed token ground truth nested in `usage`.
     prompt_chars: usize,
     sources: &'a [String],
+    /// The active rules as (id, body-fingerprint) pairs — the structured exposure half of firing
+    /// stats, attributing a finding to the rule *version* that was in play. Records predating this
+    /// field have no exposure data; stats read them as unknown, never zero.
+    rules: &'a [crate::rules::ActiveRule],
     usage: &'a ai::Usage,
     /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
@@ -1751,6 +1777,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             structured: opts.schema.is_some(),
             prompt_chars: prompt.chars().count(),
             sources: opts.sources,
+            rules: opts.rules_active,
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,

@@ -235,6 +235,7 @@ pub fn run_synthesis(
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,
+            rules_active: &ctx.rules_active,
             excluded: &ctx.excluded,
             config: &config,
             command,

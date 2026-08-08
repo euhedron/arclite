@@ -330,8 +330,8 @@ struct App {
     config: Option<ConfigView>,
     /// The `log` view's state (records + cursor + optional drilled-in detail), loaded when it's opened.
     log: Option<LogView>,
-    /// The usage view's rollup (or an error message), loaded when it's opened; rendered as tables.
-    usage: Option<Result<Rollup, String>>,
+    /// The usage view's state (lenses + both analytics pages), loaded when it's opened.
+    usage: Option<UsageView>,
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
@@ -689,15 +689,12 @@ impl App {
         });
     }
 
-    /// Open the usage view, loading the run-log rollup. Re-loaded on each entry (so a run since shows),
-    /// mirroring `open_config`; the same `usage::rollup` backs `arc usage`, so the two can't drift.
+    /// Open the usage view — ledger analytics (spend + rule firing) under a repo lens. Re-loaded on
+    /// each entry (so a run since shows), mirroring `open_config`; the same usage rollups back
+    /// `arc usage`, so the surfaces can't drift.
     fn open_usage(&mut self) {
         self.route = Route::Usage;
-        self.usage = Some(
-            crate::commands::usage::rollup()
-                .map(|(rollup, _)| rollup)
-                .map_err(|e| format!("{e:#}")),
-        );
+        self.usage = Some(UsageView::open(&self.cwd));
     }
 
     /// Open the doctor view, probing the environment fresh (re-run on each entry, like the other
@@ -771,6 +768,83 @@ impl App {
     }
 }
 
+/// The usage view: ledger analytics under a **repo lens** — the spend rollup and the rule-firing
+/// rollup as two pages of one view (the same kind of fact: a learning system's performance over one
+/// ledger, measured against different resources). The lens list is all-repos, then the launch
+/// directory, then every distinct repo the ledger knows: the launch cwd is a default lens, never a
+/// boundary — one cockpit oversees every repo's runs.
+struct UsageView {
+    /// Selectable lenses: `None` = all repos; `Some(absolute path)` = one repo.
+    lenses: Vec<Option<String>>,
+    lens: usize,
+    /// Which page is showing: `false` = spend, `true` = rule firing.
+    firing: bool,
+    /// Scroll over the firing page (its rule list can outrun the viewport; the spend page is fixed
+    /// tables).
+    scroll: u16,
+    spend: Result<Rollup, String>,
+    firing_text: Result<String, String>,
+}
+
+impl UsageView {
+    /// Build the lens list and load the opening lens (all repos).
+    fn open(cwd: &str) -> Self {
+        let cwd_abs = super::resolve_root(Path::new(cwd))
+            .map(|p| p.display().to_string())
+            .ok();
+        let mut lenses: Vec<Option<String>> = vec![None];
+        if let Some(c) = &cwd_abs {
+            lenses.push(Some(c.clone()));
+        }
+        for repo in crate::commands::usage::ledger_repos() {
+            if cwd_abs.as_ref() != Some(&repo) {
+                lenses.push(Some(repo));
+            }
+        }
+        let mut view = Self {
+            lenses,
+            lens: 0,
+            firing: false,
+            scroll: 0,
+            spend: Err(String::new()),
+            firing_text: Err(String::new()),
+        };
+        view.reload();
+        view
+    }
+
+    /// (Re)load both pages for the current lens — shown state is recomputed whole, never patched.
+    fn reload(&mut self) {
+        let filter = self.lenses[self.lens].clone();
+        self.spend = crate::commands::usage::rollup(filter.as_deref())
+            .map(|(rollup, _)| rollup)
+            .map_err(|e| format!("{e:#}"));
+        // Currency (which rule version is "current") resolves against the lens repo itself — the
+        // all-repos lens has no single resolution, so no version is marked current there (the
+        // rollup's notes say so).
+        let current = filter
+            .as_ref()
+            .and_then(|p| crate::commands::usage::current_lens(Path::new(p)));
+        self.firing_text = crate::commands::usage::rules_rollup(filter.as_deref(), current)
+            .map(|(_, human)| human)
+            .map_err(|e| format!("{e:#}"));
+        self.scroll = 0;
+    }
+
+    /// The current lens as a short display label for the page headers.
+    fn lens_label(&self) -> String {
+        match &self.lenses[self.lens] {
+            None => "all repos".to_owned(),
+            Some(p) => crate::display_path(p),
+        }
+    }
+
+    fn cycle_lens(&mut self) {
+        self.lens = (self.lens + 1) % self.lenses.len();
+        self.reload();
+    }
+}
+
 /// The rules view's state: the resolved ruleset (or the resolution error), the cursor + scroll offset
 /// over the rule list, when a rule is opened — which rule and how far it's scrolled — and a failed
 /// toggle-write's error for the info line.
@@ -781,6 +855,12 @@ struct RulesView {
     detail: Option<RuleDetail>,
     /// A failed toggle's load/write error, shown on the info line until the next action.
     notice: Option<String>,
+    /// Per-rule firing stats for THIS repo (id → version stats), precomputed at load from the same
+    /// rollup that backs `arc usage --rules`, so render stays a pure function of state. Empty when
+    /// stats couldn't load — absence, never rendered as zeros.
+    stats: std::collections::BTreeMap<String, Vec<crate::commands::usage::RuleVersionStat>>,
+    /// The rollup's clock, so last-fired ages render without a render-time clock read.
+    stats_now: u64,
 }
 
 /// One opened rule: its index into the report's rules (valid by construction — set from a cursor that
@@ -800,12 +880,42 @@ impl RulesView {
             Ok(r) => r.rules.len().saturating_sub(1),
             Err(_) => 0,
         };
+        // This repo's firing stats, joined per rule id — currency judged against the very
+        // resolution this view shows. A stats failure leaves the map empty (the rules themselves
+        // still render; absence is absence, not zeros).
+        let stats_now = crate::log::now_secs();
+        let stats = super::resolve_root(Path::new(cwd))
+            .ok()
+            .and_then(|root| {
+                let current = report.as_ref().ok().map(|r| {
+                    r.rules
+                        .iter()
+                        .filter(|e| !e.disabled)
+                        .map(|e| crate::rules::ActiveRule {
+                            id: e.id.clone(),
+                            hash: crate::rules::fingerprint(&e.body),
+                        })
+                        .collect::<Vec<_>>()
+                });
+                crate::commands::usage::rules_rollup(Some(&root.display().to_string()), current)
+                    .ok()
+            })
+            .map(|(rollup, _)| {
+                rollup
+                    .rules
+                    .into_iter()
+                    .map(|s| (s.id, s.versions))
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             report,
             selected: selected.min(last),
             offset,
             detail: None,
             notice: None,
+            stats,
+            stats_now,
         }
     }
 
@@ -1600,7 +1710,30 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         _ if app.route == Route::Rules => handle_rules_key(app, key.code),
         _ if app.route == Route::Config => handle_config_key(app, key.code),
         _ if app.route == Route::Doctor => handle_report_key(app, key.code),
+        _ if app.route == Route::Usage => handle_usage_key(app, key.code),
         _ => {}
+    }
+}
+
+/// Keys on the usage view: `r` flips spend ↔ rule-firing, `p` cycles the repo lens, ↑↓ scroll the
+/// firing page (the spend page is fixed tables).
+fn handle_usage_key(app: &mut App, code: KeyCode) {
+    let Some(view) = app.usage.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Char('r') => {
+            view.firing = !view.firing;
+            view.scroll = 0;
+        }
+        KeyCode::Char('p') => view.cycle_lens(),
+        _ => {
+            if view.firing
+                && let Some(delta) = scroll_delta(code, REPORT_ROWS)
+            {
+                view.scroll = scrolled(view.scroll, delta);
+            }
+        }
     }
 }
 
@@ -1715,13 +1848,23 @@ fn render(frame: &mut Frame, app: &App) {
                 .expect("the log view is loaded when its route is active"),
             body,
         ),
-        Route::Usage => render_usage(
-            frame,
-            app.usage
+        Route::Usage => {
+            let view = app
+                .usage
                 .as_ref()
-                .expect("the usage view is loaded when its route is active"),
-            body,
-        ),
+                .expect("the usage view is loaded when its route is active");
+            if view.firing {
+                render_text_report(
+                    frame,
+                    body,
+                    &format!("rule firing · {}", view.lens_label()),
+                    &view.firing_text,
+                    view.scroll,
+                );
+            } else {
+                render_usage(frame, view, body);
+            }
+        }
         Route::Doctor => render_text_report(
             frame,
             body,
@@ -2293,8 +2436,28 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
     if let Some(detail) = &view.detail {
         let rule = &report.rules[detail.index];
         frame.render_widget(Line::from(format!("rules · {}", rule.id)).bold(), header);
+        // The rule's body, then its firing record in this repo (per version, same wording as
+        // `arc usage --rules`). An empty stats map means stats couldn't load — the section is
+        // omitted entirely, since absence must not read as "never fired".
+        let mut body_text = rule.body.clone();
+        if !view.stats.is_empty() {
+            body_text.push_str("\n\n— firing (this repo) —");
+            let mut any = false;
+            for v in view.stats.get(&rule.id).into_iter().flatten() {
+                if v.fires > 0 || v.current {
+                    body_text.push_str(&format!(
+                        "\n{}",
+                        crate::commands::usage::version_line(v, view.stats_now)
+                    ));
+                    any = true;
+                }
+            }
+            if !any {
+                body_text.push_str("\nno recorded exercise");
+            }
+        }
         frame.render_widget(
-            Paragraph::new(rule.body.clone())
+            Paragraph::new(body_text)
                 .block(Block::bordered())
                 .wrap(Wrap { trim: false })
                 .scroll((detail.scroll, 0)),
@@ -2345,14 +2508,27 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
                 // A two-char gutter marks a disabled rule, and its whole row dims — the off state
                 // reads at a glance without breaking the id/pool column alignment.
                 let gutter = if r.disabled { "✗ " } else { "  " };
-                let line = if one_pool {
-                    Line::from(format!("{gutter}{}", r.id))
+                // The current version's recurrence here, when any — the earning-its-keep glance.
+                // Quiet rules stay visually quiet (no zero-noise), and an empty stats map (stats
+                // unavailable) shows nothing rather than fabricated zeros.
+                let fired = view
+                    .stats
+                    .get(&r.id)
+                    .and_then(|vs| vs.iter().find(|v| v.current))
+                    .filter(|v| v.fired_runs > 0)
+                    .map(|v| format!(" · fired {}×", v.fired_runs));
+                let mut spans = if one_pool {
+                    vec![Span::from(format!("{gutter}{}", r.id))]
                 } else {
-                    Line::from(vec![
+                    vec![
                         Span::from(format!("{gutter}{:<id_width$}  ", r.id)),
                         Span::from(pool(&r.source)).dim(),
-                    ])
+                    ]
                 };
+                if let Some(f) = fired {
+                    spans.push(Span::from(f).dim());
+                }
+                let line = Line::from(spans);
                 let line = if r.disabled { line.dim() } else { line };
                 if view.offset + i == view.selected {
                     line.reversed() // the cursor
@@ -2390,12 +2566,15 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
 /// (hour/day/week/all-time) and per-command — instead of the CLI's flat text, with the codex/missing
 /// disclosures below. Re-loaded on entry (so a run since shows), and the same `usage::rollup` payload
 /// backs the CLI, so the two can't drift.
-fn render_usage(frame: &mut Frame, usage: &Result<Rollup, String>, area: Rect) {
+fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
-    frame.render_widget(Line::from("usage").bold(), header);
+    frame.render_widget(
+        Line::from(format!("usage · {}", view.lens_label())).bold(),
+        header,
+    );
 
-    let rollup = match usage {
+    let rollup = match &view.spend {
         Ok(r) => r,
         Err(e) => {
             frame.render_widget(
@@ -2608,7 +2787,14 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 }) => "esc cancel",
                 _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
             },
-            Route::Status | Route::Usage => "/ commands · esc back · q quit",
+            Route::Status => "/ commands · esc back · q quit",
+            Route::Usage => {
+                if app.usage.as_ref().is_some_and(|u| u.firing) {
+                    "/ commands · r spend · p repo · ↑↓ scroll · esc back · q quit"
+                } else {
+                    "/ commands · r firing · p repo · esc back · q quit"
+                }
+            }
         }
     };
 
