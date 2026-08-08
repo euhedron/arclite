@@ -74,7 +74,7 @@ const LINE: u16 = 1;
 const BORDER: u16 = 2;
 
 /// arclite's version, shown on the home masthead (as the agent CLIs head their opening screens).
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = crate::BUILD_IDENT;
 
 /// A typed input/event — the single funnel into [`update`]. The input + tick threads both send these.
 enum Msg {

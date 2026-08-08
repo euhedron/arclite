@@ -4,7 +4,33 @@
 
 use std::path::Path;
 
+/// The build's git identity: short commit sha, `-dirty` when the worktree differs — because semver
+/// alone is ambiguous between releases (a dev build and the tagged release both say `0.1.10`), and
+/// "which build am I actually running" must be a masthead glance, not an inference from expected
+/// behavior. Best-effort: building outside a git checkout yields `unknown`, disclosed as itself.
+fn build_commit() -> String {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    };
+    let Some(sha) = git(&["rev-parse", "--short", "HEAD"]).filter(|s| !s.is_empty()) else {
+        return "unknown".to_owned();
+    };
+    let dirty = git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
+    if dirty { format!("{sha}-dirty") } else { sha }
+}
+
 fn main() {
+    // Re-run when the checkout moves (branch switch, commit, staging) so the embedded identity
+    // tracks; an unstaged edit alone may not retrigger — the `-dirty` flag is best-effort, and the
+    // sha stays exact.
+    println!("cargo::rerun-if-changed=.git/HEAD");
+    println!("cargo::rerun-if-changed=.git/index");
+    println!("cargo::rustc-env=ARC_BUILD_COMMIT={}", build_commit());
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     let rules_dir = Path::new(&manifest).join(".arc").join("rules");
     println!("cargo::rerun-if-changed={}", rules_dir.display());

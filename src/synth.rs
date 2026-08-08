@@ -1416,6 +1416,10 @@ struct RunRecord<'a> {
     /// The arc binary's version (single-sourced from Cargo.toml at compile time), so runs stay
     /// attributable to the binary that made them when logs aggregate into cross-version metrics.
     version: &'static str,
+    /// The build's commit identity (short sha, `-dirty` for worktree builds, `unknown` outside
+    /// git) — the fingerprint *below* `version`: two runs on one semver can come from different
+    /// builds, and attribution must be able to tell them apart.
+    build: &'static str,
     command: &'a str,
     repo: String,
     /// The repo's commit at run time (short sha, `-dirty` when the worktree exceeded it) — what the
@@ -1742,6 +1746,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             id: id.clone(),
             ts,
             version: env!("CARGO_PKG_VERSION"),
+            build: env!("ARC_BUILD_COMMIT"),
             command: opts.command,
             // The recorded form promote/retire later reopen as a path — the shared lossless
             // conversion, not display formatting (confine-display-formatting-to-output).
