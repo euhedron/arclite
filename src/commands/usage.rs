@@ -237,7 +237,14 @@ pub(crate) fn rules_rollup(
         }
         // Fires: the stored result's findings, each citing its rule id; joined to the version this
         // run exposed. A missing/unreadable result leaves this run's findings uncounted — disclosed.
+        // The id comes from an editable ledger line and is joined into a path, so it passes the same
+        // guard as every other id→path boundary (log detail, resolve_id); an unsafe id lands in the
+        // unreadable count rather than escaping the result store.
         let run_id = field(r, "id");
+        if crate::commands::log::ensure_safe_run_id(&run_id).is_err() {
+            results_unreadable += 1;
+            continue;
+        }
         let Some(path) = crate::log::result_path(&run_id) else {
             results_unreadable += 1;
             continue;

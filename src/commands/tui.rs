@@ -2788,11 +2788,21 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
             },
             Route::Status => "/ commands · esc back · q quit",
+            // Like the config/rules arms, the hint tracks the view's mode — and like every render
+            // arm, the view's presence on its own route is an invariant, not an option to hedge.
             Route::Usage => {
-                if app.usage.as_ref().is_some_and(|u| u.firing) {
-                    "/ commands · r spend · p repo · ↑↓ scroll · esc back · q quit"
+                const SPEND: &str = "/ commands · r firing · p repo · esc back · q quit";
+                const FIRING: &str =
+                    "/ commands · r spend · p repo · ↑↓ scroll · esc back · q quit";
+                if app
+                    .usage
+                    .as_ref()
+                    .expect("the usage view is loaded when its route is active")
+                    .firing
+                {
+                    FIRING
                 } else {
-                    "/ commands · r firing · p repo · esc back · q quit"
+                    SPEND
                 }
             }
         }
