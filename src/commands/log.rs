@@ -49,9 +49,7 @@ fn keep(r: &Value, args: &LogArgs) -> bool {
         return false;
     }
     if let Some(repo) = &args.repo
-        && !field(r, "repo")
-            .to_lowercase()
-            .contains(&repo.to_lowercase())
+        && !crate::log::repo_matches(r, repo)
     {
         return false;
     }

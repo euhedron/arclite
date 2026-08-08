@@ -167,6 +167,15 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
     record.get("error").is_some()
 }
 
+/// Whether a record's repo path contains `needle`, case-insensitively — the one statement of the
+/// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
+/// can't drift between the surfaces.
+pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
+    field(record, "repo")
+        .to_lowercase()
+        .contains(&needle.to_lowercase())
+}
+
 /// A string field of a run record, or the `?` sentinel if absent — the shared accessor for the
 /// record shape that `arc log` and `arc usage` both read, so the sentinel can't drift between them.
 pub fn field(record: &serde_json::Value, key: &str) -> String {
