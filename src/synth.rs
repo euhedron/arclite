@@ -992,16 +992,10 @@ pub struct Context {
 /// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
 /// as a clean "no changes" result.
 fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize, usize), String> {
-    let output = ai::command("git")
-        .map_err(|e| format!("could not prepare git: {e:#}"))?
-        .arg("-C")
-        .arg(root)
-        // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
-        // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
-        // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
-        .args(["status", "--porcelain", "-z"])
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+    // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
+    // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
+    // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
+    let output = git_output(root, &["status", "--porcelain", "-z"])?;
     if !output.status.success() {
         return Err(format!(
             "git exited with {} (is {} a git repository?)",
@@ -1062,26 +1056,21 @@ fn repo_commit(root: &Path) -> Option<String> {
     // machine-readable semantics, not stderr prose: 0 = HEAD resolves; 1 = verification failed
     // quietly (an unborn HEAD — a repo with no commits yet, legitimately nothing to anchor);
     // 128 = fatal (not a repository — benign here — or a corrupt one, whose stderr says which).
-    let head = match ai::command("git").and_then(|mut c| {
-        // LC_ALL=C pins git's message locale: the not-a-repository classification below matches
-        // stderr text, which localizes — the probe must read the same words everywhere.
-        c.env("LC_ALL", "C")
-            .arg("-C")
-            .arg(root)
-            .args(["rev-parse", "--verify", "--quiet", "--short", "HEAD"])
-            .output()
-            .map_err(Into::into)
-    }) {
+    let head = match git_output(
+        root,
+        &["rev-parse", "--verify", "--quiet", "--short", "HEAD"],
+    ) {
         Ok(out) => out,
         Err(e) => {
-            unreadable(&format!("git couldn't run ({e:#})"));
+            unreadable(&format!("git couldn't run ({e})"));
             return None;
         }
     };
     if !head.status.success() {
         // Exit 1 (quiet verification failure) = unborn HEAD: silently un-anchored. Exit 128 with
-        // git's not-a-repository wording (the single-sourced match — LC_ALL=C above pins it) = a
-        // plain directory: also silently un-anchored. Anything else — repository corruption, a
+        // git's not-a-repository wording (the single-sourced match — `git_output` pins LC_ALL=C,
+        // so the localized stderr reads the same words everywhere) = a plain directory: also
+        // silently un-anchored. Anything else — repository corruption, a
         // locked object store — is unreadable, not absent, and warns before the anchor is dropped.
         let stderr = String::from_utf8_lossy(&head.stderr);
         let benign = head.status.code() == Some(1)
