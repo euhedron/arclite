@@ -574,13 +574,10 @@ impl App {
                 let verb = verb.to_owned();
                 thread::spawn(move || {
                     let mut child = child;
-                    let mut stderr = String::new();
-                    if let Some(mut pipe) = child.stderr.take() {
-                        use std::io::Read;
-                        if let Err(e) = pipe.read_to_string(&mut stderr) {
-                            stderr.push_str(&format!(" [stderr capture failed partway: {e}]"));
-                        }
-                    }
+                    let stderr = match child.stderr.take() {
+                        Some(mut pipe) => crate::ai::read_captured(&mut pipe),
+                        None => String::new(),
+                    };
                     let status = child.wait();
                     let failed = !status.as_ref().is_ok_and(std::process::ExitStatus::success);
                     let warnings = stderr.trim();
