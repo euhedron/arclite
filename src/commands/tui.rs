@@ -817,11 +817,12 @@ impl UsageView {
             .map(|(rollup, _)| rollup)
             .map_err(|e| format!("{e:#}"));
         // Currency (which rule version is "current") resolves against the lens repo itself — the
-        // all-repos lens has no single resolution, so no version is marked current there (the
-        // rollup's notes say so).
-        let current = filter
-            .as_ref()
-            .and_then(|p| crate::commands::usage::current_lens(Path::new(p)));
+        // all-repos lens deliberately has none, and a failed resolution is disclosed as a failure
+        // (the rollup's notes carry each case's wording).
+        let current = match &filter {
+            Some(p) => crate::commands::usage::current_lens(Path::new(p)),
+            None => crate::commands::usage::CurrencyLens::None,
+        };
         self.firing_text = crate::commands::usage::rules_rollup(filter.as_deref(), current)
             .map(|(_, human)| human)
             .map_err(|e| format!("{e:#}"));
@@ -884,16 +885,19 @@ impl RulesView {
         let stats = super::resolve_root(Path::new(cwd))
             .ok()
             .and_then(|root| {
-                let current = report.as_ref().ok().map(|r| {
-                    r.rules
-                        .iter()
-                        .filter(|e| !e.disabled)
-                        .map(|e| crate::rules::ActiveRule {
-                            id: e.id.clone(),
-                            hash: crate::rules::fingerprint(&e.body),
-                        })
-                        .collect::<Vec<_>>()
-                });
+                let current = match &report {
+                    Ok(r) => crate::commands::usage::CurrencyLens::Resolved(
+                        r.rules
+                            .iter()
+                            .filter(|e| !e.disabled)
+                            .map(|e| crate::rules::ActiveRule {
+                                id: e.id.clone(),
+                                hash: crate::rules::fingerprint(&e.body),
+                            })
+                            .collect(),
+                    ),
+                    Err(e) => crate::commands::usage::CurrencyLens::Failed(e.clone()),
+                };
                 crate::commands::usage::rules_rollup(Some(&root.display().to_string()), current)
                     .ok()
             })

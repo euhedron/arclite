@@ -115,16 +115,37 @@ pub(crate) struct RulesRollup {
     pub(crate) notes: Vec<String>,
 }
 
+/// What "current version" means for a firing rollup — three states kept distinct, because a lens
+/// that *failed to resolve* must never masquerade as one that *resolves nothing*
+/// (distinguish-absent-from-unreadable).
+pub(crate) enum CurrencyLens {
+    /// A repo's resolved active rules — versions matching these are marked current.
+    Resolved(Vec<crate::rules::ActiveRule>),
+    /// Deliberately no lens (the all-repos view): no single resolution exists, nothing is current.
+    None,
+    /// Resolution failed — nothing is marked current, and the failure is disclosed in the notes.
+    Failed(String),
+}
+
 /// The currency lens for `repo`: the rules its ruleset resolves to right now, as (id, fingerprint)
-/// pairs — what "current version" means for the stats. `None` when resolution fails (a missing or
-/// unreadable layer); stats still compute, just without currency marking, and the rollup's notes
-/// say so.
-pub(crate) fn current_lens(repo: &std::path::Path) -> Option<Vec<crate::rules::ActiveRule>> {
-    let settings = crate::settings::Settings::load(repo).ok()?;
-    let resolution = super::resolve_rule_sources(None, None, &settings).ok()?;
-    let (loaded, _, _) = crate::rules::load_sources(&resolution.sources).ok()?;
+/// pairs. A resolution failure (unreadable settings, an undefined ruleset, an unreadable source)
+/// comes back [`CurrencyLens::Failed`] with its reason — stats still compute, without currency
+/// marking, and the rollup's notes carry the reason instead of a definite claim.
+pub(crate) fn current_lens(repo: &std::path::Path) -> CurrencyLens {
+    let settings = match crate::settings::Settings::load(repo) {
+        Ok(s) => s,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
+    let resolution = match super::resolve_rule_sources(None, None, &settings) {
+        Ok(r) => r,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
+    let loaded = match crate::rules::load_sources(&resolution.sources) {
+        Ok((loaded, _, _)) => loaded,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
     let (active, _) = crate::rules::partition_disabled(loaded, &settings.disabled_rules);
-    Some(
+    CurrencyLens::Resolved(
         active
             .into_iter()
             .map(|r| crate::rules::ActiveRule {
@@ -181,7 +202,7 @@ pub(crate) fn version_line(v: &RuleVersionStat, now: u64) -> String {
 /// attributes to the rule *version* that was in play. Shared by `arc usage --rules` and the TUI.
 pub(crate) fn rules_rollup(
     repo: Option<&str>,
-    current: Option<Vec<crate::rules::ActiveRule>>,
+    current: CurrencyLens,
 ) -> anyhow::Result<(RulesRollup, String)> {
     let (records, _unparsed) = crate::log::records()?;
     let now = crate::log::now_secs();
@@ -287,7 +308,7 @@ pub(crate) fn rules_rollup(
     }
     // A currently-resolved rule with no recorded exercise still appears — zero exposures for its
     // version is a real (post-field) zero, and the never-fired outliers are half the point.
-    if let Some(lens) = &current {
+    if let CurrencyLens::Resolved(lens) = &current {
         for a in lens {
             by_version
                 .entry((a.id.clone(), Some(a.hash.clone())))
@@ -296,7 +317,9 @@ pub(crate) fn rules_rollup(
     }
     let is_current = |id: &str, hash: &Option<String>| -> bool {
         match (&current, hash) {
-            (Some(lens), Some(h)) => lens.iter().any(|a| a.id == id && &a.hash == h),
+            (CurrencyLens::Resolved(lens), Some(h)) => {
+                lens.iter().any(|a| a.id == id && &a.hash == h)
+            }
             _ => false,
         }
     };
@@ -346,13 +369,17 @@ pub(crate) fn rules_rollup(
         ));
     }
     match &current {
-        Some(_) => notes.push(
-            "current = the version this directory's ruleset resolves to right now".to_owned(),
+        CurrencyLens::Resolved(_) => notes.push(
+            "current = the version the lens repo's ruleset resolves to right now".to_owned(),
         ),
-        None => notes.push(
-            "no currency lens — this directory resolves no ruleset, so no version is marked current"
+        CurrencyLens::None => notes.push(
+            "no currency lens (all repos) — no single resolution exists, so no version is marked current"
                 .to_owned(),
         ),
+        // A failed resolution is disclosed as a failure — never read as "resolves no rules".
+        CurrencyLens::Failed(e) => notes.push(format!(
+            "no currency marking — resolving the lens repo's ruleset failed: {e}"
+        )),
     }
 
     // Human rendering: fired rules with their version breakdown, then the never-fired block —
