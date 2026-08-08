@@ -784,10 +784,12 @@ struct UsageView {
 }
 
 impl UsageView {
-    /// Build the lens list and load the opening lens (all repos).
+    /// Build the lens list and load the opening lens (all repos). Lens keys are the ledger's own
+    /// lossless record strings ([`crate::log::repo_record_string`]) — the same form records carry —
+    /// never display formatting reused as a lookup key.
     fn open(cwd: &str) -> Self {
         let cwd_abs = super::resolve_root(Path::new(cwd))
-            .map(|p| p.display().to_string())
+            .map(|p| crate::log::repo_record_string(&p))
             .ok();
         let mut lenses: Vec<Option<String>> = vec![None];
         if let Some(c) = &cwd_abs {
@@ -884,6 +886,7 @@ impl RulesView {
         let stats_now = crate::log::now_secs();
         let stats = super::resolve_root(Path::new(cwd))
             .ok()
+            .map(|root| crate::log::repo_record_string(&root))
             .and_then(|root| {
                 let current = match &report {
                     Ok(r) => crate::commands::usage::CurrencyLens::Resolved(
@@ -898,8 +901,7 @@ impl RulesView {
                     ),
                     Err(e) => crate::commands::usage::CurrencyLens::Failed(e.clone()),
                 };
-                crate::commands::usage::rules_rollup(Some(&root.display().to_string()), current)
-                    .ok()
+                crate::commands::usage::rules_rollup(Some(&root), current).ok()
             })
             .map(|(rollup, _)| {
                 rollup
