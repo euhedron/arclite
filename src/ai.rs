@@ -1,4 +1,4 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -974,6 +974,18 @@ struct Driven {
     prompt_write_error: Option<std::io::Error>,
 }
 
+/// Read a child's captured stream to a string, keeping whatever arrived when the read dies partway
+/// and appending the failure inline — partial output plus a disclosed break, never a silent
+/// truncation. One home for the idiom and its marker wording, shared by [`drive`]'s stderr reader
+/// and the TUI's detached-launch tail.
+pub(crate) fn read_captured(pipe: &mut impl std::io::Read) -> String {
+    let mut captured = String::new();
+    if let Err(e) = pipe.read_to_string(&mut captured) {
+        captured.push_str(&format!(" [stderr capture failed partway: {e}]"));
+    }
+    captured
+}
+
 fn drive(
     mut cmd: Command,
     cwd: &Path,
@@ -1006,13 +1018,7 @@ fn drive(
     // the captured text rather than silently truncating it — downstream error messages quote this
     // stderr, and a partial capture must not read as the whole story.
     let mut stderr_pipe = child.stderr.take().expect("stderr was configured as piped");
-    let stderr_reader = std::thread::spawn(move || {
-        let mut stderr = String::new();
-        if let Err(e) = stderr_pipe.read_to_string(&mut stderr) {
-            stderr.push_str(&format!(" [stderr capture failed partway: {e}]"));
-        }
-        stderr
-    });
+    let stderr_reader = std::thread::spawn(move || read_captured(&mut stderr_pipe));
     let stdout = child.stdout.take().expect("stdout was configured as piped");
     for line in std::io::BufReader::new(stdout).lines() {
         let line = match line {
@@ -1267,10 +1273,10 @@ fn synthesize_claude(
     Ok(synthesis)
 }
 
-/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference,
-/// <https://learn.chatgpt.com/docs/config-file/config-reference>, verified 2026-08-02; update as
-/// the lineup changes). Shared with the config key's option list, so the picker and the validator
-/// can't drift.
+/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference —
+/// <https://developers.openai.com/codex/config-reference>, the canonical URL the README's
+/// References also cite — verified 2026-08-02; update as the lineup changes). Shared with the
+/// config key's option list, so the picker and the validator can't drift.
 pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// The built-in codex reasoning-effort default — `None` omits the flag, leaving the choice to the

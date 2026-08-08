@@ -133,6 +133,9 @@ pub struct SynthOptions<'a> {
     pub dir: &'a Path,
     /// Human-readable descriptions of the context pieces included (for the run report).
     pub sources: &'a [String],
+    /// The active rules (id + body fingerprint), recorded structured on the run — the exposure half
+    /// of firing stats, version-aware.
+    pub rules_active: &'a [crate::rules::ActiveRule],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
     /// The active `.arc/settings.json` layers (user then project); empty = built-in defaults only.
@@ -335,9 +338,9 @@ fn gather_rules(
     rule_sources: &[PathBuf],
     disabled_rules: &[String],
     sources: &mut Vec<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Vec<crate::rules::ActiveRule>)> {
     if rule_sources.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
     let (loaded, skipped, overridden) = crate::rules::load_sources(rule_sources)?;
     for src in &skipped {
@@ -380,19 +383,32 @@ fn gather_rules(
         } else {
             sources.push("rules: every resolved rule is disabled in settings".to_owned());
         }
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
-    let ids = rules
+    let active: Vec<crate::rules::ActiveRule> = rules
         .iter()
-        .map(|r| r.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    sources.push(format!("rules ({}): {ids}", rules.len()));
+        .map(|r| crate::rules::ActiveRule {
+            id: r.id.clone(),
+            hash: crate::rules::fingerprint(&r.body),
+        })
+        .collect();
+    sources.push(format!(
+        "rules ({}): {}",
+        rules.len(),
+        active
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     // The weigh-against-these framing travels with the block itself — stated once, present exactly
     // when rules are — rather than each command's prompt referencing rules that may not be in context.
-    Ok(format!(
-        "\nRules (the standards to weigh the repository against):\n{}\n",
-        crate::rules::render(&rules)
+    Ok((
+        format!(
+            "\nRules (the standards to weigh the repository against):\n{}\n",
+            crate::rules::render(&rules)
+        ),
+        active,
     ))
 }
 
@@ -963,6 +979,10 @@ pub struct Context {
     pub sources: Vec<String>,
     pub excluded: Vec<String>,
     pub root: PathBuf,
+    /// The active rules in the context (after the disabled-list filter) as (id, body-fingerprint)
+    /// pairs — recorded structured on the run so firing stats can join findings to the exposed
+    /// rule *version*, never by reparsing display prose.
+    pub rules_active: Vec<crate::rules::ActiveRule>,
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
@@ -972,16 +992,10 @@ pub struct Context {
 /// means git itself couldn't be consulted — kept distinct so a failed scope never masquerades
 /// as a clean "no changes" result.
 fn changed_files(root: &Path) -> Result<(Vec<PathBuf>, usize, usize), String> {
-    let output = ai::command("git")
-        .map_err(|e| format!("could not prepare git: {e:#}"))?
-        .arg("-C")
-        .arg(root)
-        // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
-        // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
-        // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
-        .args(["status", "--porcelain", "-z"])
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+    // -z: NUL-terminated records with paths emitted verbatim — no C-style quoting/escaping — so a
+    // filename with spaces or non-ASCII (valid UTF-8) bytes survives the parse, where plain
+    // `--porcelain` would C-quote it (e.g. `"caf\303\251.rs"`) and a literal parse would drop it.
+    let output = git_output(root, &["status", "--porcelain", "-z"])?;
     if !output.status.success() {
         return Err(format!(
             "git exited with {} (is {} a git repository?)",
@@ -1042,26 +1056,21 @@ fn repo_commit(root: &Path) -> Option<String> {
     // machine-readable semantics, not stderr prose: 0 = HEAD resolves; 1 = verification failed
     // quietly (an unborn HEAD — a repo with no commits yet, legitimately nothing to anchor);
     // 128 = fatal (not a repository — benign here — or a corrupt one, whose stderr says which).
-    let head = match ai::command("git").and_then(|mut c| {
-        // LC_ALL=C pins git's message locale: the not-a-repository classification below matches
-        // stderr text, which localizes — the probe must read the same words everywhere.
-        c.env("LC_ALL", "C")
-            .arg("-C")
-            .arg(root)
-            .args(["rev-parse", "--verify", "--quiet", "--short", "HEAD"])
-            .output()
-            .map_err(Into::into)
-    }) {
+    let head = match git_output(
+        root,
+        &["rev-parse", "--verify", "--quiet", "--short", "HEAD"],
+    ) {
         Ok(out) => out,
         Err(e) => {
-            unreadable(&format!("git couldn't run ({e:#})"));
+            unreadable(&format!("git couldn't run ({e})"));
             return None;
         }
     };
     if !head.status.success() {
         // Exit 1 (quiet verification failure) = unborn HEAD: silently un-anchored. Exit 128 with
-        // git's not-a-repository wording (the single-sourced match — LC_ALL=C above pins it) = a
-        // plain directory: also silently un-anchored. Anything else — repository corruption, a
+        // git's not-a-repository wording (the single-sourced match — `git_output` pins LC_ALL=C,
+        // so the localized stderr reads the same words everywhere) = a plain directory: also
+        // silently un-anchored. Anything else — repository corruption, a
         // locked object store — is unreadable, not absent, and warns before the anchor is dropped.
         let stderr = String::from_utf8_lossy(&head.stderr);
         let benign = head.status.code() == Some(1)
@@ -1082,13 +1091,7 @@ fn repo_commit(root: &Path) -> Option<String> {
     // HEAD, and a finding anchored to the bare sha would overclaim. HEAD resolved, so this *is* a git
     // repo — a status probe failing now is unreadable (warned above the None), never silently absent,
     // and never presented as a clean commit.
-    let status = match ai::command("git").and_then(|mut c| {
-        c.arg("-C")
-            .arg(root)
-            .args(["status", "--porcelain"])
-            .output()
-            .map_err(Into::into)
-    }) {
+    let status = match git_output(root, &["status", "--porcelain"]) {
         Ok(out) if out.status.success() => out,
         Ok(out) => {
             unreadable(&format!(
@@ -1098,7 +1101,7 @@ fn repo_commit(root: &Path) -> Option<String> {
             return None;
         }
         Err(e) => {
-            unreadable(&format!("git status couldn't run ({e:#})"));
+            unreadable(&format!("git status couldn't run ({e})"));
             return None;
         }
     };
@@ -1256,7 +1259,8 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     let git_truth = gather_git_truth(&root, &seen.included);
     text.push_str(&git_truth.text);
     sources.push(git_truth.source);
-    text.push_str(&gather_rules(rule_sources, disabled_rules, &mut sources)?);
+    let (rules_text, rules_active) = gather_rules(rule_sources, disabled_rules, &mut sources)?;
+    text.push_str(&rules_text);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
     }
@@ -1285,6 +1289,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         sources,
         excluded,
         root,
+        rules_active,
     })
 }
 
@@ -1437,6 +1442,10 @@ struct RunRecord<'a> {
     /// counterpart to the billed token ground truth nested in `usage`.
     prompt_chars: usize,
     sources: &'a [String],
+    /// The active rules as (id, body-fingerprint) pairs — the structured exposure half of firing
+    /// stats, attributing a finding to the rule *version* that was in play. Records predating this
+    /// field have no exposure data; stats read them as unknown, never zero.
+    rules: &'a [crate::rules::ActiveRule],
     usage: &'a ai::Usage,
     /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
@@ -1751,6 +1760,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             structured: opts.schema.is_some(),
             prompt_chars: prompt.chars().count(),
             sources: opts.sources,
+            rules: opts.rules_active,
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,

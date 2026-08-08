@@ -49,9 +49,7 @@ fn keep(r: &Value, args: &LogArgs) -> bool {
         return false;
     }
     if let Some(repo) = &args.repo
-        && !field(r, "repo")
-            .to_lowercase()
-            .contains(&repo.to_lowercase())
+        && !crate::log::repo_matches(r, repo)
     {
         return false;
     }
@@ -143,8 +141,9 @@ pub(crate) fn record_age(r: &Value, now: u64) -> String {
         .map_or_else(|| "?".to_owned(), |ts| age(now.saturating_sub(ts)))
 }
 
-/// A coarse relative age: seconds, minutes, hours, or days — the private kernel of [`record_age`].
-fn age(secs: u64) -> String {
+/// A coarse relative age: seconds, minutes, hours, or days — the kernel of [`record_age`], shared
+/// with the rule-firing rollup's last-fired display.
+pub(crate) fn age(secs: u64) -> String {
     match secs {
         s if s < SECS_PER_MINUTE => format!("{s}s ago"),
         s if s < SECS_PER_HOUR => format!("{}m ago", s / SECS_PER_MINUTE),

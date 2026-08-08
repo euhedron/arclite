@@ -53,18 +53,402 @@ pub(crate) struct Rollup {
     pub(crate) unparsed: usize,
 }
 
-/// The `usage` command: a deterministic rollup of the run log — no AI, just the recorded ground
-/// truth summed per window.
-pub fn run(_args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let (rollup, human) = rollup()?;
+/// The `usage` command: deterministic analytics over the run ledger — no AI, just recorded ground
+/// truth. Two lenses over one dataset: the spend/volume rollup (default) and the per-rule firing
+/// rollup (`--rules`); `--repo` filters either, because spend and firing are the same kind of
+/// fact — a learning system's performance measured against a resource — and share their filters.
+pub fn run(args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    if args.rules {
+        let (rollup, human) = rules_rollup(
+            args.repo.as_deref(),
+            current_lens(std::path::Path::new(".")),
+        )?;
+        return emit(&serde_json::to_value(&rollup)?, &human, global.json);
+    }
+    let (rollup, human) = rollup(args.repo.as_deref())?;
     emit(&serde_json::to_value(&rollup)?, &human, global.json)
+}
+
+/// One rule *version's* exercise record. `hash: None` is the pre-record cohort: findings from runs
+/// that predate the structured `rules` field, whose exposure is unknown — carried apart, never as
+/// zero, and never back-parsed from the old records' display prose.
+#[derive(Serialize)]
+pub(crate) struct RuleVersionStat {
+    pub(crate) hash: Option<String>,
+    /// Whether this version's body is the one currently resolved by the lens directory's ruleset —
+    /// the "what has the *active* rule done" split; `false` for historical versions, the
+    /// pre-record cohort, and whenever no lens resolved.
+    pub(crate) current: bool,
+    /// Findings citing the rule in runs that exposed this version.
+    pub(crate) fires: usize,
+    /// Runs among those with at least one such finding — the recurrence count, distinct from a
+    /// burst of findings inside one run.
+    pub(crate) fired_runs: usize,
+    /// Audit runs whose record lists this (id, hash) active. Zero for the pre-record cohort —
+    /// its exposure is unknown, which the `None` hash marks.
+    pub(crate) exposures: usize,
+    pub(crate) last_fired_ts: Option<u64>,
+}
+
+/// One rule id's stats across its versions (current first, then by fires, pre-record last).
+#[derive(Serialize)]
+pub(crate) struct RuleStat {
+    pub(crate) id: String,
+    pub(crate) versions: Vec<RuleVersionStat>,
+}
+
+/// The per-rule firing rollup — deterministic ground truth from the run log joined to stored audit
+/// findings. Signal for curation (sharpen, split, retire, generalize), never a verdict: firing is
+/// not badness and silence is not uselessness — the display's job is to make the distribution and
+/// its outliers visible.
+#[derive(Serialize)]
+pub(crate) struct RulesRollup {
+    /// The repo filter applied (substring, case-insensitive), echoed; `None` = every repo.
+    pub(crate) repo: Option<String>,
+    pub(crate) audit_runs: usize,
+    pub(crate) exposure_recorded_runs: usize,
+    /// Runs that predate the structured `rules` field — their exposure is unknown, not zero.
+    pub(crate) exposure_unknown_runs: usize,
+    /// Runs whose stored result was missing or unreadable — their findings are uncounted, disclosed.
+    pub(crate) results_unreadable: usize,
+    pub(crate) rules: Vec<RuleStat>,
+    pub(crate) notes: Vec<String>,
+}
+
+/// What "current version" means for a firing rollup — three states kept distinct, because a lens
+/// that *failed to resolve* must never masquerade as one that *resolves nothing*
+/// (distinguish-absent-from-unreadable).
+pub(crate) enum CurrencyLens {
+    /// A repo's resolved active rules — versions matching these are marked current.
+    Resolved(Vec<crate::rules::ActiveRule>),
+    /// Deliberately no lens (the all-repos view): no single resolution exists, nothing is current.
+    None,
+    /// Resolution failed — nothing is marked current, and the failure is disclosed in the notes.
+    Failed(String),
+}
+
+/// The currency lens for `repo`: the rules its ruleset resolves to right now, as (id, fingerprint)
+/// pairs. A resolution failure (unreadable settings, an undefined ruleset, an unreadable source)
+/// comes back [`CurrencyLens::Failed`] with its reason — stats still compute, without currency
+/// marking, and the rollup's notes carry the reason instead of a definite claim.
+pub(crate) fn current_lens(repo: &std::path::Path) -> CurrencyLens {
+    let settings = match crate::settings::Settings::load(repo) {
+        Ok(s) => s,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
+    let resolution = match super::resolve_rule_sources(None, None, &settings) {
+        Ok(r) => r,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
+    let loaded = match crate::rules::load_sources(&resolution.sources) {
+        Ok((loaded, _, _)) => loaded,
+        Err(e) => return CurrencyLens::Failed(format!("{e:#}")),
+    };
+    let (active, _) = crate::rules::partition_disabled(loaded, &settings.disabled_rules);
+    CurrencyLens::Resolved(
+        active
+            .into_iter()
+            .map(|r| crate::rules::ActiveRule {
+                hash: crate::rules::fingerprint(&r.body),
+                id: r.id,
+            })
+            .collect(),
+    )
+}
+
+/// The distinct repo paths the ledger has seen, sorted — the TUI's selectable lens set. Best-effort:
+/// an unreadable ledger yields no lenses beyond the defaults, and the views it feeds surface their
+/// own load errors.
+pub(crate) fn ledger_repos() -> Vec<String> {
+    crate::log::records()
+        .map(|(records, _)| {
+            let set: std::collections::BTreeSet<String> = records
+                .iter()
+                .map(|r| field(r, "repo"))
+                .filter(|s| !s.is_empty())
+                .collect();
+            set.into_iter().collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How many of a rule fingerprint's 16 hex chars ([`crate::rules::fingerprint`]) the displays show —
+/// enough to tell versions apart at a glance; the full hash stays in the JSON payload.
+const FINGERPRINT_DISPLAY_CHARS: usize = 8;
+
+/// One version's human line — shared by the CLI rollup text and the TUI rules detail, so the two
+/// renderings can't drift.
+pub(crate) fn version_line(v: &RuleVersionStat, now: u64) -> String {
+    let last = v
+        .last_fired_ts
+        .map(|ts| crate::commands::log::age(now.saturating_sub(ts)));
+    match &v.hash {
+        Some(h) => format!(
+            "@{}{}: fired in {} of {} exposed run(s) · {} finding(s){}",
+            &h[..FINGERPRINT_DISPLAY_CHARS.min(h.len())],
+            if v.current { " (current)" } else { "" },
+            v.fired_runs,
+            v.exposures,
+            v.fires,
+            last.map(|l| format!(" · last {l}")).unwrap_or_default()
+        ),
+        None => format!(
+            "@pre-record: {} finding(s) in {} run(s) · exposure unknown{}",
+            v.fires,
+            v.fired_runs,
+            last.map(|l| format!(" · last {l}")).unwrap_or_default()
+        ),
+    }
+}
+
+/// Compute the per-rule firing rollup: exposures from each audit record's structured `rules`
+/// field, fires from its stored findings (each citing a rule id), joined per run so a finding
+/// attributes to the rule *version* that was in play. Shared by `arc usage --rules` and the TUI.
+pub(crate) fn rules_rollup(
+    repo: Option<&str>,
+    current: CurrencyLens,
+) -> anyhow::Result<(RulesRollup, String)> {
+    let (records, _unparsed) = crate::log::records()?;
+    let now = crate::log::now_secs();
+    #[derive(Default)]
+    struct Agg {
+        fires: usize,
+        fired_runs: usize,
+        exposures: usize,
+        last_fired_ts: Option<u64>,
+    }
+    let mut by_version: BTreeMap<(String, Option<String>), Agg> = BTreeMap::new();
+    let mut audit_runs = 0usize;
+    let mut exposure_recorded_runs = 0usize;
+    let mut exposure_unknown_runs = 0usize;
+    let mut results_unreadable = 0usize;
+    for r in &records {
+        if field(r, "command") != crate::cli::NAME_AUDIT {
+            continue;
+        }
+        if let Some(f) = repo
+            && !crate::log::repo_matches(r, f)
+        {
+            continue;
+        }
+        audit_runs += 1;
+        let ts = r.get("ts").and_then(Value::as_u64);
+        // Exposure: the record's structured (id, hash) list. Absent = a pre-field run — unknown,
+        // counted apart, never reconstructed from the record's display prose.
+        let exposed: Option<BTreeMap<String, String>> =
+            r.get("rules").and_then(Value::as_array).map(|pairs| {
+                pairs
+                    .iter()
+                    .filter_map(|p| {
+                        Some((
+                            p.get("id")?.as_str()?.to_owned(),
+                            p.get("hash")?.as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect()
+            });
+        match &exposed {
+            Some(pairs) => {
+                exposure_recorded_runs += 1;
+                for (id, hash) in pairs {
+                    by_version
+                        .entry((id.clone(), Some(hash.clone())))
+                        .or_default()
+                        .exposures += 1;
+                }
+            }
+            None => exposure_unknown_runs += 1,
+        }
+        // Fires: the stored result's findings, each citing its rule id; joined to the version this
+        // run exposed. A missing/unreadable result leaves this run's findings uncounted — disclosed.
+        // The id comes from an editable ledger line and is joined into a path, so it passes the same
+        // guard as every other id→path boundary (log detail, resolve_id); an unsafe id lands in the
+        // unreadable count rather than escaping the result store.
+        let run_id = field(r, "id");
+        if crate::commands::log::ensure_safe_run_id(&run_id).is_err() {
+            results_unreadable += 1;
+            continue;
+        }
+        let Some(path) = crate::log::result_path(&run_id) else {
+            results_unreadable += 1;
+            continue;
+        };
+        let findings: Vec<String> = match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        {
+            Some(v) => v
+                .get("structured")
+                .and_then(|s| s.get(crate::synth::RESULTS_KEY))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|i| i.get("rule").and_then(Value::as_str))
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            None => {
+                results_unreadable += 1;
+                continue;
+            }
+        };
+        let mut fired_versions: std::collections::BTreeSet<(String, Option<String>)> =
+            std::collections::BTreeSet::new();
+        for cited in findings {
+            let version = exposed
+                .as_ref()
+                .and_then(|pairs| pairs.get(&cited).cloned());
+            let key = (cited, version);
+            let agg = by_version.entry(key.clone()).or_default();
+            agg.fires += 1;
+            agg.last_fired_ts = agg.last_fired_ts.max(ts);
+            fired_versions.insert(key);
+        }
+        for key in fired_versions {
+            by_version.entry(key).or_default().fired_runs += 1;
+        }
+    }
+    // A currently-resolved rule with no recorded exercise still appears — zero exposures for its
+    // version is a real (post-field) zero, and the never-fired outliers are half the point.
+    if let CurrencyLens::Resolved(lens) = &current {
+        for a in lens {
+            by_version
+                .entry((a.id.clone(), Some(a.hash.clone())))
+                .or_default();
+        }
+    }
+    let is_current = |id: &str, hash: &Option<String>| -> bool {
+        match (&current, hash) {
+            (CurrencyLens::Resolved(lens), Some(h)) => {
+                lens.iter().any(|a| a.id == id && &a.hash == h)
+            }
+            _ => false,
+        }
+    };
+    let mut by_rule: BTreeMap<String, Vec<RuleVersionStat>> = BTreeMap::new();
+    for ((id, hash), agg) in by_version {
+        let current_version = is_current(&id, &hash);
+        by_rule
+            .entry(id.clone())
+            .or_default()
+            .push(RuleVersionStat {
+                current: current_version,
+                hash,
+                fires: agg.fires,
+                fired_runs: agg.fired_runs,
+                exposures: agg.exposures,
+                last_fired_ts: agg.last_fired_ts,
+            });
+    }
+    let mut rules: Vec<RuleStat> = by_rule
+        .into_iter()
+        .map(|(id, mut versions)| {
+            // Current first, then most-fired, pre-record (hash: None) last.
+            versions.sort_by(|a, b| {
+                b.current
+                    .cmp(&a.current)
+                    .then(a.hash.is_none().cmp(&b.hash.is_none()))
+                    .then(b.fired_runs.cmp(&a.fired_runs))
+            });
+            RuleStat { id, versions }
+        })
+        .collect();
+    rules.sort_by(|a, b| {
+        let fired = |s: &RuleStat| s.versions.iter().map(|v| v.fired_runs).sum::<usize>();
+        fired(b).cmp(&fired(a)).then(a.id.cmp(&b.id))
+    });
+
+    let mut notes =
+        vec!["fires are audit findings only — other verbs don't cite rule ids".to_owned()];
+    if exposure_unknown_runs > 0 {
+        notes.push(format!(
+            "{exposure_unknown_runs} run(s) predate the structured rules field — their exposure is unknown (never zero) and their findings sit in the @pre-record bucket"
+        ));
+    }
+    if results_unreadable > 0 {
+        notes.push(format!(
+            "{results_unreadable} run(s) have a missing/unreadable stored result — their findings are uncounted"
+        ));
+    }
+    match &current {
+        CurrencyLens::Resolved(_) => notes.push(
+            "current = the version the lens repo's ruleset resolves to right now".to_owned(),
+        ),
+        CurrencyLens::None => notes.push(
+            "no currency lens (all repos) — no single resolution exists, so no version is marked current"
+                .to_owned(),
+        ),
+        // A failed resolution is disclosed as a failure — never read as "resolves no rules".
+        CurrencyLens::Failed(e) => notes.push(format!(
+            "no currency marking — resolving the lens repo's ruleset failed: {e}"
+        )),
+    }
+
+    // Human rendering: fired rules with their version breakdown, then the never-fired block —
+    // the distribution's two tails, both visible.
+    let mut lines = vec![match repo {
+        Some(f) => format!(
+            "rule firing · audit runs with repo ~ \"{f}\": {audit_runs} ({exposure_recorded_runs} exposure-recorded, {exposure_unknown_runs} pre-record)"
+        ),
+        None => format!(
+            "rule firing · audit runs (all repos): {audit_runs} ({exposure_recorded_runs} exposure-recorded, {exposure_unknown_runs} pre-record)"
+        ),
+    }];
+    let fired: Vec<&RuleStat> = rules
+        .iter()
+        .filter(|s| s.versions.iter().any(|v| v.fires > 0))
+        .collect();
+    if !fired.is_empty() {
+        lines.push(format!("fired ({}):", fired.len()));
+        for s in &fired {
+            lines.push(format!("  {}", s.id));
+            for v in &s.versions {
+                if v.fires > 0 || v.current {
+                    lines.push(format!("    {}", version_line(v, now)));
+                }
+            }
+        }
+    }
+    let quiet: Vec<String> = rules
+        .iter()
+        .filter(|s| s.versions.iter().all(|v| v.fires == 0))
+        .map(|s| {
+            let exposures: usize = s.versions.iter().map(|v| v.exposures).sum();
+            format!("  {} — {} exposed run(s)", s.id, exposures)
+        })
+        .collect();
+    if !quiet.is_empty() {
+        lines.push(format!("never fired ({}):", quiet.len()));
+        lines.extend(quiet);
+    }
+    lines.extend(notes.iter().cloned());
+    let rollup = RulesRollup {
+        repo: repo.map(str::to_owned),
+        audit_runs,
+        exposure_recorded_runs,
+        exposure_unknown_runs,
+        results_unreadable,
+        rules,
+        notes,
+    };
+    Ok((rollup, lines.join("\n")))
 }
 
 /// Compute the run-log rollup once, returning the typed [`Rollup`] (serialized for `--json`, and
 /// rendered directly by the TUI usage view) and the joined human-readable lines — one shape, so the
-/// CLI and TUI can't drift.
-pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
-    let (records, unparsed) = crate::log::records()?;
+/// CLI and TUI can't drift. `repo` filters to runs whose repo path contains it (case-insensitive);
+/// `None` = the whole ledger.
+pub(crate) fn rollup(repo: Option<&str>) -> anyhow::Result<(Rollup, String)> {
+    let (all_records, unparsed) = crate::log::records()?;
+    let records: Vec<&Value> = all_records
+        .iter()
+        .filter(|r| match repo {
+            Some(f) => crate::log::repo_matches(r, f),
+            None => true,
+        })
+        .collect();
     let now = crate::log::now_secs();
     // Each window is a label plus its maximum age; `None` = all time.
     let spans: [(&'static str, Option<u64>); 4] = [
@@ -255,6 +639,13 @@ pub(crate) fn rollup() -> anyhow::Result<(Rollup, String)> {
     }
     if unparsed > 0 {
         notes.push(crate::log::unparsed_note(unparsed));
+    }
+    if let Some(f) = repo {
+        notes.push(format!(
+            "filtered to runs whose repo path contains \"{f}\" ({} of {} runs)",
+            records.len(),
+            all_records.len()
+        ));
     }
     lines.extend(notes.iter().cloned());
     let rollup = Rollup {
