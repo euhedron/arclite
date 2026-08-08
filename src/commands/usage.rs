@@ -185,7 +185,6 @@ pub(crate) fn rules_rollup(
 ) -> anyhow::Result<(RulesRollup, String)> {
     let (records, _unparsed) = crate::log::records()?;
     let now = crate::log::now_secs();
-    let repo_lc = repo.map(str::to_lowercase);
     #[derive(Default)]
     struct Agg {
         fires: usize,
@@ -202,8 +201,8 @@ pub(crate) fn rules_rollup(
         if field(r, "command") != crate::cli::NAME_AUDIT {
             continue;
         }
-        if let Some(f) = &repo_lc
-            && !field(r, "repo").to_lowercase().contains(f.as_str())
+        if let Some(f) = repo
+            && !crate::log::repo_matches(r, f)
         {
             continue;
         }
@@ -412,11 +411,10 @@ pub(crate) fn rules_rollup(
 /// `None` = the whole ledger.
 pub(crate) fn rollup(repo: Option<&str>) -> anyhow::Result<(Rollup, String)> {
     let (all_records, unparsed) = crate::log::records()?;
-    let repo_lc = repo.map(str::to_lowercase);
     let records: Vec<&Value> = all_records
         .iter()
-        .filter(|r| match &repo_lc {
-            Some(f) => field(r, "repo").to_lowercase().contains(f.as_str()),
+        .filter(|r| match repo {
+            Some(f) => crate::log::repo_matches(r, f),
             None => true,
         })
         .collect();
