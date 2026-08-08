@@ -1273,10 +1273,10 @@ fn synthesize_claude(
     Ok(synthesis)
 }
 
-/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference,
-/// <https://learn.chatgpt.com/docs/config-file/config-reference>, verified 2026-08-02; update as
-/// the lineup changes). Shared with the config key's option list, so the picker and the validator
-/// can't drift.
+/// The reasoning-effort levels codex's `model_reasoning_effort` accepts (per its config reference —
+/// <https://developers.openai.com/codex/config-reference>, the canonical URL the README's
+/// References also cite — verified 2026-08-02; update as the lineup changes). Shared with the
+/// config key's option list, so the picker and the validator can't drift.
 pub(crate) const CODEX_REASONING_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
 
 /// The built-in codex reasoning-effort default — `None` omits the flag, leaving the choice to the
