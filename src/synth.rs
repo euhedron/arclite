@@ -1091,13 +1091,7 @@ fn repo_commit(root: &Path) -> Option<String> {
     // HEAD, and a finding anchored to the bare sha would overclaim. HEAD resolved, so this *is* a git
     // repo — a status probe failing now is unreadable (warned above the None), never silently absent,
     // and never presented as a clean commit.
-    let status = match ai::command("git").and_then(|mut c| {
-        c.arg("-C")
-            .arg(root)
-            .args(["status", "--porcelain"])
-            .output()
-            .map_err(Into::into)
-    }) {
+    let status = match git_output(root, &["status", "--porcelain"]) {
         Ok(out) if out.status.success() => out,
         Ok(out) => {
             unreadable(&format!(
@@ -1107,7 +1101,7 @@ fn repo_commit(root: &Path) -> Option<String> {
             return None;
         }
         Err(e) => {
-            unreadable(&format!("git status couldn't run ({e:#})"));
+            unreadable(&format!("git status couldn't run ({e})"));
             return None;
         }
     };
