@@ -142,6 +142,17 @@ pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
+/// The binary's full identity: semver plus the commit it was built from (`build.rs` embeds it;
+/// `-dirty` marks a worktree build, `unknown` a build outside git). One home for the string the
+/// `--version` flag, the TUI masthead, and `doctor` all show — semver alone cannot distinguish a
+/// dev build from the release it will become.
+pub(crate) const BUILD_IDENT: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("ARC_BUILD_COMMIT"),
+    ")"
+);
+
 /// The reserved ruleset id that always resolves: a project's own definition when it has one, else
 /// the built-in ruleset arc ships ([`rules::BUILTIN_SOURCE`]) — so a fresh `arc init` audits
 /// against real rules with zero curation.

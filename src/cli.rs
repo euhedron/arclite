@@ -24,7 +24,7 @@ fn exit_codes_help() -> String {
 #[derive(Debug, Parser)]
 #[command(
     name = "arc",
-    version,
+    version = crate::BUILD_IDENT,
     about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = exit_codes_help(),
     arg_required_else_help = true

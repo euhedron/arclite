@@ -313,7 +313,7 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
     // the same settings state rather than racing separate reads.
     let settings = crate::settings::Settings::load(std::path::Path::new("."));
     Ok(Report {
-        arclite: env!("CARGO_PKG_VERSION"),
+        arclite: crate::BUILD_IDENT,
         runtime: Runtime {
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
