@@ -172,6 +172,10 @@ pub(crate) fn ledger_repos() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// How many of a rule fingerprint's 16 hex chars ([`crate::rules::fingerprint`]) the displays show —
+/// enough to tell versions apart at a glance; the full hash stays in the JSON payload.
+const FINGERPRINT_DISPLAY_CHARS: usize = 8;
+
 /// One version's human line — shared by the CLI rollup text and the TUI rules detail, so the two
 /// renderings can't drift.
 pub(crate) fn version_line(v: &RuleVersionStat, now: u64) -> String {
@@ -181,7 +185,7 @@ pub(crate) fn version_line(v: &RuleVersionStat, now: u64) -> String {
     match &v.hash {
         Some(h) => format!(
             "@{}{}: fired in {} of {} exposed run(s) · {} finding(s){}",
-            &h[..8.min(h.len())],
+            &h[..FINGERPRINT_DISPLAY_CHARS.min(h.len())],
             if v.current { " (current)" } else { "" },
             v.fired_runs,
             v.exposures,
