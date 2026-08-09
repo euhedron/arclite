@@ -2509,27 +2509,24 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
             .enumerate()
             .map(|(i, r)| {
                 // A two-char gutter marks a disabled rule, and its whole row dims — the off state
-                // reads at a glance without breaking the id/pool column alignment.
+                // reads at a glance without breaking the column alignment.
                 let gutter = if r.disabled { "✗ " } else { "  " };
-                // The current version's recurrence here, when any — the earning-its-keep glance.
-                // Quiet rules stay visually quiet (no zero-noise), and an empty stats map (stats
-                // unavailable) shows nothing rather than fabricated zeros.
+                // The current version's recurrence here as an aligned column (a skimmable number,
+                // not a per-row prose suffix). Quiet rules show a blank cell — no zero-noise — and
+                // an empty stats map (stats unavailable) shows nothing rather than fabricated zeros.
                 let fired = view
                     .stats
                     .get(&r.id)
                     .and_then(|vs| vs.iter().find(|v| v.current))
                     .filter(|v| v.fired_runs > 0)
-                    .map(|v| format!(" · fired {}×", v.fired_runs));
-                let mut spans = if one_pool {
-                    vec![Span::from(format!("{gutter}{}", r.id))]
-                } else {
-                    vec![
-                        Span::from(format!("{gutter}{:<id_width$}  ", r.id)),
-                        Span::from(pool(&r.source)).dim(),
-                    ]
-                };
-                if let Some(f) = fired {
-                    spans.push(Span::from(f).dim());
+                    .map(|v| format!("{}×", v.fired_runs))
+                    .unwrap_or_default();
+                let mut spans = vec![
+                    Span::from(format!("{gutter}{:<id_width$}", r.id)),
+                    Span::from(format!("  {fired:>4}")).dim(),
+                ];
+                if !one_pool {
+                    spans.push(Span::from(format!("  {}", pool(&r.source))).dim());
                 }
                 let line = Line::from(spans);
                 let line = if r.disabled { line.dim() } else { line };
@@ -2588,12 +2585,13 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
         }
     };
 
-    // periods and by-command on top (each fixed, sized to its rows), then the notes take the remaining
-    // space (Min) so a long disclosure wraps onto multiple lines instead of being clipped at the border.
+    // periods and by-command on top (each fixed, sized to its rows), then one dim facts line — the
+    // disclosures as compact label+count pairs, not sentences (the CLI keeps the prose for agents;
+    // a cockpit surfaces facts).
     let [periods_area, commands_area, notes_area] = Layout::vertical([
         Constraint::Length(rollup.windows.len() as u16 + LINE + BORDER),
         Constraint::Length(rollup.by_command.len() as u16 + LINE + BORDER),
-        Constraint::Min(0),
+        Constraint::Length(LINE),
     ])
     .areas(body);
 
@@ -2636,18 +2634,23 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
         commands_area,
     );
 
-    if !rollup.notes.is_empty() {
-        let lines: Vec<Line> = rollup
-            .notes
-            .iter()
-            .map(|n| Line::from(n.as_str()).dim())
-            .collect();
-        frame.render_widget(
-            Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .block(Block::bordered()),
-            notes_area,
-        );
+    // Non-zero disclosure counts only, straight from the rollup's numeric fields — no derived
+    // ratios, no restated prose, zeros silent.
+    let facts: Vec<String> = [
+        (rollup.tokens_only, "tokens-only"),
+        (rollup.spend_unknown, "unknown-spend"),
+        (rollup.cost_missing, "cost-lost"),
+        (rollup.no_usage, "no-usage"),
+        (rollup.malformed_fields, "malformed-fields"),
+        (rollup.no_timestamp, "untimed"),
+        (rollup.unparsed, "unparsed-lines"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, label)| format!("{label} {n}"))
+    .collect();
+    if !facts.is_empty() {
+        frame.render_widget(Line::from(facts.join(" · ")).dim(), notes_area);
     }
 }
 

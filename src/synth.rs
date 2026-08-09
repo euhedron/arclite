@@ -466,8 +466,8 @@ fn gather_runs(ids: &[String], sources: &mut Vec<String>) -> anyhow::Result<Stri
             )
         })?;
         let run = crate::commands::log::stored_run(&stored);
-        let command = run.get("command").and_then(|v| v.as_str()).unwrap_or("?");
-        let repo = run.get("repo").and_then(|v| v.as_str()).unwrap_or("?");
+        let command = &crate::log::field(&run, "command");
+        let repo = crate::log::field(&run, "repo");
         let items = stored
             .get("structured")
             .and_then(|s| s.get(RESULTS_KEY))
