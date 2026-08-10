@@ -814,18 +814,21 @@ impl UsageView {
 
     /// (Re)load both pages for the current lens — shown state is recomputed whole, never patched.
     fn reload(&mut self) {
-        let filter = self.lenses[self.lens].clone();
-        self.spend = crate::commands::usage::rollup(filter.as_deref())
+        let lens = self.lenses[self.lens].clone();
+        // A lens entry IS a recorded path, so it filters by exact match — `/work/foo` must not
+        // also sweep `/work/foo-old` the way the CLI's substring `--repo` legitimately would.
+        let filter = lens.clone().map(crate::log::RepoFilter::Exact);
+        self.spend = crate::commands::usage::rollup(filter.as_ref())
             .map(|(rollup, _)| rollup)
             .map_err(|e| format!("{e:#}"));
         // Currency (which rule version is "current") resolves against the lens repo itself — the
         // all-repos lens deliberately has none, and a failed resolution is disclosed as a failure
         // (the rollup's notes carry each case's wording).
-        let current = match &filter {
+        let current = match &lens {
             Some(p) => crate::commands::usage::current_lens(Path::new(p)),
             None => crate::commands::usage::CurrencyLens::None,
         };
-        self.firing_text = crate::commands::usage::rules_rollup(filter.as_deref(), current)
+        self.firing_text = crate::commands::usage::rules_rollup(filter.as_ref(), current)
             .map(|(_, human)| human)
             .map_err(|e| format!("{e:#}"));
         self.scroll = 0;
@@ -886,7 +889,9 @@ impl RulesView {
         let stats_now = crate::log::now_secs();
         let stats = super::resolve_root(Path::new(cwd))
             .ok()
-            .map(|root| crate::log::repo_record_string(&root))
+            // This view's repo is one recorded path — exact matching, like every lens whose entry
+            // IS a path (a sibling `<repo>-old` must not pollute these counts).
+            .map(|root| crate::log::RepoFilter::Exact(crate::log::repo_record_string(&root)))
             .and_then(|root| {
                 let current = match &report {
                     Ok(r) => crate::commands::usage::CurrencyLens::Resolved(
