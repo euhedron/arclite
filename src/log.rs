@@ -176,6 +176,39 @@ pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
         .contains(&needle.to_lowercase())
 }
 
+/// A record filter over the ledger's repo path: the CLI's documented substring semantics
+/// ([`repo_matches`]), or exact-path matching for surfaces whose lens entries *are* recorded paths
+/// (the TUI's per-repo lenses, the rules view's own repo) — kept as one type so `/work/foo` as an
+/// exact lens can't also sweep `/work/foo-old` the way a substring legitimately does for `--repo`.
+pub enum RepoFilter {
+    Contains(String),
+    Exact(String),
+}
+
+impl RepoFilter {
+    pub fn matches(&self, record: &serde_json::Value) -> bool {
+        match self {
+            RepoFilter::Contains(needle) => repo_matches(record, needle),
+            RepoFilter::Exact(path) => field(record, "repo") == *path,
+        }
+    }
+
+    /// The filter as a human clause, for notes and headers.
+    pub fn describe(&self) -> String {
+        match self {
+            RepoFilter::Contains(n) => format!("repo path contains \"{n}\""),
+            RepoFilter::Exact(p) => format!("repo = {p}"),
+        }
+    }
+
+    /// The bare needle/path, for payload echoes.
+    pub fn raw(&self) -> &str {
+        match self {
+            RepoFilter::Contains(s) | RepoFilter::Exact(s) => s,
+        }
+    }
+}
+
 /// A string field of a run record, or the `?` sentinel if absent — the shared accessor for the
 /// record shape that `arc log` and `arc usage` both read, so the sentinel can't drift between them.
 pub fn field(record: &serde_json::Value, key: &str) -> String {

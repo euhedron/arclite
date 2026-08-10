@@ -58,15 +58,45 @@ pub(crate) struct Rollup {
 /// rollup (`--rules`); `--repo` filters either, because spend and firing are the same kind of
 /// fact — a learning system's performance measured against a resource — and share their filters.
 pub fn run(args: &UsageArgs, global: &GlobalArgs) -> anyhow::Result<()> {
+    let filter = args.repo.clone().map(crate::log::RepoFilter::Contains);
     if args.rules {
-        let (rollup, human) = rules_rollup(
-            args.repo.as_deref(),
-            current_lens(std::path::Path::new(".")),
-        )?;
+        let (rollup, human) = rules_rollup(filter.as_ref(), cli_currency(args.repo.as_deref()))?;
         return emit(&serde_json::to_value(&rollup)?, &human, global.json);
     }
-    let (rollup, human) = rollup(args.repo.as_deref())?;
+    let (rollup, human) = rollup(filter.as_ref())?;
     emit(&serde_json::to_value(&rollup)?, &human, global.json)
+}
+
+/// The currency lens for a CLI `--rules` invocation. Without `--repo`, the working directory's own
+/// resolution. With `--repo`, the filter is substring semantics that may span repositories — so
+/// currency resolves only when the needle matches exactly one known ledger repo whose path still
+/// exists; otherwise nothing is marked current and the notes carry the reason (a cwd resolution
+/// must never masquerade as the lens repo's).
+fn cli_currency(repo: Option<&str>) -> CurrencyLens {
+    let Some(needle) = repo else {
+        return current_lens(std::path::Path::new("."));
+    };
+    let needle_lc = needle.to_lowercase();
+    let matches: Vec<String> = ledger_repos()
+        .into_iter()
+        .filter(|r| r.to_lowercase().contains(&needle_lc))
+        .collect();
+    match matches.as_slice() {
+        [one] => {
+            if std::path::Path::new(one).is_dir() {
+                current_lens(std::path::Path::new(one))
+            } else {
+                CurrencyLens::Failed(format!(
+                    "--repo matches one ledger repo, but {one} no longer exists on disk"
+                ))
+            }
+        }
+        [] => CurrencyLens::Failed(format!("--repo \"{needle}\" matches no ledger repo")),
+        many => CurrencyLens::Failed(format!(
+            "--repo \"{needle}\" matches {} ledger repos — no single repo to resolve currency against",
+            many.len()
+        )),
+    }
 }
 
 /// One rule *version's* exercise record. `hash: None` is the pre-record cohort: findings from runs
@@ -111,6 +141,9 @@ pub(crate) struct RulesRollup {
     pub(crate) exposure_unknown_runs: usize,
     /// Runs whose stored result was missing or unreadable — their findings are uncounted, disclosed.
     pub(crate) results_unreadable: usize,
+    /// Unparseable ledger lines — the runs behind them are absent from every count here, disclosed
+    /// exactly as the spend rollup discloses the same corruption.
+    pub(crate) unparsed: usize,
     pub(crate) rules: Vec<RuleStat>,
     pub(crate) notes: Vec<String>,
 }
@@ -205,10 +238,10 @@ pub(crate) fn version_line(v: &RuleVersionStat, now: u64) -> String {
 /// field, fires from its stored findings (each citing a rule id), joined per run so a finding
 /// attributes to the rule *version* that was in play. Shared by `arc usage --rules` and the TUI.
 pub(crate) fn rules_rollup(
-    repo: Option<&str>,
+    filter: Option<&crate::log::RepoFilter>,
     current: CurrencyLens,
 ) -> anyhow::Result<(RulesRollup, String)> {
-    let (records, _unparsed) = crate::log::records()?;
+    let (records, unparsed) = crate::log::records()?;
     let now = crate::log::now_secs();
     #[derive(Default)]
     struct Agg {
@@ -226,8 +259,8 @@ pub(crate) fn rules_rollup(
         if field(r, "command") != crate::cli::NAME_AUDIT {
             continue;
         }
-        if let Some(f) = repo
-            && !crate::log::repo_matches(r, f)
+        if let Some(f) = filter
+            && !f.matches(r)
         {
             continue;
         }
@@ -372,6 +405,14 @@ pub(crate) fn rules_rollup(
             "{results_unreadable} run(s) have a missing/unreadable stored result — their findings are uncounted"
         ));
     }
+    // The ledger's own corruption count — the spend rollup discloses it, so this lens must too:
+    // runs behind unparseable lines are absent from every count above, never silently folded in.
+    if unparsed > 0 {
+        notes.push(format!(
+            "{} — runs behind them are absent from these counts",
+            crate::log::unparsed_note(unparsed)
+        ));
+    }
     match &current {
         CurrencyLens::Resolved(_) => notes.push(
             "current = the version the lens repo's ruleset resolves to right now".to_owned(),
@@ -388,9 +429,10 @@ pub(crate) fn rules_rollup(
 
     // Human rendering: fired rules with their version breakdown, then the never-fired block —
     // the distribution's two tails, both visible.
-    let mut lines = vec![match repo {
+    let mut lines = vec![match filter {
         Some(f) => format!(
-            "rule firing · audit runs with repo ~ \"{f}\": {audit_runs} ({exposure_recorded_runs} exposure-recorded, {exposure_unknown_runs} pre-record)"
+            "rule firing · audit runs where {}: {audit_runs} ({exposure_recorded_runs} exposure-recorded, {exposure_unknown_runs} pre-record)",
+            f.describe()
         ),
         None => format!(
             "rule firing · audit runs (all repos): {audit_runs} ({exposure_recorded_runs} exposure-recorded, {exposure_unknown_runs} pre-record)"
@@ -425,11 +467,12 @@ pub(crate) fn rules_rollup(
     }
     lines.extend(notes.iter().cloned());
     let rollup = RulesRollup {
-        repo: repo.map(str::to_owned),
+        repo: filter.map(|f| f.raw().to_owned()),
         audit_runs,
         exposure_recorded_runs,
         exposure_unknown_runs,
         results_unreadable,
+        unparsed,
         rules,
         notes,
     };
@@ -438,16 +481,13 @@ pub(crate) fn rules_rollup(
 
 /// Compute the run-log rollup once, returning the typed [`Rollup`] (serialized for `--json`, and
 /// rendered directly by the TUI usage view) and the joined human-readable lines — one shape, so the
-/// CLI and TUI can't drift. `repo` filters to runs whose repo path contains it (case-insensitive);
-/// `None` = the whole ledger.
-pub(crate) fn rollup(repo: Option<&str>) -> anyhow::Result<(Rollup, String)> {
+/// CLI and TUI can't drift. `filter` scopes the ledger — the CLI's substring `--repo`, or an
+/// exact-path lens ([`crate::log::RepoFilter`]); `None` = the whole ledger.
+pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {
     let (all_records, unparsed) = crate::log::records()?;
     let records: Vec<&Value> = all_records
         .iter()
-        .filter(|r| match repo {
-            Some(f) => crate::log::repo_matches(r, f),
-            None => true,
-        })
+        .filter(|r| filter.is_none_or(|f| f.matches(r)))
         .collect();
     let now = crate::log::now_secs();
     // Each window is a label plus its maximum age; `None` = all time.
@@ -640,9 +680,10 @@ pub(crate) fn rollup(repo: Option<&str>) -> anyhow::Result<(Rollup, String)> {
     if unparsed > 0 {
         notes.push(crate::log::unparsed_note(unparsed));
     }
-    if let Some(f) = repo {
+    if let Some(f) = filter {
         notes.push(format!(
-            "filtered to runs whose repo path contains \"{f}\" ({} of {} runs)",
+            "filtered to runs where {} ({} of {} runs)",
+            f.describe(),
             records.len(),
             all_records.len()
         ));
