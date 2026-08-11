@@ -345,20 +345,12 @@ pub fn records_newest_first() -> anyhow::Result<(Vec<serde_json::Value>, usize)>
 /// read: an unreadable log is surfaced distinctly rather than silently shown as 0. Corrupt lines
 /// are counted apart, never folded into the run count as ordinary records
 /// (distinguish-absent-from-unreadable, per line).
-pub fn count() -> std::io::Result<(usize, usize)> {
-    let Some(p) = path() else { return Ok((0, 0)) };
-    Ok(crate::read_optional(&p)?.map_or((0, 0), |text| {
-        let mut parsed = 0usize;
-        let mut unparsed = 0usize;
-        for line in record_lines(&text) {
-            if serde_json::from_str::<serde_json::Value>(line).is_ok() {
-                parsed += 1;
-            } else {
-                unparsed += 1;
-            }
-        }
-        (parsed, unparsed)
-    }))
+pub fn count() -> anyhow::Result<(usize, usize)> {
+    // Delegates to the one loader, so "what counts as a parseable record" has a single home —
+    // the parsed values are dropped immediately; a count is not worth a second classify loop
+    // that could drift from what every reader actually loads.
+    let (records, unparsed) = records()?;
+    Ok((records.len(), unparsed))
 }
 
 /// Create `path`'s parent directory and run `write`, returning `Some(path)` on success. A failure
