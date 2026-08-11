@@ -83,12 +83,16 @@ fn cli_currency(repo: Option<&str>) -> CurrencyLens {
         .collect();
     match matches.as_slice() {
         [one] => {
-            if std::path::Path::new(one).is_dir() {
-                current_lens(std::path::Path::new(one))
-            } else {
-                CurrencyLens::Failed(format!(
+            // try_is_dir, not Path::is_dir: an unreadable repo dir is its own failure, never
+            // reported as "no longer exists" (distinguish-absent-from-unreadable).
+            match crate::try_is_dir(std::path::Path::new(one)) {
+                Ok(true) => current_lens(std::path::Path::new(one)),
+                Ok(false) => CurrencyLens::Failed(format!(
                     "--repo matches one ledger repo, but {one} no longer exists on disk"
-                ))
+                )),
+                Err(e) => CurrencyLens::Failed(format!(
+                    "--repo matches one ledger repo, but {one} cannot be checked: {e}"
+                )),
             }
         }
         [] => CurrencyLens::Failed(format!("--repo \"{needle}\" matches no ledger repo")),
