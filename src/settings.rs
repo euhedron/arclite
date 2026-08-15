@@ -176,6 +176,18 @@ impl Settings {
         // Taxonomy entries layer per verb, like rulesets: a later layer's entry for a verb wins
         // whole; verbs it doesn't name keep the earlier layer's (or the built-in).
         for (verb, kinds) in raw.taxonomies {
+            // A key naming no verb is a misspelling: accepted-but-never-applied is the silent drop
+            // deny_unknown_fields exists to prevent — same treatment, at the same boundary.
+            anyhow::ensure!(
+                crate::commands::verbs::ALL.iter().any(|v| v.name() == verb),
+                "taxonomies.{verb} in {}: `{verb}` is not a synthesis verb (known: {})",
+                path.display(),
+                crate::commands::verbs::ALL
+                    .iter()
+                    .map(|v| v.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             for k in &kinds {
                 anyhow::ensure!(
                     !k.kind.trim().is_empty() && !k.description.trim().is_empty(),
