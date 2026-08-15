@@ -283,7 +283,7 @@ const ALIGN_KINDS: &[(&str, &str)] = &[
     ),
     (
         "disparity",
-        "unevenness across the set — items diverging in structure, format, or depth without cause",
+        "unevenness across the set — items diverging in structure, format, or depth without cause (depth proportionate to an item's scope is caused, not uneven)",
     ),
 ];
 

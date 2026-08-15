@@ -98,16 +98,19 @@ fn resolve_taxonomy(
     (effective, configured.len())
 }
 
-/// Appended by `--kinds`: ask for a per-item `kind`. With a declared taxonomy (already listed in the
-/// command's own prompt) the model picks from it but may use its own label when none fit — a
-/// deviation that is itself signal about the taxonomy's fit; with none, it labels freely. Like
-/// `--ranked`, this shapes the output in any mode; the classification is the lever's, never a
-/// command's prompt.
-fn kinds_note(has_taxonomy: bool) -> &'static str {
-    if has_taxonomy {
-        "\n\nAlso give each result a `kind` — one of the kinds listed above, or your own if none fit."
-    } else {
-        "\n\nAlso give each result a `kind` — its category of finding."
+/// Appended by `--kinds`: ask for a per-item `kind`. With a taxonomy in play the schema enum-locks
+/// the field to it ([`synth::lock_kinds`]), so the note simply names the vocabulary; under
+/// `--free-kinds` the lock is off and the model may label outside it — deviation as deliberate,
+/// recorded opt-in signal about the taxonomy's fit (a poor fit is also the note field's to say).
+/// With no taxonomy, it labels freely. Like `--ranked`, this shapes the output in any mode; the
+/// classification is the lever's, never a command's prompt.
+fn kinds_note(has_taxonomy: bool, free: bool) -> &'static str {
+    match (has_taxonomy, free) {
+        (true, false) => "\n\nAlso give each result a `kind` — one of the kinds listed above.",
+        (true, true) => {
+            "\n\nAlso give each result a `kind` — one of the kinds listed above, or your own if none fit."
+        }
+        (false, _) => "\n\nAlso give each result a `kind` — its category of finding.",
     }
 }
 
@@ -276,20 +279,43 @@ pub fn run_synthesis(
         prompt.push_str(STRUCTURED_NOTE);
         prompt.push_str(s.note);
         prompt.push_str(NOTE_INSTRUCTION);
-        // --kinds adds a free-string `kind` to each item — not enum-locked (the schema side of the
-        // prompt instruction kinds_note adds below).
-        Some(if args.kinds {
+        // --kinds adds a per-item `kind`; with a taxonomy in play the field is enum-locked to it
+        // below, so membership is the provider's schema guarantee, not a prompt hope.
+        let base = if args.kinds {
             synth::with_kind(&s.schema)
         } else {
             s.schema.clone()
+        };
+        let locked = synth::lock_kinds(&base, &kinds);
+        // --free-kinds must actually free something — a `kind` the taxonomy would otherwise lock;
+        // anything less is a no-op flag, rejected rather than silently carried.
+        if args.free_kinds {
+            anyhow::ensure!(
+                locked.is_some(),
+                "--free-kinds unlocks a taxonomy-locked `kind`, and `{command}` has {} — drop --free-kinds",
+                if kinds.is_empty() {
+                    "no taxonomy in play (`kind` is already free)"
+                } else {
+                    "no per-item `kind` field (add --kinds)"
+                }
+            );
+        }
+        Some(if args.free_kinds {
+            base
+        } else {
+            locked.unwrap_or(base)
         })
     } else {
+        anyhow::ensure!(
+            !args.free_kinds,
+            "--free-kinds shapes structured output — `{command}` has none"
+        );
         None
     };
     // --kinds and --ranked shape the output in any mode (a prompt note; structured runs also carry
     // it in the `kind` field / array order above) — neither requires structured output.
     if args.kinds {
-        prompt.push_str(kinds_note(!kinds.is_empty()));
+        prompt.push_str(kinds_note(!kinds.is_empty(), args.free_kinds));
     }
     if args.ranked {
         prompt.push_str(RANKED_NOTE);
@@ -304,6 +330,7 @@ pub fn run_synthesis(
             reasoning_effort: reasoning_effort.as_deref(),
             ranked: args.ranked,
             kinds: args.kinds,
+            free_kinds: args.free_kinds,
             allowed_tools: &args.allow_tool,
             dir: &ctx.root,
             sources: &ctx.sources,

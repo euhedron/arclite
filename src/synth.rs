@@ -76,6 +76,34 @@ pub(crate) fn with_kind(schema: &str) -> String {
 /// is then closed (`additionalProperties: false`): codex's structured output requires it (confirmed
 /// by exercise — it 400s otherwise), claude accepts it, so it lives here once rather than in each
 /// command's item schema.
+/// Enum-lock the per-item `kind` to the effective taxonomy's labels — membership becomes the
+/// provider's constrained-decoding guarantee (the mechanism verify's `verdict` already rests on),
+/// so the run's recorded taxonomy provably covers every finding's `kind`. Returns `None` when there
+/// is nothing to lock: no taxonomy in play, or no per-item `kind` in the schema. (`--free-kinds`
+/// skips the lock deliberately; the flag rides the record.)
+pub(crate) fn lock_kinds(schema: &str, kinds: &[(String, String)]) -> Option<String> {
+    if kinds.is_empty() {
+        return None;
+    }
+    let mut root: serde_json::Value =
+        serde_json::from_str(schema).expect("a command's results schema is valid JSON");
+    let kind = root.pointer_mut(&format!(
+        "/properties/{RESULTS_KEY}/items/properties/{KIND_KEY}"
+    ))?;
+    kind.as_object_mut()
+        .expect("a `kind` property is an object schema")
+        .insert(
+            "enum".to_owned(),
+            serde_json::Value::Array(
+                kinds
+                    .iter()
+                    .map(|(label, _)| serde_json::Value::String(label.clone()))
+                    .collect(),
+            ),
+        );
+    Some(root.to_string())
+}
+
 pub(crate) fn results_schema(item: &str) -> String {
     let envelope = format!(
         r#"{{"type":"object","properties":{{"{RESULTS_KEY}":{{"type":"array","items":{item}}},"{NOTE_KEY}":{{"type":"string"}}}},"required":["{RESULTS_KEY}","{NOTE_KEY}"]}}"#
@@ -137,6 +165,9 @@ pub struct SynthOptions<'a> {
     pub ranked: bool,
     /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
     pub kinds: bool,
+    /// Whether `--free-kinds` unlocked the taxonomy's enum on `kind` (deviation is deliberate and
+    /// recorded, never ambient).
+    pub free_kinds: bool,
     /// Arc-requested Claude tool grants (empty = none). Provider-owned tools are reported separately
     /// in the run boundary.
     pub allowed_tools: &'a [String],
@@ -1448,6 +1479,8 @@ struct RunReport<'a> {
     ranked: bool,
     /// Whether each result was labeled with a `kind` (`--kinds`).
     kinds: bool,
+    /// Whether `--free-kinds` unlocked the taxonomy's enum on `kind`.
+    free_kinds: bool,
     context: &'a [String],
     excluded: &'a [String],
     /// Active `.arc/settings.json` layers in effect for this run (empty = built-in defaults only).
@@ -1566,6 +1599,7 @@ struct RunRecord<'a> {
     tools: &'a [String],
     ranked: bool,
     kinds: bool,
+    free_kinds: bool,
     structured: bool,
     /// Size of the assembled prompt arc sent, in characters — the deterministic context-size
     /// counterpart to the billed token ground truth nested in `usage`.
@@ -1684,6 +1718,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         reasoning_effort: opts.reasoning_effort,
         ranked: opts.ranked,
         kinds: opts.kinds,
+        free_kinds: opts.free_kinds,
         context: opts.sources,
         excluded: opts.excluded,
         config: opts.config,
@@ -1891,6 +1926,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             tools: opts.allowed_tools,
             ranked: opts.ranked,
             kinds: opts.kinds,
+            free_kinds: opts.free_kinds,
             structured: opts.schema.is_some(),
             prompt_chars: prompt.chars().count(),
             sources: opts.sources,

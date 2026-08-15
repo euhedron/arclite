@@ -406,10 +406,17 @@ pub struct SynthArgs {
     #[arg(long)]
     pub ranked: bool,
     /// Label each result with a `kind` (its category of finding). Like `--ranked`, it shapes the
-    /// output in any mode — guiding prose, or adding a `kind` field to structured results. A command
-    /// may suggest a vocabulary; the model may use its own label when none fit. Off by default.
+    /// output in any mode — guiding prose, or adding a `kind` field to structured results. With a
+    /// taxonomy in play the field is enum-locked to it (provider-enforced); with none, the model
+    /// labels freely. Off by default.
     #[arg(long)]
     pub kinds: bool,
+    /// With a taxonomy in play, let the model label a result outside it. By default the per-item
+    /// `kind` is enum-locked to the effective taxonomy in the run's schema — membership is the
+    /// provider's constrained-decoding guarantee — so deviation is a deliberate opt-in, recorded
+    /// on the run, never the ambient default. Rejected when there is nothing it would unlock.
+    #[arg(long)]
+    pub free_kinds: bool,
     // Help derived at runtime so the ceiling it names is the one applied (synth::MAX_RUNS) — a
     // hand-written "small maximum" would hide the actual bound.
     #[arg(long, default_value_t = 1, help = runs_help())]
