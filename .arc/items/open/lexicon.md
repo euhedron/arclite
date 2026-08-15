@@ -1,0 +1,1 @@
+A lexicon: canonical project terms and their casing, enforced by linting so casing/naming drift in product and repo names is auto-caught rather than hand-policed. Shape open — likely a small structured pack the audit composes like any rule source.

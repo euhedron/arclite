@@ -1,0 +1,1 @@
+Search across one or more repos: one arc command that queries a set of repositories arc already knows (the ledger's lens), returning matches with repo-qualified paths — the deterministic complement to the AI verbs for cross-repo questions.

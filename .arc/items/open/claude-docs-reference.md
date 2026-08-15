@@ -1,0 +1,1 @@
+Fetch the Claude Code and Codex docs arc leverages into local Markdown for citable reference snippets — cite specific lines, derive where valuable — so the execution-boundary claims the README pins to doc URLs can be re-verified and drift-checked on record rather than re-asserted.

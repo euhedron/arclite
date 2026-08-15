@@ -1,0 +1,1 @@
+Fully review the legacy arc project's codebase and feature set; identify what made sense to carry forward on merit versus what was sub-optimal — the deliberate sweep the successor owes its seed, feeding candidates into this agenda rather than importing anything by default.
