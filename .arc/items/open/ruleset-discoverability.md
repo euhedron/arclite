@@ -1,1 +1,1 @@
-When no ruleset resolves, the rules surfaces (CLI and TUI) name the built-in `default` as available instead of dead-ending at an empty state — discovery of what ships, at the moment it's needed. A known stranger-path snag, cleared before the cold walk so the walk hunts unknown ones.
+When no ruleset resolves, the rules surfaces (CLI and TUI) name the built-in `default` as available instead of dead-ending at an empty state — discovery of what ships, at the moment it's needed. A known stranger-path snag, not a speculative polish.
