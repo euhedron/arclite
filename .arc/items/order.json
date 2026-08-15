@@ -1,12 +1,13 @@
 {
   "order": [
     "github-check-gate",
+    "tui-key-model",
     "items-surface",
     "behavioral-ruleset",
     "live-transcript-auditing",
     "audit-coverage-drift",
-    "tui-key-model",
     "cockpit-parity",
+    "repo-mute",
     "verbs-as-configurations",
     "release-verification",
     "onboarding-stranger-test",
