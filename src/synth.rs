@@ -445,6 +445,15 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
     {
         crate::rules::load(&dir)?
     } else {
+        // Absent = legitimately no agenda (disclosed below). A *present non-directory* squatting
+        // on the items path is damage, not absence — a run must not quietly judge an agenda the
+        // repo does track as empty.
+        anyhow::ensure!(
+            !dir.try_exists()
+                .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?,
+            "{} exists but is not a directory — the items ledger is unreadable, not empty",
+            dir.display()
+        );
         Vec::new()
     };
     let order_path = crate::items_order_path(root);
