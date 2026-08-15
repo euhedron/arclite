@@ -6,6 +6,7 @@
     "behavioral-ruleset",
     "live-transcript-auditing",
     "audit-coverage-drift",
+    "context-window-utilization",
     "cockpit-parity",
     "repo-mute",
     "verbs-as-configurations",
