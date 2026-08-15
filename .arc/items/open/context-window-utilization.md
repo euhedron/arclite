@@ -1,0 +1,1 @@
+Show context-window utilization — the share of the selected model's window the assembled prompt (rules + content) occupies — in previews, run reports, and TUI views, with configurable thresholds that warn as it grows. The deterministic character/token estimate already exists per run; this makes it a first-class, comparable metric.
