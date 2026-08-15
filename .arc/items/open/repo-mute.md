@@ -1,0 +1,1 @@
+Per-repo mute: disable a retired repo across arc's surfaces — the ledger lenses, status, and log, CLI and TUI alike — so ended experiments stop appearing without deleting their history. A muted repo stays in the ledger (the record is permanent); mute is a view-level default, disclosed wherever it filters.
