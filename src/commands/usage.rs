@@ -148,7 +148,12 @@ pub(crate) struct RulesRollup {
     pub(crate) exposure_recorded_runs: usize,
     /// Runs that predate the structured `rules` field — their exposure is unknown, not zero.
     pub(crate) exposure_unknown_runs: usize,
-    /// Runs whose stored result was missing or unreadable — their findings are uncounted, disclosed.
+    /// Runs with no stored result at all (best-effort store, or an older arc) — their findings are
+    /// uncounted, disclosed apart from the unreadable ones below.
+    pub(crate) results_absent: usize,
+    /// Runs whose stored result exists but cannot be read or parsed (or whose recorded id can't be
+    /// safely mapped to a path) — their findings are uncounted, disclosed; never conflated with
+    /// legitimate absence.
     pub(crate) results_unreadable: usize,
     /// Unparseable ledger lines — the runs behind them are absent from every count here, disclosed
     /// exactly as the spend rollup discloses the same corruption.
@@ -260,6 +265,7 @@ pub(crate) fn rules_rollup(
     let mut audit_runs = 0usize;
     let mut exposure_recorded_runs = 0usize;
     let mut exposure_unknown_runs = 0usize;
+    let mut results_absent = 0usize;
     let mut results_unreadable = 0usize;
     for r in &records {
         if field(r, "command") != crate::cli::NAME_AUDIT {
@@ -312,23 +318,32 @@ pub(crate) fn rules_rollup(
             results_unreadable += 1;
             continue;
         };
-        let findings: Vec<String> = match std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        {
-            Some(v) => v
-                .get("structured")
-                .and_then(|s| s.get(crate::synth::RESULTS_KEY))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|i| i.get("rule").and_then(Value::as_str))
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            None => {
+        let findings: Vec<String> = match crate::read_optional(&path) {
+            Ok(Some(text)) => match serde_json::from_str::<Value>(&text) {
+                Ok(v) => v
+                    .get("structured")
+                    .and_then(|s| s.get(crate::synth::RESULTS_KEY))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| i.get("rule").and_then(Value::as_str))
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Err(_) => {
+                    results_unreadable += 1;
+                    continue;
+                }
+            },
+            // No stored result at all (best-effort store, or an older arc) — absence, counted
+            // apart from a result that exists but cannot be read.
+            Ok(None) => {
+                results_absent += 1;
+                continue;
+            }
+            Err(_) => {
                 results_unreadable += 1;
                 continue;
             }
@@ -406,9 +421,14 @@ pub(crate) fn rules_rollup(
             "{exposure_unknown_runs} run(s) predate the structured rules field — their exposure is unknown (never zero) and their findings sit in the @pre-record bucket"
         ));
     }
+    if results_absent > 0 {
+        notes.push(format!(
+            "{results_absent} run(s) have no stored result — their findings are uncounted"
+        ));
+    }
     if results_unreadable > 0 {
         notes.push(format!(
-            "{results_unreadable} run(s) have a missing/unreadable stored result — their findings are uncounted"
+            "{results_unreadable} run(s) have an unreadable stored result — their findings are uncounted"
         ));
     }
     // The ledger's own corruption count — the spend rollup discloses it, so this lens must too:
@@ -477,6 +497,7 @@ pub(crate) fn rules_rollup(
         audit_runs,
         exposure_recorded_runs,
         exposure_unknown_runs,
+        results_absent,
         results_unreadable,
         unparsed,
         rules,
