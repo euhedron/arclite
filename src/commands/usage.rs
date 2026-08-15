@@ -77,7 +77,12 @@ fn cli_currency(repo: Option<&str>) -> CurrencyLens {
         return current_lens(std::path::Path::new("."));
     };
     let needle_lc = needle.to_lowercase();
-    let matches: Vec<String> = ledger_repos()
+    // An unreadable ledger is its own failure — never "matches no ledger repo".
+    let repos = match ledger_repos() {
+        Ok(r) => r,
+        Err(e) => return CurrencyLens::Failed(format!("cannot read the run ledger: {e:#}")),
+    };
+    let matches: Vec<String> = repos
         .into_iter()
         .filter(|r| r.to_lowercase().contains(&needle_lc))
         .collect();
@@ -196,17 +201,14 @@ pub(crate) fn current_lens(repo: &std::path::Path) -> CurrencyLens {
 /// The distinct repo paths the ledger has seen, sorted — the TUI's selectable lens set. Best-effort:
 /// an unreadable ledger yields no lenses beyond the defaults, and the views it feeds surface their
 /// own load errors.
-pub(crate) fn ledger_repos() -> Vec<String> {
-    crate::log::records()
-        .map(|(records, _)| {
-            let set: std::collections::BTreeSet<String> = records
-                .iter()
-                .map(|r| field(r, "repo"))
-                .filter(|s| !s.is_empty())
-                .collect();
-            set.into_iter().collect()
-        })
-        .unwrap_or_default()
+pub(crate) fn ledger_repos() -> anyhow::Result<Vec<String>> {
+    let (records, _) = crate::log::records()?;
+    let set: std::collections::BTreeSet<String> = records
+        .iter()
+        .map(|r| field(r, "repo"))
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(set.into_iter().collect())
 }
 
 /// How many of a rule fingerprint's 16 hex chars ([`crate::rules::fingerprint`]) the displays show —
