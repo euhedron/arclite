@@ -1,0 +1,1 @@
+Link a push's gate rounds into one visible sequence: the hook exports a per-push round id (one env var, generated once per hook invocation) that every run in that push records, so log and usage can show N rounds with findings per round as one story. Needs only the hook stamp and a record field.

@@ -1,0 +1,1 @@
+Derive per-repo freshness (commits/files/lines changed since the last audit's commit — deterministic, from the record plus git) and velocity (change inflow versus audit and finding outflow over time), surfaced cross-repo with the TUI home/status as the natural seat. Establishes the one configurable threshold-and-warn facility other metrics reuse. Builds on audit-scope-record.
