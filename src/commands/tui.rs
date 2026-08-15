@@ -795,9 +795,14 @@ impl UsageView {
         if let Some(c) = &cwd_abs {
             lenses.push(Some(c.clone()));
         }
-        for repo in crate::commands::usage::ledger_repos() {
-            if cwd_abs.as_ref() != Some(&repo) {
-                lenses.push(Some(repo));
+        // A ledger read failure here degrades the lens list to the two structural lenses — not
+        // silently: the same read powers the page load below, whose `Result` puts the cause on
+        // the body, so fewer lenses never impersonate a smaller ledger.
+        if let Ok(repos) = crate::commands::usage::ledger_repos() {
+            for repo in repos {
+                if cwd_abs.as_ref() != Some(&repo) {
+                    lenses.push(Some(repo));
+                }
             }
         }
         let mut view = Self {

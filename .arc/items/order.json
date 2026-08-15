@@ -1,6 +1,7 @@
 {
   "order": [
     "github-check-gate",
+    "onboarding-stranger-test",
     "tui-key-model",
     "items-surface",
     "behavioral-ruleset",
@@ -14,7 +15,6 @@
     "repo-mute",
     "verbs-as-configurations",
     "release-verification",
-    "onboarding-stranger-test",
     "direct-api-backend",
     "repo-search",
     "lexicon",
