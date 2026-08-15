@@ -76,6 +76,18 @@ pub(crate) fn with_kind(schema: &str) -> String {
 /// is then closed (`additionalProperties: false`): codex's structured output requires it (confirmed
 /// by exercise — it 400s otherwise), claude accepts it, so it lives here once rather than in each
 /// command's item schema.
+/// The stored-run field carrying the structured artifact ([`StoredRun`]'s `structured` — keep the
+/// two names in step), read back by every stored-result consumer — single-sourced beside
+/// [`RESULTS_KEY`] so the readers can't drift.
+pub(crate) const STRUCTURED_KEY: &str = "structured";
+
+/// A stored run's structured `results` array, if the run carried one — the single navigation over
+/// the stored shape (`structured` → `results`), shared by promote, retire, the firing rollup, and
+/// the aggregate gatherer.
+pub(crate) fn stored_results(stored: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    stored.get(STRUCTURED_KEY)?.get(RESULTS_KEY)?.as_array()
+}
+
 /// Enum-lock the per-item `kind` to the effective taxonomy's labels — membership becomes the
 /// provider's constrained-decoding guarantee (the mechanism verify's `verdict` already rests on),
 /// so the run's recorded taxonomy provably covers every finding's `kind`. Returns `None` when there
@@ -617,11 +629,7 @@ fn gather_runs(ids: &[String], sources: &mut Vec<String>) -> anyhow::Result<Stri
         let run = crate::commands::log::stored_run(&stored);
         let command = &crate::log::field(&run, "command");
         let repo = crate::log::field(&run, "repo");
-        let items = stored
-            .get("structured")
-            .and_then(|s| s.get(RESULTS_KEY))
-            .and_then(|r| r.as_array())
-            .ok_or_else(|| {
+        let items = stored_results(&stored).ok_or_else(|| {
                 anyhow::anyhow!(
                     "run `{id}` has no structured results to aggregate (`arc log {id}` shows what it holds)"
                 )

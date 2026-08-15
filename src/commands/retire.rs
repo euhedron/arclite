@@ -49,11 +49,7 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // structure and legitimately-empty results are distinct failures, told apart honestly: verify is
     // structured by default, so no `results` at all means the store predates structure or the run
     // errored — while an empty array means the verify ran with no open findings in context.
-    let verdicts = stored
-        .get("structured")
-        .and_then(|s| s.get(crate::synth::RESULTS_KEY))
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
+    let verdicts = crate::synth::stored_results(&stored).ok_or_else(|| {
             anyhow::anyhow!(
                 "run `{run_id}` carries no structured verdicts — it predates always-structured output, or errored before returning results"
             )

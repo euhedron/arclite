@@ -45,10 +45,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         .context("the stored run record has no `command`")?
         .to_owned();
     // Findings are the structured `results`; a prose verb's run (summarize) has none to promote.
-    let findings = stored
-        .get("structured")
-        .and_then(|s| s.get(crate::synth::RESULTS_KEY))
-        .and_then(Value::as_array)
+    let findings = crate::synth::stored_results(&stored)
         .filter(|items| !items.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(

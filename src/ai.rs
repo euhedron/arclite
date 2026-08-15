@@ -844,14 +844,8 @@ fn provider_key(
     saved: Option<&str>,
     setting_key: &str,
 ) -> anyhow::Result<Option<(String, String)>> {
-    match std::env::var(env_var) {
-        Ok(key) if !key.is_empty() => {
-            return Ok(Some((key, format!("{env_var} (environment)"))));
-        }
-        Ok(_) | Err(std::env::VarError::NotPresent) => {}
-        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!(
-            "{env_var} is set but not valid unicode — fix or unset it (refusing to silently fall back to the saved key)"
-        ),
+    if let Some(key) = crate::env_optional(env_var, "fall back to the saved key")? {
+        return Ok(Some((key, format!("{env_var} (environment)"))));
     }
     Ok(saved.map(|key| (key.to_owned(), format!("{setting_key} (user settings)"))))
 }

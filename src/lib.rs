@@ -167,6 +167,19 @@ pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
+/// Read an optional env var: set and nonempty → `Some`, unset or empty → `None`, set-but-not-unicode
+/// → a hard error naming the var and `consequence` (what silently ignoring the set value would do) —
+/// a value the user set is never silently dropped. One idiom home, shared by every optional env read.
+pub(crate) fn env_optional(name: &str, consequence: &str) -> anyhow::Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(v) if !v.is_empty() => Ok(Some(v)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!(
+            "{name} is set but not valid unicode — fix or unset it (refusing to silently {consequence})"
+        ),
+    }
+}
+
 /// The binary's full identity: semver plus the commit it was built from (`build.rs` embeds it;
 /// `-dirty` marks a worktree build, `unknown` a build outside git). One home for the string the
 /// `--version` flag, the TUI masthead, and `doctor` all show — semver alone cannot distinguish a

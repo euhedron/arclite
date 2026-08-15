@@ -320,10 +320,7 @@ pub(crate) fn rules_rollup(
         };
         let findings: Vec<String> = match crate::read_optional(&path) {
             Ok(Some(text)) => match serde_json::from_str::<Value>(&text) {
-                Ok(v) => v
-                    .get("structured")
-                    .and_then(|s| s.get(crate::synth::RESULTS_KEY))
-                    .and_then(Value::as_array)
+                Ok(v) => crate::synth::stored_results(&v)
                     .map(|items| {
                         items
                             .iter()
