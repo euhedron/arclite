@@ -1,0 +1,1 @@
+Consider a direct-API backend: SDK synthesis without an agent CLI — natively structured output, so it passes the backend membership criterion. Adopt only when a confronted need earns it (a machine with no agent CLI, or CI where installing one is the heavier dependency); until then it stays a considered candidate, not a build.
