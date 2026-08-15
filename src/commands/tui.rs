@@ -859,9 +859,13 @@ struct RulesView {
     /// A failed toggle's load/write error, shown on the info line until the next action.
     notice: Option<String>,
     /// Per-rule firing stats for THIS repo (id → version stats), precomputed at load from the same
-    /// rollup that backs `arc usage --rules`, so render stays a pure function of state. Empty when
-    /// stats couldn't load — absence, never rendered as zeros.
-    stats: std::collections::BTreeMap<String, Vec<crate::commands::usage::RuleVersionStat>>,
+    /// rollup that backs `arc usage --rules`, so render stays a pure function of state. `Err` =
+    /// the firing record couldn't load (disclosed, never rendered as "no exercise"); `Ok` with a
+    /// missing id = genuine absence, never zeros.
+    stats: Result<
+        std::collections::BTreeMap<String, Vec<crate::commands::usage::RuleVersionStat>>,
+        String,
+    >,
     /// The rollup's clock, so last-fired ages render without a render-time clock read.
     stats_now: u64,
 }
@@ -884,14 +888,11 @@ impl RulesView {
             Err(_) => 0,
         };
         // This repo's firing stats, joined per rule id — currency judged against the very
-        // resolution this view shows. A stats failure leaves the map empty (the rules themselves
-        // still render; absence is absence, not zeros).
+        // resolution this view shows. A failure to load them is carried as `Err` and disclosed;
+        // the rules themselves still render (unreadable is not absence, absence is not zeros).
         let stats_now = crate::log::now_secs();
         let stats = super::resolve_root(Path::new(cwd))
-            .ok()
-            // This view's repo is one recorded path — exact matching, like every lens whose entry
-            // IS a path (a sibling `<repo>-old` must not pollute these counts).
-            .map(|root| crate::log::RepoFilter::Exact(crate::log::repo_record_string(&root)))
+            .map_err(|e| format!("{e:#}"))
             .and_then(|root| {
                 let current = match &report {
                     Ok(r) => crate::commands::usage::CurrencyLens::Resolved(
@@ -906,7 +907,11 @@ impl RulesView {
                     ),
                     Err(e) => crate::commands::usage::CurrencyLens::Failed(e.clone()),
                 };
-                crate::commands::usage::rules_rollup(Some(&root), current).ok()
+                // This view's repo is one recorded path — exact matching, like every lens whose
+                // entry IS a path (a sibling `<repo>-old` must not pollute these counts).
+                let filter = crate::log::RepoFilter::Exact(crate::log::repo_record_string(&root));
+                crate::commands::usage::rules_rollup(Some(&filter), current)
+                    .map_err(|e| format!("{e:#}"))
             })
             .map(|(rollup, _)| {
                 rollup
@@ -914,8 +919,7 @@ impl RulesView {
                     .into_iter()
                     .map(|s| (s.id, s.versions))
                     .collect()
-            })
-            .unwrap_or_default();
+            });
         Self {
             report,
             selected: selected.min(last),
@@ -2445,24 +2449,32 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         let rule = &report.rules[detail.index];
         frame.render_widget(Line::from(format!("rules · {}", rule.id)).bold(), header);
         // The rule's body, then its firing record in this repo (per version, same wording as
-        // `arc usage --rules`). An empty stats map means stats couldn't load — the section is
-        // omitted entirely, since absence must not read as "never fired".
+        // `arc usage --rules`). A stats load failure is disclosed in the section itself —
+        // unreadable must not read as "never fired"; a repo with no runs omits the section.
         let mut body_text = rule.body.clone();
-        if !view.stats.is_empty() {
-            body_text.push_str("\n\n— firing (this repo) —");
-            let mut any = false;
-            for v in view.stats.get(&rule.id).into_iter().flatten() {
-                if v.fires > 0 || v.current {
-                    body_text.push_str(&format!(
-                        "\n{}",
-                        crate::commands::usage::version_line(v, view.stats_now)
-                    ));
-                    any = true;
+        match &view.stats {
+            Err(e) => {
+                body_text.push_str(&format!(
+                    "\n\n— firing (this repo) —\nfiring record unavailable: {e}"
+                ));
+            }
+            Ok(stats) if !stats.is_empty() => {
+                body_text.push_str("\n\n— firing (this repo) —");
+                let mut any = false;
+                for v in stats.get(&rule.id).into_iter().flatten() {
+                    if v.fires > 0 || v.current {
+                        body_text.push_str(&format!(
+                            "\n{}",
+                            crate::commands::usage::version_line(v, view.stats_now)
+                        ));
+                        any = true;
+                    }
+                }
+                if !any {
+                    body_text.push_str("\nno recorded exercise");
                 }
             }
-            if !any {
-                body_text.push_str("\nno recorded exercise");
-            }
+            Ok(_) => {}
         }
         frame.render_widget(
             Paragraph::new(body_text)
@@ -2518,10 +2530,13 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
                 let gutter = if r.disabled { "✗ " } else { "  " };
                 // The current version's recurrence here as an aligned column (a skimmable number,
                 // not a per-row prose suffix). Quiet rules show a blank cell — no zero-noise — and
-                // an empty stats map (stats unavailable) shows nothing rather than fabricated zeros.
+                // unavailable stats show nothing here (disclosed on the info line + in the detail)
+                // rather than fabricated zeros.
                 let fired = view
                     .stats
-                    .get(&r.id)
+                    .as_ref()
+                    .ok()
+                    .and_then(|stats| stats.get(&r.id))
                     .and_then(|vs| vs.iter().find(|v| v.current))
                     .filter(|v| v.fired_runs > 0)
                     .map(|v| format!("{}×", v.fired_runs))
@@ -2563,6 +2578,10 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
     }
     if !report.skipped.is_empty() {
         info_text.push_str(&format!(" · {} source(s) skipped", report.skipped.len()));
+    }
+    // The load failure itself is compact here; the full reason renders in any rule's detail.
+    if view.stats.is_err() {
+        info_text.push_str(" · firing record unavailable");
     }
     frame.render_widget(Line::from(info_text).dim(), info);
 }

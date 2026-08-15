@@ -439,23 +439,7 @@ fn gather_rules(
 /// stated and yields an empty block — a judged-empty subject, not an error. A *malformed* order
 /// file is a hard error, like any explicitly-present structured source.
 fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
-    let dir = crate::items_open_dir(root);
-    let items = if crate::try_is_dir(&dir)
-        .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
-    {
-        crate::rules::load(&dir)?
-    } else {
-        // Absent = legitimately no agenda (disclosed below). A *present non-directory* squatting
-        // on the items path is damage, not absence — a run must not quietly judge an agenda the
-        // repo does track as empty.
-        anyhow::ensure!(
-            !dir.try_exists()
-                .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?,
-            "{} exists but is not a directory — the items ledger is unreadable, not empty",
-            dir.display()
-        );
-        Vec::new()
-    };
+    let items = load_ledger_dir(&crate::items_open_dir(root), "items")?;
     let order_path = crate::items_order_path(root);
     let order: Option<Vec<String>> = match crate::read_optional(&order_path)
         .with_context(|| format!("cannot read {}", order_path.display()))?
@@ -548,27 +532,30 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
     Ok(block)
 }
 
+/// Load a `.md` ledger directory (the findings ledger, the items agenda): absent = a legitimate
+/// empty ledger; a *present non-directory* squatting on the path = damage, reported as unreadable
+/// rather than read as empty — a run must not quietly proceed as though the repo recorded nothing.
+/// One home for the absence/damage distinction, so the ledgers can't drift in how they draw it.
+fn load_ledger_dir(dir: &Path, what: &str) -> anyhow::Result<Vec<crate::rules::Rule>> {
+    let access = |e: std::io::Error| anyhow::anyhow!("cannot access {}: {e}", dir.display());
+    if crate::try_is_dir(dir).map_err(access)? {
+        crate::rules::load(dir)
+    } else {
+        anyhow::ensure!(
+            !dir.try_exists().map_err(access)?,
+            "{} exists but is not a directory — the {what} ledger is unreadable, not empty",
+            dir.display()
+        );
+        Ok(Vec::new())
+    }
+}
+
 fn gather_findings(
     root: &Path,
     sources: &mut Vec<String>,
     recheck: bool,
 ) -> anyhow::Result<String> {
-    let dir = crate::findings_open_dir(root);
-    if !crate::try_is_dir(&dir)
-        .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
-    {
-        // Absent = legitimately no ledger (silent). A *present non-directory* squatting on the
-        // ledger path is damage, not absence — a run must not quietly proceed as though the repo
-        // recorded no findings.
-        anyhow::ensure!(
-            !dir.try_exists()
-                .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?,
-            "{} exists but is not a directory — the findings ledger is unreadable, not empty",
-            dir.display()
-        );
-        return Ok(String::new());
-    }
-    let entries = crate::rules::load(&dir)?;
+    let entries = load_ledger_dir(&crate::findings_open_dir(root), "findings")?;
     if entries.is_empty() {
         return Ok(String::new());
     }
