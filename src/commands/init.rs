@@ -53,7 +53,7 @@ fn starter_hook() -> String {
         audit = crate::cli::NAME_AUDIT,
         align = crate::cli::NAME_ALIGN,
         arc_dir = crate::ARC_DIR,
-        items = crate::ITEMS_OPEN_REL,
+        items = format_args!("{}/{}", crate::ITEMS_DIR, crate::OPEN_DIR),
     )
 }
 

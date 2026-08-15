@@ -1,6 +1,7 @@
 {
   "order": [
     "github-check-gate",
+    "ruleset-discoverability",
     "onboarding-stranger-test",
     "tui-key-model",
     "items-surface",
@@ -8,7 +9,6 @@
     "live-transcript-auditing",
     "audit-coverage-drift",
     "context-window-utilization",
-    "ruleset-discoverability",
     "tui-init",
     "feedback-command",
     "release-notes-view",

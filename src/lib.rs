@@ -30,25 +30,30 @@ pub(crate) fn arc_home() -> Option<std::path::PathBuf> {
 /// A repo's open-findings ledger directory, `<repo>/.arc/findings/open` — single-sourced (like
 /// [`ARC_DIR`]) so the promote writer and the `--findings` reader share one layout and can't drift.
 pub(crate) fn findings_open_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
-    repo_root.join(ARC_DIR).join("findings").join("open")
+    repo_root.join(ARC_DIR).join(FINDINGS_DIR).join(OPEN_DIR)
 }
 
 /// The repo's resolved findings dir (`.arc/findings/resolved`) — where `retire` moves a finding once a
 /// verify run judges it `resolved`: the open ledger's counterpart, the other end of the lifecycle.
 pub(crate) fn findings_resolved_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
-    repo_root.join(ARC_DIR).join("findings").join("resolved")
+    repo_root
+        .join(ARC_DIR)
+        .join(FINDINGS_DIR)
+        .join(RESOLVED_DIR)
 }
 
-/// The open-items directory relative to [`ARC_DIR`], forward-slash form — one home for the layout,
-/// shared by the path join below (`/` joins work on every platform) and the scaffolded hook's
-/// shell text, which needs it as a literal.
-pub(crate) const ITEMS_OPEN_REL: &str = "items/open";
+/// The `.arc` ledger families and their status subdirectories — each directory name has one home,
+/// and the two ledgers (findings, items) share the directory-as-status convention.
+pub(crate) const FINDINGS_DIR: &str = "findings";
+pub(crate) const ITEMS_DIR: &str = "items";
+pub(crate) const OPEN_DIR: &str = "open";
+pub(crate) const RESOLVED_DIR: &str = "resolved";
 
 /// The repo's open items — the tracked agenda (`.arc/items/open`): the continuity counterpart of
 /// the findings ledger, and the `align` verb's subject. One layout home, shared by the gatherer
 /// and whatever writes items.
 pub(crate) fn items_open_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
-    repo_root.join(ARC_DIR).join(ITEMS_OPEN_REL)
+    repo_root.join(ARC_DIR).join(ITEMS_DIR).join(OPEN_DIR)
 }
 
 /// The agenda's intended order (`.arc/items/order.json`, `{"order": ["id", …]}`): one structured
@@ -56,7 +61,7 @@ pub(crate) fn items_open_dir(repo_root: &std::path::Path) -> std::path::PathBuf 
 /// integrity (duplicates, dangling ids, omissions) deterministically checkable, so drift is a
 /// flagged state rather than silent rot.
 pub(crate) fn items_order_path(repo_root: &std::path::Path) -> std::path::PathBuf {
-    repo_root.join(ARC_DIR).join("items").join("order.json")
+    repo_root.join(ARC_DIR).join(ITEMS_DIR).join("order.json")
 }
 
 /// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
