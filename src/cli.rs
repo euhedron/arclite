@@ -76,6 +76,8 @@ pub(crate) const NAME_EVOLVE: &str = "evolve";
 pub(crate) const VERB_EVOLVE: &str = "Propose radical ways to evolve the repo";
 pub(crate) const NAME_AGGREGATE: &str = "aggregate";
 pub(crate) const VERB_AGGREGATE: &str = "Merge prior runs' results by shared substance";
+pub(crate) const NAME_ALIGN: &str = "align";
+pub(crate) const VERB_ALIGN: &str = "Audit the tracked items — the open agenda — for coherence";
 
 /// The set of arclite subcommands.
 // Parsed once at startup and dispatched immediately — never held in a collection or a hot path — so
@@ -119,8 +121,7 @@ pub enum Command {
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
     // substrate, kept distinct from the deterministic commands above — `run` names the step that
     // spends AI, mirroring arclite's deterministic-until-synthesis spine.
-    /// Run an AI synthesis verb: audit, critique, verify, suggest, summarize, extract, evolve, or
-    /// aggregate.
+    /// Run an AI synthesis verb.
     #[command(name = NAME_RUN)]
     Run(RunArgs),
 }
@@ -153,6 +154,8 @@ pub enum RunVerb {
     Evolve(SynthArgs),
     #[command(name = NAME_AGGREGATE, about = VERB_AGGREGATE)]
     Aggregate(SynthArgs),
+    #[command(name = NAME_ALIGN, about = VERB_ALIGN)]
+    Align(SynthArgs),
 }
 
 #[derive(Debug, Args)]

@@ -4,3 +4,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 @README.md
 @.arc/findings/README.md
+@.arc/items/README.md

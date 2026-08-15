@@ -39,6 +39,26 @@ pub(crate) fn findings_resolved_dir(repo_root: &std::path::Path) -> std::path::P
     repo_root.join(ARC_DIR).join("findings").join("resolved")
 }
 
+/// The open-items directory relative to [`ARC_DIR`], forward-slash form — one home for the layout,
+/// shared by the path join below (`/` joins work on every platform) and the scaffolded hook's
+/// shell text, which needs it as a literal.
+pub(crate) const ITEMS_OPEN_REL: &str = "items/open";
+
+/// The repo's open items — the tracked agenda (`.arc/items/open`): the continuity counterpart of
+/// the findings ledger, and the `align` verb's subject. One layout home, shared by the gatherer
+/// and whatever writes items.
+pub(crate) fn items_open_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join(ITEMS_OPEN_REL)
+}
+
+/// The agenda's intended order (`.arc/items/order.json`, `{"order": ["id", …]}`): one structured
+/// state file for sequence — an arbitrary order beats no order, and structure keeps the file's
+/// integrity (duplicates, dangling ids, omissions) deterministically checkable, so drift is a
+/// flagged state rather than silent rot.
+pub(crate) fn items_order_path(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join("items").join("order.json")
+}
+
 /// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
 /// the real write in both `promote` and `retire`, so the entry-name convention has a single home.
 pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {

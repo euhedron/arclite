@@ -1,0 +1,1 @@
+Verify releases on machines that aren't ours: a post-release workflow that downloads each published binary onto fresh per-OS runners and exercises `doctor`, `init`, and `--version` — and exercises `arc update --apply` from the previous release — so a broken asset is caught by ephemeral clean machines instead of a user. Signed-release verification stays the deeper edge beyond it.
