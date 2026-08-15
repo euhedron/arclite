@@ -1,0 +1,1 @@
+A TUI init flow: scaffold a repo — `.arc`, the hook, the default ruleset selection — from inside the cockpit, the way the agent CLIs offer setup from inside a session, instead of requiring a trip back to the shell.
