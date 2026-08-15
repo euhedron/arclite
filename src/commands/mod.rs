@@ -32,10 +32,12 @@ use crate::synth::{self, SynthOptions};
 pub struct Structure {
     pub schema: String,
     pub note: &'static str,
-    /// The command's kind taxonomy as (label, description) pairs, declared once. The command lists
-    /// it in its own prompt (via [`kind_list`]) as the substance of what it looks for; `--kinds`
-    /// reuses the labels as the suggested classification vocabulary. Empty = no taxonomy (`--kinds`
-    /// then lets the model label freely).
+    /// The verb's built-in kind taxonomy as (label, description) pairs — the shipped default that
+    /// the `taxonomies` setting overrides or extends per verb ([`resolve_taxonomy`] merges by
+    /// label). The *effective* set is listed in the assembled prompt as the substance of what the
+    /// verb looks for, recorded on the run as (kind, hash) pairs, and reused by `--kinds` as the
+    /// suggested classification vocabulary. Empty = no built-in taxonomy (`--kinds` then lets the
+    /// model label freely, unless settings supply one).
     pub kinds: &'static [(&'static str, &'static str)],
 }
 
@@ -56,15 +58,44 @@ const STRUCTURED_NOTE: &str = "\n\nReturn the result as structured data — ";
 /// deliberately not raised — so the structured channel loses none of the judgment's edges.
 const NOTE_INSTRUCTION: &str = " Also include a top-level `note`: one or two clauses giving the overall read of the run (what was assessed, and the upshot) — especially when `results` is empty — plus anything you weighed but deliberately did not raise, so the judgment's edges stay visible.";
 
-/// Render a command's kind taxonomy ([`Structure`]'s `kinds`) as a labelled list — `- label:
-/// description` per line — for the command to weave into its own prompt. (Why one declaration serves
-/// both the prompt and `--kinds`: see that field.)
-pub(crate) fn kind_list(kinds: &[(&str, &str)]) -> String {
+/// Bridges the role directive to the effective taxonomy in the assembled prompt — the kinds are
+/// the substance of what a taxonomy-bearing verb looks for (see [`Structure`]'s `kinds`).
+const KINDS_HEADER: &str = "\n\nThe kinds of finding to report:\n";
+
+/// Render a taxonomy as a labelled list — `- label: description` per line — for the assembled
+/// prompt.
+fn kind_list(kinds: &[(String, String)]) -> String {
     kinds
         .iter()
         .map(|(label, description)| format!("- {label}: {description}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Resolve a verb's effective taxonomy: the built-in default with the `taxonomies` settings entry
+/// for this verb merged over it, later winning by kind label — the rules model applied to the
+/// vocabulary lever, so an operator extends the shipped set with new kinds or overrides a shipped
+/// kind's description by restating its label, and the prompt only ever carries the one resolved
+/// vocabulary (resolution happens in data, never as an in-prompt instruction to prefer one list
+/// over another). Returns the effective (label, description) pairs plus how many entries settings
+/// contributed (0 = built-in as shipped), for the sources disclosure.
+fn resolve_taxonomy(
+    builtin: &[(&str, &str)],
+    configured: Option<&Vec<(String, String)>>,
+) -> (Vec<(String, String)>, usize) {
+    let mut effective: Vec<(String, String)> = builtin
+        .iter()
+        .map(|&(label, description)| (label.to_owned(), description.to_owned()))
+        .collect();
+    let configured = configured.map_or(&[][..], |v| v.as_slice());
+    for (label, description) in configured {
+        if let Some(slot) = effective.iter_mut().find(|(l, _)| l == label) {
+            slot.1 = description.clone();
+        } else {
+            effective.push((label.clone(), description.clone()));
+        }
+    }
+    (effective, configured.len())
 }
 
 /// Appended by `--kinds`: ask for a per-item `kind`. With a declared taxonomy (already listed in the
@@ -80,16 +111,17 @@ fn kinds_note(has_taxonomy: bool) -> &'static str {
     }
 }
 
-/// Shared flow for the AI synthesis commands: gather the repo context once, let the command build
-/// its prompt around it, then run — so the commands can't drift in how they wire context, tools,
-/// the granted dir, cost reporting, or structured output. `structure` is the command's structured
-/// output (see [`Structure`]), always active when declared; `--fail-on-findings` requires one.
+/// Shared flow for the AI synthesis commands: gather the repo context once, assemble the prompt
+/// around the verb's role directive (role, effective taxonomy, context, grounding, output notes),
+/// then run — so the commands can't drift in how they wire context, tools, the granted dir, cost
+/// reporting, or structured output. `structure` is the command's structured output (see
+/// [`Structure`]), always active when declared; `--fail-on-findings` requires one.
 pub fn run_synthesis(
     args: &SynthArgs,
     global: &GlobalArgs,
     command: &str,
     structure: Option<Structure>,
-    build_prompt: impl FnOnce(&str) -> String,
+    role: &str,
 ) -> anyhow::Result<ExitCode> {
     anyhow::ensure!(
         (1..=crate::synth::MAX_RUNS).contains(&args.runs),
@@ -119,8 +151,20 @@ pub fn run_synthesis(
         );
     }
     let settings = crate::settings::Settings::load(&args.path)?;
+    // align judges the agenda, not the code against standards: the configured/default ruleset is
+    // not auto-loaded (the rules block's weigh-the-repository-against framing would misdirect an
+    // agenda judgment, at real token cost per gate round) — rules join an align run only by
+    // explicit --rules/--ruleset, disclosed like any selection.
     let resolution =
-        resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
+        if command == crate::cli::NAME_ALIGN && args.rules.is_none() && args.ruleset.is_none() {
+            RuleResolution {
+                description: "none (align audits the agenda; --ruleset composes rules in)"
+                    .to_owned(),
+                sources: Vec::new(),
+            }
+        } else {
+            resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?
+        };
     // Backend: the `--backend` flag over the configured `backend` setting — and nothing beneath
     // (no built-in default: the backend is the thing that spends, so an unselected one errors with
     // what's detected rather than silently picking a vendor). The resolved instance owns the
@@ -165,7 +209,7 @@ pub fn run_synthesis(
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
     let config = settings.active_display();
-    let ctx = synth::gather_context(
+    let mut ctx = synth::gather_context(
         &args.path,
         &synth::ContextSpec {
             includes: &args.include,
@@ -178,10 +222,39 @@ pub fn run_synthesis(
             findings: args.findings,
             // verify auto-loads the open ledger framed for re-checking (--findings rejected above)
             recheck_findings: command == crate::cli::NAME_VERIFY,
+            // align auto-loads the tracked items + their intended order — its whole subject
+            agenda: command == crate::cli::NAME_ALIGN,
             from_runs: &args.from,
         },
     )?;
-    let mut prompt = build_prompt(&ctx.text);
+    // The effective taxonomy: settings over built-in, merged by label — resolved as data before
+    // the prompt exists, so the model only ever sees one vocabulary and the run records which
+    // (the (kind, hash) pairs on the record). A settings contribution is disclosed as a source
+    // like any other lever in play.
+    let (kinds, kinds_from_settings) = resolve_taxonomy(
+        structure.as_ref().map_or(&[][..], |s| s.kinds),
+        settings.taxonomies.get(command),
+    );
+    if kinds_from_settings > 0 {
+        ctx.sources.push(format!(
+            "taxonomy: {} kinds — {kinds_from_settings} from settings, merged over built-in by label",
+            kinds.len()
+        ));
+    }
+    let taxonomy: Vec<synth::ActiveKind> = kinds
+        .iter()
+        .map(|(kind, description)| synth::ActiveKind {
+            kind: kind.clone(),
+            hash: crate::rules::fingerprint(description),
+        })
+        .collect();
+    let mut prompt = role.to_owned();
+    if !kinds.is_empty() {
+        prompt.push_str(KINDS_HEADER);
+        prompt.push_str(&kind_list(&kinds));
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(&ctx.text);
     prompt.push_str(GROUNDING);
     // A verb that declares a structured shape always produces it: the typed `results` are the
     // canonical output everything downstream acts on (the gate, promote, multi-run union, ranking),
@@ -216,8 +289,7 @@ pub fn run_synthesis(
     // --kinds and --ranked shape the output in any mode (a prompt note; structured runs also carry
     // it in the `kind` field / array order above) — neither requires structured output.
     if args.kinds {
-        let has_taxonomy = structure.as_ref().is_some_and(|s| !s.kinds.is_empty());
-        prompt.push_str(kinds_note(has_taxonomy));
+        prompt.push_str(kinds_note(!kinds.is_empty()));
     }
     if args.ranked {
         prompt.push_str(RANKED_NOTE);
@@ -236,6 +308,7 @@ pub fn run_synthesis(
             dir: &ctx.root,
             sources: &ctx.sources,
             rules_active: &ctx.rules_active,
+            taxonomy: &taxonomy,
             excluded: &ctx.excluded,
             config: &config,
             command,

@@ -37,6 +37,12 @@ pub struct Settings {
     /// Rule ids disabled for this scope (a list beside the scalar settings). Filtered out of every
     /// resolved ruleset, with the filtering disclosed wherever rules are reported.
     pub disabled_rules: Vec<String>,
+    /// Per-verb taxonomy entries (`taxonomies.<verb>`: a `{kind, description}` list) — the
+    /// vocabulary of findings a verb reports, merged over that verb's built-in default by kind
+    /// label at run time (restate a shipped label to override its description; a new label
+    /// extends the set). The builtin-defaults pattern applied to the levers that steer judgment:
+    /// what ships is just a configuration, and nothing driving a run hides in code.
+    pub taxonomies: BTreeMap<String, Vec<(String, String)>>,
     /// Saved provider API keys for the model listings (`api_keys.anthropic` / `api_keys.openai`) —
     /// **user layer only**: a project's settings.json is tracked, and a tracked file must never hold
     /// a secret (the loader rejects a project-layer key outright). The standard env vars
@@ -67,6 +73,17 @@ struct Raw {
     disabled_rules: Option<Vec<String>>,
     #[serde(default)]
     api_keys: Option<RawApiKeys>,
+    #[serde(default)]
+    taxonomies: BTreeMap<String, Vec<RawKind>>,
+}
+
+/// One taxonomy entry as written in settings: the kind's label and its description — the same
+/// (label, description) shape the built-in taxonomies declare.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawKind {
+    kind: String,
+    description: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -155,6 +172,21 @@ impl Settings {
         // one that omits it leaves the earlier layer's in place.
         if let Some(disabled) = raw.disabled_rules {
             self.disabled_rules = disabled;
+        }
+        // Taxonomy entries layer per verb, like rulesets: a later layer's entry for a verb wins
+        // whole; verbs it doesn't name keep the earlier layer's (or the built-in).
+        for (verb, kinds) in raw.taxonomies {
+            for k in &kinds {
+                anyhow::ensure!(
+                    !k.kind.trim().is_empty() && !k.description.trim().is_empty(),
+                    "taxonomies.{verb} in {} has an entry with an empty kind or description",
+                    path.display()
+                );
+            }
+            self.taxonomies.insert(
+                verb,
+                kinds.into_iter().map(|k| (k.kind, k.description)).collect(),
+            );
         }
         // API keys load from the user layer only: a project's settings.json is tracked, and a tracked
         // file must never hold a secret — rejected loudly, not skipped, so a committed key is caught

@@ -1,0 +1,7 @@
+# Items Ledger
+
+The open agenda: one Markdown file per item under `open/`, filename stem = item id, body = plain prose — no frontmatter, the whole file is the item. `order.json` carries the intended order as `{"order": [ids]}`, with total membership: every open item listed exactly once, no id that resolves to nothing. Drift — an unlisted item, a dangling or duplicated id — is computed deterministically and disclosed wherever the agenda appears, never silently tolerated (a malformed order file is a hard error).
+
+`arc run align` audits the agenda — the items against each other, their intended order, and the repository state in context — under its taxonomy, and the pre-push hook gates on it: priorities deserve reconsideration as the code moves. Resolve an item by moving its file to the `resolved/` sibling with a short resolution note appended, so the trail stays surfaceable without reconstructing history (the findings ledger's pattern).
+
+Sessions read the agenda instead of improvising scope or handing "where next?" back to the operator. Change items freely — add, split, merge, reorder; the shape here is provisional like everything else. Keep membership total and the order deliberate: an order forces one to be chosen, whether or not a dependency dictates it.

@@ -1,0 +1,1 @@
+Finish making a verb a configuration: its role directive, taxonomy, item schema, and gate field shipped as built-in defaults and overridable through settings like everything else, so a new verb needn't mean a rebuild. Roles-as-data and settings-configurable taxonomies have landed; the remaining steps are roles-as-Markdown on the rules substrate, then schema and gate as data.

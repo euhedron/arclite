@@ -1,0 +1,1 @@
+Give the agenda first-class surfaces: an items view in the CLI and TUI listing the open items in their intended order, with the order file's integrity — unlisted items, ids resolving to no item, duplicates — ambient in `arc doctor` and the TUI the way settings layers already are. The agenda is only as binding as it is visible.

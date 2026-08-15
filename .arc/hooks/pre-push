@@ -6,12 +6,15 @@
 # Enable for a clone: `git config core.hooksPath .arc/hooks`. Skip one push: `ARC_GATE=0 git push`.
 # Disable: unset core.hooksPath.
 #
-# It runs the gate and the advisories *concurrently*, so the wall-clock is the slowest single run, not
+# It runs the gates and the advisories *concurrently*, so the wall-clock is the slowest single run, not
 # their sum (concurrent arc/claude calls are fine — `--runs N` relies on the same):
 #   - GATE (blocking): `arc run audit` over all of src on the default model — exits non-zero on any rule
 #     violation and blocks the push.
+#   - AGENDA GATE (blocking): `arc run align` over the tracked items (.arc/items) plus the pushed src
+#     diff — priorities get reconsidered as the code moves; incoherence in the agenda blocks like a
+#     rule violation in the code.
 #   - ADVISORIES (non-blocking): `arc run critique/suggest/extract` over the pushed diff — defects,
-#     what's worth attention, and candidate rules to curate. They run *regardless* of the gate's verdict
+#     what's worth attention, and candidate rules to curate. They run *regardless* of the gates' verdicts
 #     (a blocked push still surfaces them) and never block. They run tool-less (portable across
 #     backends); on a claude-backed hook, granting read-only tools (--allow-tool Read/Grep/Glob) lets a
 #     diff-scoped advisory consult the rest of the repo — add them per verb if you want that.
@@ -83,6 +86,13 @@ gate_out=$(mktemp)
 arc run audit . --include src --findings --fail-on-findings >"$gate_out" 2>&1 &
 gate_pid=$!
 
+# The agenda gate: the tracked items + intended order (auto-loaded by align) judged against the
+# default context baseline (README + manifests + git truth) and the same pushed src diff the
+# advisories see — the ground a change-versus-agenda judgment needs.
+align_out=$(mktemp)
+arc run align . "$@" --fail-on-findings >"$align_out" 2>&1 &
+align_pid=$!
+
 adv_pids=""
 adv_outs=""
 if [ "$#" -gt 0 ]; then
@@ -96,11 +106,16 @@ fi
 
 wait "$gate_pid"
 gate=$?
+wait "$align_pid"
+align=$?
 for p in $adv_pids; do wait "$p"; done
 
 echo "=== arclite gate · audit ===" >&2
 cat "$gate_out" >&2
 rm -f "$gate_out"
+echo "=== arclite gate · align (agenda) ===" >&2
+cat "$align_out" >&2
+rm -f "$align_out"
 if [ -n "$adv_outs" ]; then
     echo "=== arclite advisories · critique / suggest / extract (non-blocking) ===" >&2
     # shellcheck disable=SC2086  # intended word-split over the temp-file list
@@ -111,6 +126,10 @@ fi
 if [ "$gate" -ne 0 ]; then
     echo "arclite gate: push blocked (arc audit exit $gate) · findings: arc log --last --command audit · skip once: ARC_GATE=0 git push" >&2
     exit "$gate"
+fi
+if [ "$align" -ne 0 ]; then
+    echo "arclite gate: push blocked (arc align exit $align) · findings: arc log --last --command align · skip once: ARC_GATE=0 git push" >&2
+    exit "$align"
 fi
 
 # Meta-gate (blocking): when the rules or meta-rules themselves change, audit the ruleset against the

@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+use anyhow::Context as _;
 use serde::Serialize;
 
 use crate::ai;
@@ -107,6 +108,16 @@ fn close_objects(node: &mut serde_json::Value) {
 }
 
 /// Configuration shared by every synthesis-backed command.
+/// One kind of a run's effective taxonomy, as recorded: its label plus the fingerprint of its
+/// description — the (identity, content-hash) pattern of [`crate::rules::ActiveRule`] applied to
+/// the vocabulary lever, so a finding attributes to the *version* of a kind that was in play and a
+/// sharpened description splits from its predecessor's record rather than blending into it.
+#[derive(Serialize)]
+pub struct ActiveKind {
+    pub kind: String,
+    pub hash: String,
+}
+
 pub struct SynthOptions<'a> {
     /// The resolved model id for the run (the backend already applied `--model`, the shared default,
     /// or its own default), reported as the requested model until the response names what actually ran.
@@ -136,6 +147,9 @@ pub struct SynthOptions<'a> {
     /// The active rules (id + body fingerprint), recorded structured on the run — the exposure half
     /// of firing stats, version-aware.
     pub rules_active: &'a [crate::rules::ActiveRule],
+    /// The effective taxonomy (kind + description fingerprint), recorded structured on the run —
+    /// the same version-aware pattern applied to the vocabulary lever.
+    pub taxonomy: &'a [ActiveKind],
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
     /// The active `.arc/settings.json` layers (user then project); empty = built-in defaults only.
@@ -417,6 +431,114 @@ fn gather_rules(
 /// otherwise a run is told to hunt *beyond* them rather than re-surface them. Absent/empty ledger → no
 /// block. A finding is Markdown like a rule, so the rule loader/renderer applies — each rendered under a
 /// `## <id>` heading, so a verdict can key back to it — guarded against an absent dir.
+/// The tracked items — the open agenda — rendered as the align verb's subject: the intended order
+/// first (`order.json`, its integrity computed deterministically — duplicates, ids resolving to no
+/// item, open items it omits — each disclosed, so order drift is a flagged state, never silent
+/// rot), then each open item under its id (`.md` files, stem = id, loaded the same way rules are).
+/// The items are material to judge, never instructions to follow; an absent or empty agenda is
+/// stated and yields an empty block — a judged-empty subject, not an error. A *malformed* order
+/// file is a hard error, like any explicitly-present structured source.
+fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
+    let dir = crate::items_open_dir(root);
+    let items = if crate::try_is_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("cannot access {}: {e}", dir.display()))?
+    {
+        crate::rules::load(&dir)?
+    } else {
+        Vec::new()
+    };
+    let order_path = crate::items_order_path(root);
+    let order: Option<Vec<String>> = match crate::read_optional(&order_path)
+        .with_context(|| format!("cannot read {}", order_path.display()))?
+    {
+        Some(text) => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Order {
+                order: Vec<String>,
+            }
+            let parsed: Order = serde_json::from_str(&text)
+                .with_context(|| format!("invalid order file {}", order_path.display()))?;
+            Some(parsed.order)
+        }
+        None => None,
+    };
+    if items.is_empty() && order.is_none() {
+        sources.push("items: none (.arc/items/open absent or empty)".to_owned());
+        return Ok(String::new());
+    }
+    // Order integrity, computed once here so the run's context, its sources line, and any later
+    // consumer all see the same verdicts.
+    let ids: std::collections::BTreeSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
+    let mut listed: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut dangling: Vec<&str> = Vec::new();
+    let mut duplicated: Vec<&str> = Vec::new();
+    for id in order.iter().flatten() {
+        if !listed.insert(id.as_str()) {
+            duplicated.push(id);
+        }
+        if !ids.contains(id.as_str()) {
+            dangling.push(id);
+        }
+    }
+    let unlisted: Vec<&str> = items
+        .iter()
+        .map(|i| i.id.as_str())
+        .filter(|id| !listed.contains(id))
+        .collect();
+    let integrity = match &order {
+        None => "no order file".to_owned(),
+        Some(_) if unlisted.is_empty() && dangling.is_empty() && duplicated.is_empty() => {
+            "order: complete".to_owned()
+        }
+        Some(_) => {
+            let mut parts = Vec::new();
+            if !unlisted.is_empty() {
+                parts.push(format!("{} open item(s) unlisted", unlisted.len()));
+            }
+            if !dangling.is_empty() {
+                parts.push(format!("{} id(s) resolve to no item", dangling.len()));
+            }
+            if !duplicated.is_empty() {
+                parts.push(format!("{} duplicated id(s)", duplicated.len()));
+            }
+            format!("order: {}", parts.join(", "))
+        }
+    };
+    sources.push(format!(
+        "items ({}): {} · {}",
+        items.len(),
+        items
+            .iter()
+            .map(|i| i.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        integrity
+    ));
+    let mut block = String::from("\nTracked items (the open agenda — the subject to audit):\n");
+    match &order {
+        Some(list) => {
+            block.push_str("\nIntended order (order.json):\n");
+            for (i, id) in list.iter().enumerate() {
+                block.push_str(&format!("{}. {id}\n", i + 1));
+            }
+            if !(unlisted.is_empty() && dangling.is_empty() && duplicated.is_empty()) {
+                block.push_str(&format!(
+                    "Order integrity: unlisted [{}] · dangling [{}] · duplicated [{}]\n",
+                    unlisted.join(", "),
+                    dangling.join(", "),
+                    duplicated.join(", ")
+                ));
+            }
+        }
+        None => block.push_str("\nNo order file (.arc/items/order.json is absent).\n"),
+    }
+    for item in &items {
+        block.push_str(&format!("\n## {}\n{}\n", item.id, item.body));
+    }
+    Ok(block)
+}
+
 fn gather_findings(
     root: &Path,
     sources: &mut Vec<String>,
@@ -1127,6 +1249,9 @@ pub struct ContextSpec<'a> {
     /// Auto-load the open findings ledger framed for *re-checking* (the verify verb), distinct from
     /// `findings`, which loads it framed for hunting *beyond* what's already known.
     pub recheck_findings: bool,
+    /// Auto-load the tracked items — the open agenda and its spine — as the run's subject (the
+    /// align verb).
+    pub agenda: bool,
     /// Logged run ids (`--from`, the aggregate verb) whose stored structured results become context —
     /// the material a cross-run merge judges. Empty for every other verb.
     pub from_runs: &'a [String],
@@ -1149,6 +1274,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         scan,
         findings,
         recheck_findings,
+        agenda,
         from_runs,
     } = spec;
     // The repo scan (an inspect walk) yields the scan summary and the manifests it detects. `--no-scan`
@@ -1263,6 +1389,9 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     text.push_str(&rules_text);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
+    }
+    if agenda {
+        text.push_str(&gather_agenda(&root, &mut sources)?);
     }
     if !from_runs.is_empty() {
         text.push_str(&gather_runs(from_runs, &mut sources)?);
@@ -1450,6 +1579,10 @@ struct RunRecord<'a> {
     /// stats, attributing a finding to the rule *version* that was in play. Records predating this
     /// field have no exposure data; stats read them as unknown, never zero.
     rules: &'a [crate::rules::ActiveRule],
+    /// The effective taxonomy as (kind, description-fingerprint) pairs — the same exposure record
+    /// as `rules`, for the vocabulary lever ([`ActiveKind`]). Absent on records predating the
+    /// field (unknown, never zero); `[]` = the run had no taxonomy in play.
+    taxonomy: &'a [ActiveKind],
     usage: &'a ai::Usage,
     /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
@@ -1766,6 +1899,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             prompt_chars: prompt.chars().count(),
             sources: opts.sources,
             rules: opts.rules_active,
+            taxonomy: opts.taxonomy,
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,
@@ -2178,6 +2312,7 @@ mod tests {
                 scan: false,
                 findings: false,
                 recheck_findings: false,
+                agenda: false,
                 from_runs: &[],
             },
         )

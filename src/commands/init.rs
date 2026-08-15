@@ -41,14 +41,19 @@ fn starter_settings() -> String {
 /// their [`crate::cli`] name constants, rather than literals, so a rename can't desync the
 /// scaffolded hook from the actual command line.
 fn starter_hook() -> String {
+    let bin = crate::cli::binary_name();
     format!(
         "#!/bin/sh\n\
          # arclite gate (pre-push). Edit the command(s) below to taste; skip once with `ARC_GATE=0 git push`.\n\
          if [ \"$ARC_GATE\" = \"0\" ]; then exit 0; fi\n\
-         {} {} {} --fail-on-findings\n",
-        crate::cli::binary_name(),
-        crate::cli::NAME_RUN,
-        crate::cli::NAME_AUDIT
+         {bin} {run} {audit} --fail-on-findings || exit\n\
+         # The agenda gate joins once the repo tracks items ({arc_dir}/{items}) — zero cost until then.\n\
+         if [ -d {arc_dir}/{items} ]; then {bin} {run} {align} --fail-on-findings || exit; fi\n",
+        run = crate::cli::NAME_RUN,
+        audit = crate::cli::NAME_AUDIT,
+        align = crate::cli::NAME_ALIGN,
+        arc_dir = crate::ARC_DIR,
+        items = crate::ITEMS_OPEN_REL,
     )
 }
 
