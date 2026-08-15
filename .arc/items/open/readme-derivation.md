@@ -1,1 +1,0 @@
-Converge the README's roadmap prose toward a view derived from this agenda: the items are the operational record, and the README narrates what they establish instead of hand-maintaining a parallel list that drifts. Start by deriving the Open list; the vision prose stays hand-written.
