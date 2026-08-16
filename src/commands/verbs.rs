@@ -5,7 +5,7 @@
 
 use std::process::ExitCode;
 
-use super::{Structure, run_synthesis};
+use super::{Policy, Structure, run_synthesis};
 use crate::cli::{self, GlobalArgs, SynthArgs};
 
 /// One AI verb: its CLI name (single-sourced from [`cli`]'s `NAME_*`), its optional structured-output
@@ -22,6 +22,10 @@ pub struct Verb {
     /// structured-output notes), so the genuinely per-verb content is this data, and no
     /// verb-specific machinery hides in phrasing.
     role: &'static str,
+    /// The verb's cross-cutting policy ([`Policy`]) — auto-loaded ledgers and cross-run inputs as
+    /// registry data, so the shared flow never branches on a verb's name. Rows state only what
+    /// differs from [`Policy::NONE`].
+    policy: Policy,
 }
 
 /// A structured verb's output shape: the item schema, its item-shape note (the fields and their
@@ -52,7 +56,7 @@ impl Verb {
             note: s.note,
             kinds: s.kinds,
         });
-        run_synthesis(args, global, self.name, structure, self.role)
+        run_synthesis(args, global, self.name, structure, self.role, self.policy)
     }
 }
 
@@ -65,6 +69,7 @@ pub const SUMMARIZE: Verb = Verb {
     role: "You are assessing a code repository from the supplied context. In 3-5 sentences, give a \
            concise, useful assessment: what kind of project it appears to be, its apparent stack, \
            and anything notable or worth a closer look.",
+    policy: Policy::NONE,
 };
 
 // ---- suggest ----
@@ -93,6 +98,7 @@ pub const SUGGEST: Verb = Verb {
         kinds: SUGGEST_KINDS,
     }),
     role: "You are reviewing a code repository to advise where attention is best spent.",
+    policy: Policy::NONE,
 };
 
 // ---- extract ----
@@ -115,6 +121,7 @@ pub const EXTRACT: Verb = Verb {
            what the code actually evidences over generic advice, and treat any rules already \
            present in the context as existing policy not to duplicate. Propose only rules that \
            clearly earn their place — never pad toward a count.",
+    policy: Policy::NONE,
 };
 
 // ---- audit ----
@@ -135,6 +142,7 @@ pub const AUDIT: Verb = Verb {
            Report only concrete violations of those rules — no general suggestions, and no mention \
            of rules that are not violated. If no rules are present in the context, there is \
            nothing to audit against.",
+    policy: Policy::NONE,
 };
 
 // ---- critique ----
@@ -168,6 +176,7 @@ pub const CRITIQUE: Verb = Verb {
     }),
     role: "You are performing a rigorous critical review of a repository and its documentation. \
            Report concrete defects — prefer fewer real findings over padding.",
+    policy: Policy::NONE,
 };
 
 // ---- verify ----
@@ -191,6 +200,10 @@ pub const VERIFY: Verb = Verb {
            reproduces, it is resolved (the code no longer exhibits it), or it is indeterminate \
            (the provided context does not contain what is needed to tell) — prefer indeterminate \
            over guessing.",
+    policy: Policy {
+        recheck_findings: true,
+        ..Policy::NONE
+    },
 };
 
 // ---- evolve ----
@@ -211,6 +224,7 @@ pub const EVOLVE: Verb = Verb {
            overhauls, structural reimaginings, and bold directions that would normally go unspoken \
            — challenge the fundamental assumptions, scope, and shape of the project, and treat \
            what exists as a point of departure, not a constraint.",
+    policy: Policy::NONE,
 };
 
 // ---- aggregate ----
@@ -239,6 +253,10 @@ pub const AGGREGATE: Verb = Verb {
            for the reader, not a filter. Where the context also carries active rules, mark an item \
            an existing rule already expresses as covered rather than re-proposing it. Order the \
            merged items most-shared first.",
+    policy: Policy {
+        consumes_from: true,
+        ..Policy::NONE
+    },
 };
 
 // ---- align ----
@@ -300,6 +318,10 @@ pub const ALIGN: Verb = Verb {
     role: "You are auditing a repository's tracked items — its open agenda, included in the \
            context with its intended order — against each other and against the supplied \
            repository state.",
+    policy: Policy {
+        agenda: true,
+        ..Policy::NONE
+    },
 };
 
 /// Every synthesis verb, in palette presentation order — the registry the TUI's `run` sub-menu derives
