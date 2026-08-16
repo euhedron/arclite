@@ -59,10 +59,16 @@ pub(crate) fn with_kind(schema: &str) -> String {
     let item = root
         .pointer_mut(&format!("/properties/{RESULTS_KEY}/items"))
         .expect("a results schema declares an items shape");
-    item.pointer_mut("/properties")
+    let props = item
+        .pointer_mut("/properties")
         .and_then(serde_json::Value::as_object_mut)
-        .expect("a results item schema has properties")
-        .insert(KIND_KEY.to_owned(), serde_json::json!({ "type": "string" }));
+        .expect("a results item schema has properties");
+    // Idempotent: a verb whose item already declares `kind` (align) has nothing to add — blindly
+    // re-adding would append a duplicate `required` entry, an invalid schema the backend may reject.
+    if props.contains_key(KIND_KEY) {
+        return schema.to_owned();
+    }
+    props.insert(KIND_KEY.to_owned(), serde_json::json!({ "type": "string" }));
     item.pointer_mut("/required")
         .and_then(serde_json::Value::as_array_mut)
         .expect("a results item schema has a required list")
