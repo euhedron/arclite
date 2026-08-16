@@ -41,6 +41,31 @@ pub struct Structure {
     pub kinds: &'static [(&'static str, &'static str)],
 }
 
+/// A verb's cross-cutting policy — which context it auto-loads and which cross-verb levers it
+/// owns — carried as data on the registry row ([`verbs`]), so the shared flow reads policy
+/// instead of branching on verb names at scattered sites.
+#[derive(Clone, Copy)]
+pub struct Policy {
+    /// Auto-load the open findings ledger framed for re-checking; `--findings` is then rejected
+    /// as already implied (verify).
+    pub recheck_findings: bool,
+    /// Auto-load the tracked items + intended order as the run's subject, and suppress the
+    /// configured/default ruleset — rules join only by explicit `--rules`/`--ruleset` (align).
+    pub agenda: bool,
+    /// Consume `--from`, requiring at least two prior runs; verbs without it reject the flag
+    /// (aggregate).
+    pub consumes_from: bool,
+}
+
+impl Policy {
+    /// The common case: no auto-loaded ledgers, no cross-run inputs.
+    pub const NONE: Policy = Policy {
+        recheck_findings: false,
+        agenda: false,
+        consumes_from: false,
+    };
+}
+
 /// Grounding guardrail appended to every synthesis prompt (single-sourced, not restated per prompt).
 const GROUNDING: &str = "\n\nGround everything you report in the context above; include nothing you cannot point to in it. For version-control claims, obey the Version-control truth block: a path reference is not evidence that the referenced path exists, is tracked, or is committed.";
 
@@ -125,6 +150,7 @@ pub fn run_synthesis(
     command: &str,
     structure: Option<Structure>,
     role: &str,
+    policy: Policy,
 ) -> anyhow::Result<ExitCode> {
     anyhow::ensure!(
         (1..=crate::synth::MAX_RUNS).contains(&args.runs),
@@ -132,17 +158,16 @@ pub fn run_synthesis(
         crate::synth::MAX_RUNS,
         args.runs
     );
-    // verify auto-loads the open ledger framed for re-checking — the opposite framing of
+    // A recheck verb auto-loads the open ledger framed for re-checking — the opposite framing of
     // --findings' "surface new issues beyond these" — so the flag is rejected rather than
     // silently overridden.
     anyhow::ensure!(
-        !(args.findings && command == crate::cli::NAME_VERIFY),
+        !(args.findings && policy.recheck_findings),
         "`{command}` already re-checks the open findings ledger — drop --findings"
     );
-    // --from feeds prior runs' results as context; only aggregate consumes it, and its judgment —
-    // sameness ACROSS runs — needs at least two. Both mismatches rejected before spend, never
-    // silently ignored.
-    if command == crate::cli::NAME_AGGREGATE {
+    // --from feeds prior runs' results as context; a consuming verb's judgment — sameness ACROSS
+    // runs — needs at least two. Both mismatches rejected before spend, never silently ignored.
+    if policy.consumes_from {
         anyhow::ensure!(
             args.from.len() >= 2,
             "`{command}` merges results across runs — name at least two with --from <run-id>"
@@ -154,20 +179,18 @@ pub fn run_synthesis(
         );
     }
     let settings = crate::settings::Settings::load(&args.path)?;
-    // align judges the agenda, not the code against standards: the configured/default ruleset is
-    // not auto-loaded (the rules block's weigh-the-repository-against framing would misdirect an
-    // agenda judgment, at real token cost per gate round) — rules join an align run only by
+    // An agenda verb judges the agenda, not the code against standards: the configured/default
+    // ruleset is not auto-loaded (the rules block's weigh-the-repository-against framing would
+    // misdirect an agenda judgment, at real token cost per gate round) — rules join only by
     // explicit --rules/--ruleset, disclosed like any selection.
-    let resolution =
-        if command == crate::cli::NAME_ALIGN && args.rules.is_none() && args.ruleset.is_none() {
-            RuleResolution {
-                description: "none (align audits the agenda; --ruleset composes rules in)"
-                    .to_owned(),
-                sources: Vec::new(),
-            }
-        } else {
-            resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?
-        };
+    let resolution = if policy.agenda && args.rules.is_none() && args.ruleset.is_none() {
+        RuleResolution {
+            description: format!("none ({command} audits the agenda; --ruleset composes rules in)"),
+            sources: Vec::new(),
+        }
+    } else {
+        resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?
+    };
     // Backend: the `--backend` flag over the configured `backend` setting — and nothing beneath
     // (no built-in default: the backend is the thing that spends, so an unselected one errors with
     // what's detected rather than silently picking a vendor). The resolved instance owns the
@@ -223,10 +246,10 @@ pub fn run_synthesis(
             exclude: &args.exclude,
             scan: !args.no_scan,
             findings: args.findings,
-            // verify auto-loads the open ledger framed for re-checking (--findings rejected above)
-            recheck_findings: command == crate::cli::NAME_VERIFY,
-            // align auto-loads the tracked items + their intended order — its whole subject
-            agenda: command == crate::cli::NAME_ALIGN,
+            // the registry row's policy: the recheck ledger framing (--findings rejected above)
+            // and the tracked items + intended order as an agenda verb's subject
+            recheck_findings: policy.recheck_findings,
+            agenda: policy.agenda,
             from_runs: &args.from,
         },
     )?;
