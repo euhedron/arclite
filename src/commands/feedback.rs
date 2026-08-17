@@ -144,11 +144,17 @@ pub(crate) fn inbox_note(
     Ok(path)
 }
 
+/// Characters of the message the prefilled issue keeps as its title — the subject-line display
+/// convention (issue lists truncate long titles visually; GitHub itself accepts far longer), with
+/// the full message always in the body. A presentation choice, not an API limit — adjust if
+/// prefills read badly.
+const ISSUE_TITLE_MAX_CHARS: usize = 72;
+
 /// The prefilled GitHub issue URL for filing a report upstream — the interim outbound transport.
 /// Carries the message plus the running arc's identity, and deliberately nothing else: a run's
 /// mechanics (paths, spend, other repos) are the operator's, and an issue is public.
 pub(crate) fn issue_url(message: &str) -> String {
-    let title: String = message.chars().take(72).collect();
+    let title: String = message.chars().take(ISSUE_TITLE_MAX_CHARS).collect();
     let body = format!(
         "{message}\n\n---\narc {} ({}) - {}-{}",
         env!("CARGO_PKG_VERSION"),
