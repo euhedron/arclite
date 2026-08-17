@@ -1,5 +1,6 @@
 pub mod config;
 pub mod doctor;
+pub mod feedback;
 pub mod init;
 pub mod inspect;
 pub mod log;

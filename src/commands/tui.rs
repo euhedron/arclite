@@ -130,6 +130,7 @@ enum Route {
     Rules,
     Log,
     Usage,
+    Feedback,
     Doctor,
 }
 
@@ -148,6 +149,7 @@ enum Command {
     Rules,
     Log,
     Usage,
+    Feedback,
     Doctor,
     Home,
     Quit,
@@ -163,6 +165,7 @@ impl Command {
         Command::Rules,
         Command::Log,
         Command::Usage,
+        Command::Feedback,
         Command::Doctor,
         Command::Home,
         Command::Quit,
@@ -183,6 +186,7 @@ impl Command {
             Command::Rules => "rules",
             Command::Log => "log",
             Command::Usage => "usage",
+            Command::Feedback => "feedback",
             Command::Doctor => "doctor",
             Command::Home => "home",
             Command::Quit => "quit",
@@ -202,6 +206,7 @@ impl Command {
             Command::Rules => "the ruleset in play: sources and rule provenance",
             Command::Log => "browse completed runs and their results",
             Command::Usage => "spend + token rollup from the run log",
+            Command::Feedback => "capture feedback: an outbound report, or a repo inbox note",
             Command::Doctor => "runtime, environment & tooling check",
             Command::Home => "the launchpad",
             Command::Quit => "leave the cockpit",
@@ -223,6 +228,7 @@ impl Command {
             Command::Rules => app.open_rules(),
             Command::Log => app.open_log(),
             Command::Usage => app.open_usage(),
+            Command::Feedback => app.open_feedback(),
             Command::Doctor => app.open_doctor(),
             Command::Quit => app.should_quit = true,
             // The only remaining variant is a launchable verb. Naming it explicitly (rather than a
@@ -332,6 +338,8 @@ struct App {
     log: Option<LogView>,
     /// The usage view's state (lenses + both analytics pages), loaded when it's opened.
     usage: Option<UsageView>,
+    /// The feedback view's state (both queues + compose), loaded when it's opened.
+    feedback: Option<FeedbackView>,
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
@@ -383,6 +391,7 @@ impl App {
             config: None,
             log: None,
             usage: None,
+            feedback: None,
             cwd_note,
             cwd_display,
             update: None,
@@ -391,6 +400,27 @@ impl App {
             rules: None,
             report_scroll: 0,
         }
+    }
+
+    /// Open the feedback view: both queues loaded fresh — the outbound reports (global) and the cwd
+    /// repo's inbox notes — so what's listed is what's on disk, never assumed from a prior capture.
+    fn open_feedback(&mut self) {
+        self.route = Route::Feedback;
+        let (reports, unparsed) = match crate::commands::feedback::reports_newest_first() {
+            Ok((reports, unparsed)) => (Ok(reports), unparsed),
+            Err(e) => (Err(format!("{e:#}")), 0),
+        };
+        let inbox = crate::commands::feedback::inbox_notes(Path::new(&self.cwd))
+            .unwrap_or_else(|e| vec![("(unreadable)".to_owned(), format!("{e:#}"))]);
+        let info = self.feedback.take().and_then(|v| v.info);
+        self.feedback = Some(FeedbackView {
+            reports,
+            unparsed,
+            inbox,
+            offset: 0,
+            compose: None,
+            info,
+        });
     }
 
     /// Begin launching a verb: show the gate as "preparing" and spawn its dry-run on a worker thread,
@@ -1161,6 +1191,70 @@ fn select_visible(selected: &mut usize, offset: &mut usize, i: usize) {
     }
 }
 
+/// The `feedback` view's state: both queues — the outbound reports (newest first, or the error
+/// reading them, with unparsable lines disclosed) and the cwd repo's inbox notes — plus a scroll
+/// offset over the combined listing, the in-progress compose (if any), and the last capture's
+/// outcome for the info line.
+struct FeedbackView {
+    reports: Result<Vec<Value>, String>,
+    unparsed: usize,
+    inbox: Vec<(String, String)>,
+    offset: usize,
+    compose: Option<Compose>,
+    info: Option<String>,
+}
+
+/// An in-progress feedback compose: which sink it saves to, and the text typed so far. Saving goes
+/// through the same `commands::feedback` functions as the CLI — one write path per sink.
+struct Compose {
+    inbox: bool,
+    text: String,
+}
+
+impl FeedbackView {
+    /// The combined listing as (is-section-header, text) rows — inbox notes first (the operator's
+    /// queue for this repo), then the outbound reports. Built per render; the render window and the
+    /// scroll clamp both derive from it, so they can't disagree on row count.
+    fn rows(&self) -> Vec<(bool, String)> {
+        let mut rows = Vec::new();
+        rows.push((true, format!("inbox — this repo ({})", self.inbox.len())));
+        if self.inbox.is_empty() {
+            rows.push((false, "  (no notes queued)".to_owned()));
+        }
+        for (id, first) in &self.inbox {
+            rows.push((false, format!("  {id}  {first}")));
+        }
+        match &self.reports {
+            Ok(reports) => {
+                rows.push((
+                    true,
+                    format!("outbound — ~/.arc/feedback.jsonl ({})", reports.len()),
+                ));
+                if reports.is_empty() {
+                    rows.push((false, "  (no reports captured)".to_owned()));
+                }
+                let now = crate::log::now_secs();
+                for r in reports {
+                    let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
+                    let age = crate::commands::log::age(now.saturating_sub(ts));
+                    let message = r
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no message)");
+                    let run = r
+                        .get("run")
+                        .and_then(Value::as_str)
+                        .map(|id| format!("  (run {id})"))
+                        .unwrap_or_default();
+                    rows.push((false, format!("  {age:>4}  {message}{run}")));
+                }
+            }
+            Err(e) => rows.push((true, format!("outbound — queue unreadable: {e}"))),
+        }
+        rows
+    }
+}
+
 /// The `log` view's state: the completed-run records (newest first) or the error reading them, the
 /// cursor + scroll offset over the list, and — when drilled in — the selected run's rendered detail.
 struct LogView {
@@ -1693,6 +1787,16 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         handle_config_edit_key(app, key.code);
         return;
     }
+    // An open feedback compose owns the keyboard the same way a config edit does.
+    if app.route == Route::Feedback
+        && app
+            .feedback
+            .as_ref()
+            .is_some_and(|view| view.compose.is_some())
+    {
+        handle_feedback_compose_key(app, key.code);
+        return;
+    }
     if app.palette.is_some() {
         handle_palette_key(app, key.code);
         return;
@@ -1728,7 +1832,87 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         _ if app.route == Route::Config => handle_config_key(app, key.code),
         _ if app.route == Route::Doctor => handle_report_key(app, key.code),
         _ if app.route == Route::Usage => handle_usage_key(app, key.code),
+        _ if app.route == Route::Feedback => handle_feedback_key(app, key.code),
         _ => {}
+    }
+}
+
+/// Keys on the feedback view while browsing: `n` composes an outbound report, `i` an inbox note
+/// (both labeled in the footer), ↑↓/page scroll the combined listing.
+fn handle_feedback_key(app: &mut App, code: KeyCode) {
+    let Some(view) = app.feedback.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Char('n') => {
+            view.compose = Some(Compose {
+                inbox: false,
+                text: String::new(),
+            });
+        }
+        KeyCode::Char('i') => {
+            view.compose = Some(Compose {
+                inbox: true,
+                text: String::new(),
+            });
+        }
+        _ => {
+            if let Some(delta) = scroll_delta(code, LIST_ROWS) {
+                let last = view.rows().len().saturating_sub(1);
+                view.offset = view.offset.saturating_add_signed(delta as isize).min(last);
+            }
+        }
+    }
+}
+
+/// Keys while a feedback compose is open: type the message, Enter captures it through the same
+/// `commands::feedback` write path as the CLI, Esc abandons it. The listing reloads after a save,
+/// so what's shown is re-read from disk, never assumed from the write.
+fn handle_feedback_compose_key(app: &mut App, code: KeyCode) {
+    // The save is staged out of the view borrow (the config edit's pattern): the capture needs
+    // `app.cwd`, and the reload replaces the whole view.
+    let mut save: Option<(bool, String)> = None;
+    {
+        let Some(view) = app.feedback.as_mut() else {
+            return;
+        };
+        let Some(compose) = view.compose.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::Esc => view.compose = None,
+            KeyCode::Backspace => {
+                compose.text.pop();
+            }
+            KeyCode::Enter => {
+                let message = compose.text.trim().to_owned();
+                let inbox = compose.inbox;
+                view.compose = None;
+                if message.is_empty() {
+                    view.info = Some("nothing captured — the message was empty".to_owned());
+                } else {
+                    save = Some((inbox, message));
+                }
+            }
+            KeyCode::Char(c) => compose.text.push(c),
+            _ => {}
+        }
+    }
+    let Some((inbox, message)) = save else { return };
+    let id = crate::log::new_id();
+    let outcome = if inbox {
+        crate::commands::feedback::inbox_note(Path::new(&app.cwd), &id, &message, None)
+            .map(|path| format!("queued for the next session: {}", path.display()))
+    } else {
+        crate::commands::feedback::capture(&id, &message, None)
+            .map(|path| format!("captured: {id} -> {}", path.display()))
+    };
+    let info = Some(outcome.unwrap_or_else(|e| format!("capture failed: {e:#}")));
+    // Reload both queues from disk — what's listed is re-read, never assumed from the write — then
+    // surface this capture's outcome over the carried-forward info.
+    app.open_feedback();
+    if let Some(view) = app.feedback.as_mut() {
+        view.info = info;
     }
 }
 
@@ -1863,6 +2047,13 @@ fn render(frame: &mut Frame, app: &App) {
             app.log
                 .as_ref()
                 .expect("the log view is loaded when its route is active"),
+            body,
+        ),
+        Route::Feedback => render_feedback(
+            frame,
+            app.feedback
+                .as_ref()
+                .expect("the feedback view is loaded when its route is active"),
             body,
         ),
         Route::Usage => {
@@ -2686,6 +2877,57 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
 /// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
 /// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
 /// run reads the same in the cockpit as on the CLI.
+/// Render the feedback view: the combined two-queue listing (windowed by the scroll offset), with
+/// the info line carrying — in priority order — the open compose's input, the last capture's
+/// outcome, or the queues' counts (unparsable outbound lines disclosed, never silently dropped).
+fn render_feedback(frame: &mut Frame, view: &FeedbackView, area: Rect) {
+    let [header, body, info] = Layout::vertical([
+        Constraint::Length(LIST_HEADER_LINES),
+        Constraint::Min(0),
+        Constraint::Length(LIST_INFO_LINES),
+    ])
+    .areas(area);
+
+    frame.render_widget(Line::from("feedback").bold(), header);
+    let rows = view.rows();
+    let end = (view.offset + LIST_ROWS).min(rows.len());
+    let lines: Vec<Line> = rows[view.offset.min(rows.len())..end]
+        .iter()
+        .map(|(is_header, text)| {
+            let line = Line::from(text.clone());
+            if *is_header { line.dim() } else { line }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(Block::bordered()), body);
+
+    let info_line = if let Some(compose) = &view.compose {
+        let sink = if compose.inbox {
+            "inbox note"
+        } else {
+            "report"
+        };
+        Line::from(format!("{sink}> {}▏", compose.text))
+    } else if let Some(outcome) = &view.info {
+        Line::from(outcome.clone()).dim()
+    } else {
+        let unparsed = if view.unparsed > 0 {
+            format!(
+                " · {} unparsable line(s) in the outbound queue",
+                view.unparsed
+            )
+        } else {
+            String::new()
+        };
+        Line::from(format!(
+            "{} note(s) · {} report(s){unparsed}",
+            view.inbox.len(),
+            view.reports.as_ref().map_or(0, Vec::len),
+        ))
+        .dim()
+    };
+    frame.render_widget(info_line, info);
+}
+
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     let [header, body, info] = Layout::vertical([
         Constraint::Length(LIST_HEADER_LINES),
@@ -2823,6 +3065,17 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                 _ => "/ commands · ↑↓ move · enter edit · esc back · q quit",
             },
             Route::Status => "/ commands · esc back · q quit",
+            Route::Feedback => {
+                if app
+                    .feedback
+                    .as_ref()
+                    .is_some_and(|view| view.compose.is_some())
+                {
+                    "type message · enter capture · esc cancel"
+                } else {
+                    "/ commands · n report · i inbox note · ↑↓ scroll · esc back · q quit"
+                }
+            }
             // Like the config/rules arms, the hint tracks the view's mode — and like every render
             // arm, the view's presence on its own route is an invariant, not an option to hedge.
             Route::Usage => {
@@ -3055,6 +3308,7 @@ mod tests {
             config: None,
             log: None,
             usage: None,
+            feedback: None,
             cwd_note: None,
             cwd_display: ".".to_owned(),
             update: None,

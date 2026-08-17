@@ -285,6 +285,18 @@ pub fn now_subsec_nanos() -> u32 {
     since_epoch().subsec_nanos()
 }
 
+/// A fresh capture id, `<secs>-<pid>-<nanos>` — the one id scheme for everything stamped at capture
+/// time (run records, feedback reports), so collision resistance is reasoned about once (see
+/// [`now_subsec_nanos`] on why the nanos).
+pub fn new_id() -> String {
+    format!(
+        "{}-{}-{}",
+        now_secs(),
+        std::process::id(),
+        now_subsec_nanos()
+    )
+}
+
 /// The arclite logs directory, `~/.arc/logs` — the single source the run log and the result store
 /// both build on (`None` only if the home directory can't be determined).
 fn logs_dir() -> Option<PathBuf> {
