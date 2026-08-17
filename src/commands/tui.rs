@@ -416,6 +416,7 @@ impl App {
         self.feedback = Some(FeedbackView {
             reports,
             unparsed,
+            now: crate::log::now_secs(),
             inbox,
             offset: 0,
             compose: None,
@@ -1198,6 +1199,9 @@ fn select_visible(selected: &mut usize, offset: &mut usize, i: usize) {
 struct FeedbackView {
     reports: Result<Vec<Value>, String>,
     unparsed: usize,
+    /// Reference time for the reports' relative ages, captured at load (render is a pure function
+    /// of state — the clock is read on the open path, like the sibling views' `now`).
+    now: u64,
     inbox: Vec<(String, String)>,
     offset: usize,
     compose: Option<Compose>,
@@ -1233,10 +1237,9 @@ impl FeedbackView {
                 if reports.is_empty() {
                     rows.push((false, "  (no reports captured)".to_owned()));
                 }
-                let now = crate::log::now_secs();
                 for r in reports {
                     let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
-                    let age = crate::commands::log::age(now.saturating_sub(ts));
+                    let age = crate::commands::log::age(self.now.saturating_sub(ts));
                     let message = r
                         .get("message")
                         .and_then(Value::as_str)
