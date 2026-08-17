@@ -9,13 +9,13 @@ use crate::output::emit;
 /// arc's own GitHub owner + repo — the single base for every release URL: the git remote (releases are
 /// `v*` tags this check reads via `git ls-remote`), the human Releases page, and the release-asset URL
 /// (`--apply` pulls the per-OS binary). One home so the three can't drift.
-const OWNER: &str = "euhedron";
-const REPO: &str = "arclite";
+pub(crate) const OWNER: &str = "euhedron";
+pub(crate) const REPO: &str = "arclite";
 
 /// The GitHub web/git host and the REST API host — single-sourced alongside OWNER/REPO so the URL
 /// builders below can't drift on scheme or host. The web host serves the human Releases page and the
 /// git remote (the version check); the API host serves the asset lookup + download `--apply` uses.
-const HOST: &str = "https://github.com";
+pub(crate) const HOST: &str = "https://github.com";
 const API_HOST: &str = "https://api.github.com";
 
 /// Env var holding an optional GitHub token `--apply` uses to fetch the binary. A public release needs

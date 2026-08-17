@@ -116,6 +116,10 @@ pub enum Command {
     /// Retire a verify run's `resolved` findings — the system moves them out of the open ledger into
     /// `.arc/findings/resolved/`, the lifecycle's other end (agents invoke arc, never hand-edit `.arc`).
     Retire(RetireArgs),
+    /// Capture feedback: an outbound report queued locally for Euhedron (`--issue` prints a
+    /// prefilled GitHub issue URL), or, with `--inbox`, a note queued in the repo for the next
+    /// session to triage.
+    Feedback(FeedbackArgs),
     /// Generate a shell completion script for `arc` (write it where your shell loads completions).
     Completions(CompletionsArgs),
     // The synthesis verbs are grouped under `run` (`arc run <verb>`): one prompt-differentiated
@@ -156,6 +160,26 @@ pub enum RunVerb {
     Aggregate(SynthArgs),
     #[command(name = NAME_ALIGN, about = VERB_ALIGN)]
     Align(SynthArgs),
+}
+
+/// Arguments for `arc feedback` — one message, two possible sinks (see `commands::feedback`).
+#[derive(Debug, Args)]
+pub struct FeedbackArgs {
+    /// The feedback itself — one message.
+    pub message: String,
+    /// A logged run id this feedback concerns (recorded with the report).
+    #[arg(long, value_name = "RUN_ID")]
+    pub run: Option<String>,
+    /// Queue the message into the repo's `.arc/inbox/` for the next session, instead of the
+    /// outbound queue.
+    #[arg(long)]
+    pub inbox: bool,
+    /// The repository whose inbox receives the note (with --inbox).
+    #[arg(long, value_name = "REPO", default_value = ".", requires = "inbox")]
+    pub path: std::path::PathBuf,
+    /// Also print a prefilled GitHub issue URL for filing the report upstream (outbound only).
+    #[arg(long, conflicts_with = "inbox")]
+    pub issue: bool,
 }
 
 #[derive(Debug, Args)]

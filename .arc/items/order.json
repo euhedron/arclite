@@ -13,7 +13,6 @@
     "gate-round-linkage",
     "context-window-utilization",
     "tui-init",
-    "feedback-command",
     "release-notes-view",
     "verbs-as-configurations",
     "release-verification",

@@ -1912,14 +1912,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // the terminal scrollback. A logging failure warns but never fails the command.
     let (logged, id) = if opts.log {
         let ts = crate::log::now_secs();
-        // `<secs>-<pid>-<nanos>`: the trailing nanos guard against a collision when two runs share a
-        // second and a pid (a reused pid across concurrent sessions on the shared `~/.arc`), which would
-        // otherwise overwrite one run's stored result with another's.
-        let id = format!(
-            "{ts}-{}-{}",
-            std::process::id(),
-            crate::log::now_subsec_nanos()
-        );
+        let id = crate::log::new_id();
         let record = RunRecord {
             id: id.clone(),
             ts,

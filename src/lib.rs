@@ -322,6 +322,9 @@ pub fn run() -> ExitCode {
         Command::Retire(args) => {
             commands::retire::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        Command::Feedback(args) => {
+            commands::feedback::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
+        }
         // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
         // it (an explicit option silently dropped is worse than a silent default).
         Command::Completions(_) if cli.global.json => Err(anyhow::anyhow!(
