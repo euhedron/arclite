@@ -1,9 +1,9 @@
 name: Release
 
 # On a version tag (`git tag v0.1.5 && git push --tags`), build the per-OS binaries and publish them as
-# GitHub Release assets. Each Rust target builds on an available runner: Linux and Windows native, and
-# BOTH macOS arches on the Apple-Silicon runner (aarch64 native, x86_64 cross-compiled — one macOS SDK
-# builds both). We deliberately avoid a separate Intel-macOS (`macos-13`) runner: in the v0.1.4 release
+# GitHub Release assets. Each Rust target builds on an available runner: Linux (x86_64 and, on the
+# arm hosted runner, aarch64) and Windows native, and BOTH macOS arches on the Apple-Silicon runner
+# (aarch64 native, x86_64 cross-compiled — one macOS SDK builds both). We deliberately avoid a separate Intel-macOS (`macos-13`) runner: in the v0.1.4 release
 # that job never obtained a runner and GitHub auto-cancelled it at the documented 24h queue limit, while
 # every other job started within seconds. Asset names must be exactly what `arc update --apply` fetches
 # — the convention lives in update.rs::asset_name, and the
@@ -86,6 +86,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin: arc
             asset: arc-${{ github.ref_name }}-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bin: arc
+            asset: arc-${{ github.ref_name }}-linux-aarch64
           - os: macos-latest
             target: aarch64-apple-darwin
             bin: arc
@@ -126,8 +130,28 @@ jobs:
           gh release upload "$TAG" "$ASSET"
           --repo "$REPO" --clobber
 
-  publish-release:
+  # SHA256SUMS covering every uploaded binary, attached while the release is still a mutable
+  # draft (assets freeze at publish). Same-channel checksums: corruption/tamper-in-transit defense
+  # for the install scripts and the tap bump below — not an independent trust root (that deeper
+  # edge — out-of-band signing — stays with the release-verification item).
+  checksums:
     needs: [create-release, upload]
+    if: needs.create-release.outputs.already_published != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach SHA256SUMS over the uploaded assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir sums && cd sums
+          gh release download "$TAG" --repo "$REPO" --pattern 'arc-*'
+          sha256sum arc-* > SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "$REPO" --clobber
+
+  publish-release:
+    needs: [create-release, upload, checksums]
     if: needs.create-release.outputs.already_published != 'true' && success()
     runs-on: ubuntu-latest
     steps:
@@ -137,3 +161,35 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release edit "$TAG" --repo "$REPO" --draft=false
+
+  # Bump the Homebrew tap (euhedron/homebrew-arc) to the just-published release. The cross-repo
+  # push needs a fine-grained PAT with contents:write on the tap repo, stored as the
+  # TAP_GITHUB_TOKEN secret (set out-of-band; its value never appears in output or argv — it rides
+  # a GIT_CONFIG_* env var, not the remote URL). Without the secret this skips with a notice: the
+  # release is complete either way, and the tap can be bumped by hand via its ./bump.sh.
+  tap:
+    needs: [create-release, publish-release]
+    if: needs.create-release.outputs.already_published != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bump euhedron/homebrew-arc (skips without TAP_GITHUB_TOKEN)
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN is not set — skipping the Homebrew tap bump (run homebrew-arc's ./bump.sh by hand)"
+            exit 0
+          fi
+          curl -fsSL -o SHA256SUMS "https://github.com/$REPO/releases/download/$TAG/SHA256SUMS"
+          sum() { awk -v name="arc-$TAG-$1" '$2 == name { print $1 }' SHA256SUMS; }
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          git clone --depth 1 https://github.com/euhedron/homebrew-arc.git tap
+          cd tap
+          ./bump.sh "$TAG" "$(sum macos-aarch64)" "$(sum macos-x86_64)" "$(sum linux-x86_64)" "$(sum linux-aarch64)"
+          git -c user.name="arc release workflow" -c user.email="noreply@euhedron.com" commit -am "arc $TAG"
+          git push origin HEAD:main
