@@ -1,0 +1,210 @@
+name: Verify release
+
+# Post-release smoke on machines that aren't ours: after a release publishes (or on manual
+# dispatch against any tag), fresh per-OS runners exercise every distribution channel — the raw
+# binaries (checksum-verified, `--version`/`doctor`/`init`/`rules`), the install scripts, the
+# Homebrew tap, and the `arc update --apply` path from the previous release — so a broken asset or
+# channel is caught by ephemeral clean machines instead of a user.
+#
+# Assertions are tag-strict where the channel is tag-addressable (asset downloads, install.sh's
+# version pin) and runs-strict where the channel serves only the latest (install.ps1, the tap —
+# whose bump also races this workflow on a fresh publish): those channels assert a working install
+# and log what version arrived rather than demanding equality that timing can break.
+#
+# Context values reach `run:` scripts as environment variables, never inline `${{ }}` interpolation
+# (release.yml's convention): a tag is repo-controlled input, inert as quoted data.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify (e.g. v0.1.12)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Each published binary, on its native runner (macOS x86_64 rides Rosetta on the arm runner —
+  # the same tradeoff release.yml makes to avoid the unschedulable Intel-macOS runner).
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+          - os: ubuntu-24.04-arm
+            suffix: linux-aarch64
+          - os: macos-latest
+            suffix: macos-aarch64
+          - os: macos-latest
+            suffix: macos-x86_64
+          - os: windows-latest
+            suffix: windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      SUFFIX: ${{ matrix.suffix }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Validate the tag shape (it rides into paths and URLs)
+        run: |
+          case "$TAG" in
+          *[!A-Za-z0-9._-]* | "")
+            echo "tag '$TAG' is not a single safe path segment" >&2
+            exit 1
+            ;;
+          esac
+      - name: Download the asset + SHA256SUMS and verify the checksum
+        run: |
+          gh release download "$TAG" --repo "$REPO" --pattern "arc-$TAG-$SUFFIX" --pattern SHA256SUMS
+          want=$(awk -v name="arc-$TAG-$SUFFIX" '$2 == name { print $1 }' SHA256SUMS)
+          if command -v sha256sum >/dev/null 2>&1; then
+            got=$(sha256sum "arc-$TAG-$SUFFIX" | awk '{print $1}')
+          else
+            got=$(shasum -a 256 "arc-$TAG-$SUFFIX" | awk '{print $1}')
+          fi
+          [ -n "$want" ] && [ "$want" = "$got" ] || {
+            echo "checksum mismatch for arc-$TAG-$SUFFIX (want '$want', got '$got')" >&2
+            exit 1
+          }
+      - name: Exercise --version, doctor, init, rules on a clean machine
+        run: |
+          case "$SUFFIX" in
+          *.exe) bin=arc.exe ;;
+          *) bin=arc ;;
+          esac
+          mv "arc-$TAG-$SUFFIX" "$bin"
+          chmod +x "$bin" 2>/dev/null || true
+          v=$("./$bin" --version)
+          echo "$v"
+          case "$v" in
+          "arc ${TAG#v}"*) ;;
+          *)
+            echo "--version reports '$v', expected 'arc ${TAG#v}…' — the asset does not match its release" >&2
+            exit 1
+            ;;
+          esac
+          "./$bin" doctor
+          mkdir scratch && cd scratch && git init -q .
+          "../$bin" init .
+          "../$bin" rules | head -20
+          test -e .arc
+
+  # The POSIX install script, pinned to the tag under verification — exercises the latest-tag
+  # resolution path separately by installing unpinned into a second prefix.
+  install-script:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.sh pinned to the tag, then unpinned latest
+        run: |
+          ARC_INSTALL_DIR="$RUNNER_TEMP/pinned" sh install.sh "$TAG"
+          v=$("$RUNNER_TEMP/pinned/arc" --version)
+          case "$v" in
+          "arc ${TAG#v}"*) ;;
+          *)
+            echo "pinned install reports '$v', expected 'arc ${TAG#v}…'" >&2
+            exit 1
+            ;;
+          esac
+          ARC_INSTALL_DIR="$RUNNER_TEMP/latest" sh install.sh
+          "$RUNNER_TEMP/latest/arc" --version
+
+  # The PowerShell install script (serves the latest release only — no version pin yet, so this
+  # asserts a working install and logs what arrived).
+  install-ps1:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.ps1
+        shell: pwsh
+        run: |
+          ./install.ps1
+          & "$env:LOCALAPPDATA\Programs\arc\arc.exe" --version
+
+  # The Homebrew tap, macOS + Linux (Linux runners no longer ship Homebrew — installed here). The
+  # tap serves its current formula, which a fresh publish's bump may still be racing.
+  brew:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install Homebrew (Linux runners only)
+        if: runner.os == 'Linux'
+        run: |
+          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      - name: brew install euhedron/arc/arc
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          fi
+          brew install euhedron/arc/arc
+          arc --version
+          arc doctor
+
+  # `arc update --apply` from the previous release's binary — the path an existing user's machine
+  # takes. It lands on the *latest* release (update's contract), asserted as such; skips with a
+  # notice when no previous release exists.
+  update-path:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+          - os: macos-latest
+            suffix: macos-aarch64
+          - os: windows-latest
+            suffix: windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      SUFFIX: ${{ matrix.suffix }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Self-update from the previous release to the latest
+        run: |
+          prev=$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | awk -v tag="$TAG" 'found { print; exit } $0 == tag { found = 1 }')
+          if [ -z "$prev" ]; then
+            echo "no release precedes $TAG — nothing to update from, skipping"
+            exit 0
+          fi
+          latest=$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[0].tagName')
+          echo "updating from $prev (expecting to land on $latest)"
+          case "$SUFFIX" in
+          *.exe) bin=arc.exe ;;
+          *) bin=arc ;;
+          esac
+          gh release download "$prev" --repo "$REPO" --pattern "arc-$prev-$SUFFIX"
+          mv "arc-$prev-$SUFFIX" "$bin"
+          chmod +x "$bin" 2>/dev/null || true
+          "./$bin" update
+          "./$bin" update --apply
+          v=$("./$bin" --version)
+          echo "$v"
+          case "$v" in
+          "arc ${latest#v}"*) ;;
+          *)
+            echo "after --apply, --version reports '$v', expected 'arc ${latest#v}…'" >&2
+            exit 1
+            ;;
+          esac
