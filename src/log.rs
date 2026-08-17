@@ -325,12 +325,16 @@ pub fn record_lines(text: &str) -> impl Iterator<Item = &str> + '_ {
     text.lines().filter(|l| !l.trim().is_empty())
 }
 
-/// All run records, in log (oldest-first) order, plus how many lines didn't parse — surfaced, never
-/// dropped. The one loader `arc log` and `arc usage` share; an absent log is just zero records.
-pub fn records() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
-    let path = path().context("cannot determine the run-log path")?;
-    let text = crate::read_optional(&path)
-        .with_context(|| format!("cannot read the run log {}", path.display()))?
+/// All records of the JSONL file at `path`, oldest-first, plus how many lines didn't parse —
+/// surfaced, never dropped; an absent file is just zero records. The one JSONL reader: the run log
+/// and the feedback queue both delegate here, so "what counts as a parseable record" has a single
+/// home.
+pub fn jsonl_records(
+    path: &std::path::Path,
+    what: &str,
+) -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
+    let text = crate::read_optional(path)
+        .with_context(|| format!("cannot read {what} {}", path.display()))?
         .unwrap_or_default();
     let mut records = Vec::new();
     let mut unparsed = 0usize;
@@ -340,6 +344,14 @@ pub fn records() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
             Err(_) => unparsed += 1,
         }
     }
+    Ok((records, unparsed))
+}
+
+/// All run records, in log (oldest-first) order, plus how many lines didn't parse. The loader
+/// `arc log` and `arc usage` share.
+pub fn records() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
+    let path = path().context("cannot determine the run-log path")?;
+    let (records, unparsed) = jsonl_records(&path, "the run log")?;
     Ok((records, unparsed))
 }
 

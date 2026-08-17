@@ -188,30 +188,12 @@ fn percent_encode(s: &str) -> String {
 }
 
 /// The outbound queue's records (newest first) plus the count of unparsable lines — disclosed,
-/// never silently dropped (the run log's reader contract). An absent queue is an empty one.
+/// never silently dropped. Delegates to the one JSONL reader ([`crate::log::jsonl_records`]), so
+/// this queue and the run log can't drift on what counts as a record; an absent queue is empty.
 pub(crate) fn reports_newest_first() -> anyhow::Result<(Vec<serde_json::Value>, usize)> {
-    let Some(path) = queue_path() else {
-        anyhow::bail!("cannot determine the home directory for the feedback queue");
-    };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
-        Err(e) => {
-            return Err(anyhow::Error::new(e)
-                .context(format!("reading the feedback queue at {}", path.display())));
-        }
-    };
-    let mut reports = Vec::new();
-    let mut unparsed = 0;
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<serde_json::Value>(line) {
-            Ok(v) => reports.push(v),
-            Err(_) => unparsed += 1,
-        }
-    }
+    let path =
+        queue_path().context("cannot determine the home directory for the feedback queue")?;
+    let (mut reports, unparsed) = crate::log::jsonl_records(&path, "the feedback queue")?;
     reports.reverse();
     Ok((reports, unparsed))
 }
