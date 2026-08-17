@@ -40,16 +40,35 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let current = current_version();
     let latest = latest_version()?;
     let available = latest > current;
+    // A package manager that owns this binary also owns its upgrades: self-replacing a Homebrew
+    // keg forks the file from brew's records (the next `brew upgrade` clobbers it, and `brew list`
+    // reports a version the binary no longer is). The check still reports on every channel;
+    // --apply defers to the owning manager with the exact command instead of racing it.
+    let brew = std::env::current_exe()
+        .ok()
+        .is_some_and(|exe| homebrew_managed(&exe));
     if args.apply {
+        anyhow::ensure!(
+            !brew,
+            "this arc is Homebrew-managed — update it with `{BREW_UPGRADE}` (a self-replaced keg would be clobbered by the next brew upgrade)"
+        );
         return apply(current, latest, available, args.force, global);
     }
     let human = if available {
-        format!(
-            "arc {} is out of date — {} is the latest release.\nInstall it with `arc update --apply`, or download manually from {}",
-            version_string(current),
-            version_string(latest),
-            releases_page(),
-        )
+        if brew {
+            format!(
+                "arc {} is out of date — {} is the latest release.\nThis install is Homebrew-managed: update it with `{BREW_UPGRADE}`.",
+                version_string(current),
+                version_string(latest),
+            )
+        } else {
+            format!(
+                "arc {} is out of date — {} is the latest release.\nInstall it with `arc update --apply`, or download manually from {}",
+                version_string(current),
+                version_string(latest),
+                releases_page(),
+            )
+        }
     } else {
         format!(
             "arc {} is up to date (latest release: {}).",
@@ -61,8 +80,23 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "current": version_string(current),
         "latest": version_string(latest),
         "update_available": available,
+        "homebrew_managed": brew,
     });
     emit(&payload, &human, global.json)
+}
+
+/// The upgrade command for a Homebrew-managed install — tap-qualified, so it resolves whether or
+/// not the user's shorthand would.
+const BREW_UPGRADE: &str = "brew upgrade euhedron/arc/arc";
+
+/// Whether `exe` is a Homebrew-owned install: resolved through the `$(brew --prefix)/bin` symlink,
+/// a keg path contains `/Cellar/` (the macOS prefixes) or `/.linuxbrew/` (Linuxbrew). Path-shape
+/// detection, not a `brew` invocation — the binary's own location is the fact, and it holds even
+/// where `brew` isn't on `PATH`.
+fn homebrew_managed(exe: &Path) -> bool {
+    let canonical = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    let path = canonical.to_string_lossy();
+    path.contains("/Cellar/") || path.contains("/.linuxbrew/")
 }
 
 /// Download the target release's binary and install it over the running one. With no newer release,
@@ -537,6 +571,7 @@ mod tests {
         // reports on that platform, which binary_name uses at run time.
         let platform = |target: &str| match target {
             "x86_64-unknown-linux-gnu" => ("linux", "x86_64", ""),
+            "aarch64-unknown-linux-gnu" => ("linux", "aarch64", ""),
             "aarch64-apple-darwin" => ("macos", "aarch64", ""),
             "x86_64-apple-darwin" => ("macos", "x86_64", ""),
             "x86_64-pc-windows-msvc" => ("windows", "x86_64", ".exe"),
@@ -545,7 +580,7 @@ mod tests {
         let tag = "${{ github.ref_name }}"; // as the workflow interpolates it into `asset`
         assert_eq!(
             rows.len(),
-            4,
+            5,
             "a platform was added or removed — update this test's mapping"
         );
         for row in rows {

@@ -167,6 +167,8 @@ pub struct StatusArgs {}
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Download the newer release and install it over the running binary (default: only report).
+    /// A Homebrew-managed install is detected and pointed at `brew upgrade` instead — the keg
+    /// belongs to brew.
     #[arg(long)]
     pub apply: bool,
     /// With --apply, reinstall even when already up to date (repair, or re-pull the current build).
