@@ -16,6 +16,15 @@ use std::process::{Command, Stdio};
 
 use anyhow::Context;
 
+/// Times curl re-attempts a transiently-failed GET — timeouts and HTTP 408/429/5xx, with curl's
+/// own exponential backoff. Every GET this module serves is idempotent, so the retry is stated
+/// once here; two attempts cover the single-gateway-hiccup case without stretching a real outage
+/// into minutes (a lone GitHub 504 failed a release-verification `update --apply` mid-flight,
+/// 2026-08-17 — the motivating catch). Verified locally (curl 8.7.1, same date): with `--fail`, a
+/// 503-then-200 sequence exits 0 and `--output` holds only the final body, no failed-attempt
+/// residue.
+const TRANSIENT_RETRIES: &str = "2";
+
 /// `GET url`, returning the response body. `plain` headers go on argv; `secret` header values go via
 /// stdin config directives. `follow_redirects` is the module-doc contract: on for an
 /// Authorization-credentialed endpoint whose designed flow is a redirect, off — fail closed — for a
@@ -45,12 +54,7 @@ pub(crate) fn get(
     // writing there directly would corrupt the display.
     cmd.arg("-q")
         .args(["--fail", "--silent", "--show-error"])
-        // Every GET this module serves is idempotent, so transient-failure retry is stated once
-        // here: curl re-attempts timeouts and HTTP 408/429/5xx with its own exponential backoff (a
-        // real GitHub 504 failed a release-verification `update --apply` mid-flight, 2026-08-17).
-        // Verified locally (curl 8.7.1, that date): with --fail, a 503-then-200 sequence exits 0
-        // and --output holds only the final body — no failed-attempt residue.
-        .args(["--retry", "2"])
+        .args(["--retry", TRANSIENT_RETRIES])
         .args(["--user-agent", "arclite"])
         .arg(url)
         .stdout(Stdio::piped())
