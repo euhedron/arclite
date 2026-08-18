@@ -1,6 +1,6 @@
 {
   "order": [
-    "github-check-gate",
+    "release-verification",
     "ruleset-discoverability",
     "onboarding-stranger-test",
     "tui-key-model",
@@ -13,9 +13,9 @@
     "gate-round-linkage",
     "context-window-utilization",
     "tui-init",
+    "github-check-gate",
     "release-notes-view",
     "verbs-as-configurations",
-    "release-verification",
     "direct-api-backend",
     "repo-search",
     "lexicon",
