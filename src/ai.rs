@@ -828,11 +828,11 @@ pub struct ModelListing {
 }
 
 /// Each provider's key env var and saved-setting key — one home per name, shared by the listing
-/// fetch, the doctor status, and the no-key hint, so the three can't drift.
+/// fetch, the doctor status, the no-key hint, and the `config` settings table, so none can drift.
 const ANTHROPIC_KEY_ENV: &str = "ANTHROPIC_API_KEY";
-const ANTHROPIC_KEY_SETTING: &str = "api_keys.anthropic";
+pub(crate) const ANTHROPIC_KEY_SETTING: &str = "api_keys.anthropic";
 const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
-const OPENAI_KEY_SETTING: &str = "api_keys.openai";
+pub(crate) const OPENAI_KEY_SETTING: &str = "api_keys.openai";
 
 /// Resolve a provider API key: the standard env var wins (a session override), else the saved
 /// user-layer setting. `Some((key, source))` discloses where it came from; `None` = no key — the

@@ -150,7 +150,7 @@ const SETTINGS: &[Setting] = &[
     // The api_keys rows: user-layer only (`set_value` elevates + the loader rejects a project-layer
     // key) and masked — list/get/the TUI show presence, never the secret. An empty value unsets.
     Setting {
-        key: "api_keys.anthropic",
+        key: crate::ai::ANTHROPIC_KEY_SETTING,
         read: |s| {
             s.api_key_anthropic
                 .as_ref()
@@ -160,7 +160,7 @@ const SETTINGS: &[Setting] = &[
         space: open_space,
     },
     Setting {
-        key: "api_keys.openai",
+        key: crate::ai::OPENAI_KEY_SETTING,
         read: |s| {
             s.api_key_openai
                 .as_ref()
