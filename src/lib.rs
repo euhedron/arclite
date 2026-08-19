@@ -64,6 +64,12 @@ pub(crate) fn items_order_path(repo_root: &std::path::Path) -> std::path::PathBu
     repo_root.join(ARC_DIR).join(ITEMS_DIR).join("order.json")
 }
 
+/// The resolved-items ledger (`.arc/items/resolved/`) — an item's file moves here with a
+/// resolution note appended, so the trail stays surfaceable (the findings ledger's pattern).
+pub(crate) fn items_resolved_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join(ITEMS_DIR).join(RESOLVED_DIR)
+}
+
 /// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
 /// the real write in both `promote` and `retire`, so the entry-name convention has a single home.
 pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
@@ -325,6 +331,7 @@ pub fn run() -> ExitCode {
         Command::Feedback(args) => {
             commands::feedback::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
+        Command::Items(args) => commands::items::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
         // it (an explicit option silently dropped is worse than a silent default).
         Command::Completions(_) if cli.global.json => Err(anyhow::anyhow!(

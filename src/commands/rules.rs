@@ -82,6 +82,12 @@ pub(crate) fn resolved(
 
 /// The `rules` command — beyond the rules themselves, it also surfaces disabled rules, skipped
 /// sources, and the settings layers in effect.
+/// Shown when a selection resolves to zero rules — discovery of what ships, at the moment it's
+/// needed (CLI and TUI surface the same line, single-sourced here). Worded to stay true in every
+/// empty case: a project ruleset can override `default`, so `--ruleset default` is qualified, and
+/// the `builtin` source is the always-true escape hatch.
+pub(crate) const BUILTIN_HINT: &str = "no rules resolved from this selection — the built-in rules still ship in the binary: `--ruleset default` selects them (unless a project ruleset overrides `default`), and the `builtin` source composes them into any ruleset";
+
 pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     let report = resolved(&args.path, args.rules.as_deref(), args.ruleset.as_deref())?;
 
@@ -109,6 +115,11 @@ pub fn run(args: &RulesArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         } else {
             lines.push(format!("  {} ← {}", r.id, r.source));
         }
+    }
+    // An empty resolution is a dead end exactly when a stranger most needs discovery, so name what
+    // ships: the built-in rules are always available even when this selection came up empty.
+    if report.rules.is_empty() {
+        lines.push(BUILTIN_HINT.to_owned());
     }
     if !report.disabled_unmatched.is_empty() {
         lines.push(format!(

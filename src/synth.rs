@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::Context as _;
 use serde::Serialize;
 
 use crate::ai;
@@ -488,65 +487,17 @@ fn gather_rules(
 /// stated and yields an empty block — a judged-empty subject, not an error. A *malformed* order
 /// file is a hard error, like any explicitly-present structured source.
 fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<String> {
-    let items = load_ledger_dir(&crate::items_open_dir(root), "items")?;
-    let order_path = crate::items_order_path(root);
-    let order: Option<Vec<String>> = match crate::read_optional(&order_path)
-        .with_context(|| format!("cannot read {}", order_path.display()))?
-    {
-        Some(text) => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Order {
-                order: Vec<String>,
-            }
-            let parsed: Order = serde_json::from_str(&text)
-                .with_context(|| format!("invalid order file {}", order_path.display()))?;
-            Some(parsed.order)
-        }
-        None => None,
-    };
+    // The shared agenda loader (`commands::items::load`) — one home for the ledger read, the order
+    // parse (malformed = hard error), and the integrity verdicts, so the run's context, `arc
+    // items`, and the TUI's items view can't drift on any of them.
+    let agenda = crate::commands::items::load(root)?;
+    let items = &agenda.items;
+    let order = &agenda.order;
+    let (unlisted, dangling, duplicated) = (&agenda.unlisted, &agenda.dangling, &agenda.duplicated);
     if items.is_empty() && order.is_none() {
         sources.push("items: none (.arc/items/open absent or empty)".to_owned());
         return Ok(String::new());
     }
-    // Order integrity, computed once here so the run's context, its sources line, and any later
-    // consumer all see the same verdicts.
-    let ids: std::collections::BTreeSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
-    let mut listed: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    let mut dangling: Vec<&str> = Vec::new();
-    let mut duplicated: Vec<&str> = Vec::new();
-    for id in order.iter().flatten() {
-        if !listed.insert(id.as_str()) {
-            duplicated.push(id);
-        }
-        if !ids.contains(id.as_str()) {
-            dangling.push(id);
-        }
-    }
-    let unlisted: Vec<&str> = items
-        .iter()
-        .map(|i| i.id.as_str())
-        .filter(|id| !listed.contains(id))
-        .collect();
-    let integrity = match &order {
-        None => "no order file".to_owned(),
-        Some(_) if unlisted.is_empty() && dangling.is_empty() && duplicated.is_empty() => {
-            "order: complete".to_owned()
-        }
-        Some(_) => {
-            let mut parts = Vec::new();
-            if !unlisted.is_empty() {
-                parts.push(format!("{} open item(s) unlisted", unlisted.len()));
-            }
-            if !dangling.is_empty() {
-                parts.push(format!("{} id(s) resolve to no item", dangling.len()));
-            }
-            if !duplicated.is_empty() {
-                parts.push(format!("{} duplicated id(s)", duplicated.len()));
-            }
-            format!("order: {}", parts.join(", "))
-        }
-    };
     sources.push(format!(
         "items ({}): {} · {}",
         items.len(),
@@ -555,7 +506,7 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
             .map(|i| i.id.as_str())
             .collect::<Vec<_>>()
             .join(", "),
-        integrity
+        agenda.integrity()
     ));
     let mut block = String::from("\nTracked items (the open agenda — the subject to audit):\n");
     match &order {
@@ -575,7 +526,7 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
         }
         None => block.push_str("\nNo order file (.arc/items/order.json is absent).\n"),
     }
-    for item in &items {
+    for item in items {
         block.push_str(&format!("\n## {}\n{}\n", item.id, item.body));
     }
     Ok(block)
@@ -584,8 +535,9 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
 /// Load a `.md` ledger directory (the findings ledger, the items agenda): absent = a legitimate
 /// empty ledger; a *present non-directory* squatting on the path = damage, reported as unreadable
 /// rather than read as empty — a run must not quietly proceed as though the repo recorded nothing.
-/// One home for the absence/damage distinction, so the ledgers can't drift in how they draw it.
-fn load_ledger_dir(dir: &Path, what: &str) -> anyhow::Result<Vec<crate::rules::Rule>> {
+/// One home for the absence/damage distinction, so the ledgers can't drift in how they draw it
+/// (`commands::items::load` reads the agenda through here too).
+pub(crate) fn load_ledger_dir(dir: &Path, what: &str) -> anyhow::Result<Vec<crate::rules::Rule>> {
     let access = |e: std::io::Error| anyhow::anyhow!("cannot access {}: {e}", dir.display());
     if crate::try_is_dir(dir).map_err(access)? {
         crate::rules::load(dir)
