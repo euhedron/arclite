@@ -1477,9 +1477,23 @@ impl Drop for CodexTemp {
     }
 }
 
+/// The codex permission profile arc configures for a synthesis run — the name `default_permissions`
+/// selects, and the prefix every `permissions.<profile>.*` rule must carry. The rules below derive
+/// it, so a rename can't leave filesystem/network rules scoping a profile that is no longer the
+/// selected one (which would silently un-scope the isolation).
 const CODEX_ARCLITE_PERMISSION_PROFILE: &str = "arclite";
-const CODEX_ARCLITE_FILESYSTEM: &str =
-    "permissions.arclite.filesystem={\":minimal\"=\"read\",\":workspace_roots\"={\".\"=\"read\"}}";
+
+/// The profile's filesystem rule: only codex's minimal runtime plus the selected workspace root.
+fn codex_filesystem_rule() -> String {
+    format!(
+        "permissions.{CODEX_ARCLITE_PERMISSION_PROFILE}.filesystem={{\":minimal\"=\"read\",\":workspace_roots\"={{\".\"=\"read\"}}}}"
+    )
+}
+
+/// The profile's network rule: none.
+fn codex_network_rule() -> String {
+    format!("permissions.{CODEX_ARCLITE_PERMISSION_PROFILE}.network.enabled=false")
+}
 
 /// Build the complete Codex invocation without spawning it. Its permission profile is intentionally
 /// narrower than `--sandbox read-only`: read-only prevents writes but can still read broadly, while
@@ -1509,9 +1523,9 @@ fn codex_command(
             "default_permissions=\"{CODEX_ARCLITE_PERMISSION_PROFILE}\""
         ))
         .arg("-c")
-        .arg(CODEX_ARCLITE_FILESYSTEM)
+        .arg(codex_filesystem_rule())
         .arg("-c")
-        .arg("permissions.arclite.network.enabled=false")
+        .arg(codex_network_rule())
         .arg("-c")
         .arg("web_search=\"disabled\"")
         .arg("-c")
@@ -1845,8 +1859,12 @@ mod tests {
         assert!(args.iter().any(|a| a == "--ephemeral"));
         assert!(!args.iter().any(|a| a == "--sandbox"));
         assert!(has_pair(&args, "--cd", "fresh-run"));
+        // The literal argv strings, restated independently of the constants/derivations that build
+        // them — so a drifted profile name or rule shape fails here instead of passing tautologically.
         assert!(args.iter().any(|a| a == "default_permissions=\"arclite\""));
-        assert!(args.iter().any(|a| a == CODEX_ARCLITE_FILESYSTEM));
+        assert!(args.iter().any(
+            |a| a == "permissions.arclite.filesystem={\":minimal\"=\"read\",\":workspace_roots\"={\".\"=\"read\"}}"
+        ));
         assert!(
             args.iter()
                 .any(|a| a == "permissions.arclite.network.enabled=false")
