@@ -27,7 +27,18 @@ pub(crate) struct Agenda {
     pub resolved: usize,
 }
 
+/// Shown when a repo has no agenda at all — single-sourced for the CLI and the TUI's items view,
+/// and shown only on [`Agenda::is_absent`] (the predicate the wording states).
+pub(crate) const NO_AGENDA: &str =
+    "no agenda: .arc/items/open is absent or empty, and there is no order file";
+
 impl Agenda {
+    /// Whether there is no agenda at all — no open items and no order file. (An empty order file
+    /// is an agenda: apparatus deliberately present, shown as empty rather than as absence.)
+    pub fn is_absent(&self) -> bool {
+        self.items.is_empty() && self.order.is_none()
+    }
+
     /// The one-line integrity verdict every surface shows — sources lines, `arc items`, the TUI.
     pub fn integrity(&self) -> String {
         match &self.order {
@@ -161,10 +172,8 @@ pub fn run(args: &ItemsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         };
         lines.push(format!("{:>3}. {id}{marker}", i + 1));
     }
-    if agenda.items.is_empty() && agenda.order.is_none() {
-        lines.push(
-            "no agenda: .arc/items/open is absent or empty, and there is no order file".to_owned(),
-        );
+    if agenda.is_absent() {
+        lines.push(NO_AGENDA.to_owned());
     }
     let payload = serde_json::json!({
         "open": agenda.items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),

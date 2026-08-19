@@ -3052,13 +3052,14 @@ fn render_items(frame: &mut Frame, view: &ItemsView, area: Rect) {
 
     frame.render_widget(Line::from("items · the open agenda").bold(), header);
     if view.ids.is_empty() {
-        frame.render_widget(
-            Paragraph::new(
-                "no agenda: .arc/items/open is absent or empty, and there is no order file",
-            )
-            .block(Block::bordered()),
-            body,
-        );
+        // Absence and emptiness are different truths: no apparatus at all (the shared NO_AGENDA
+        // wording, on the predicate it states) vs. an order file deliberately present but empty.
+        let message = if agenda.is_absent() {
+            crate::commands::items::NO_AGENDA
+        } else {
+            "no open items (the order file is present but lists nothing)"
+        };
+        frame.render_widget(Paragraph::new(message).block(Block::bordered()), body);
     } else {
         let end = (view.offset + LIST_ROWS).min(view.ids.len());
         let rows: Vec<Line> = view.ids[view.offset..end]
