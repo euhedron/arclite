@@ -15,7 +15,8 @@ fn runs_help() -> String {
 /// on status. The gate code is formatted in from its one definition, [`crate::synth::GATE_BLOCKED_EXIT`].
 fn exit_codes_help() -> String {
     format!(
-        "Exit codes:\n  0  success\n  1  error\n  {}  blocked — an opt-in --fail-on-findings gate found findings",
+        "Exit codes:\n  0  success\n  {}  error\n  {}  blocked — an opt-in --fail-on-findings gate found findings",
+        crate::synth::ERRORED_EXIT,
         crate::synth::GATE_BLOCKED_EXIT
     )
 }
