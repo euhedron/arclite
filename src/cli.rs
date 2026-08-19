@@ -100,6 +100,9 @@ pub enum Command {
     Tui(TuiArgs),
     /// List the rules in play: the active ruleset, its sources, and each rule's provenance.
     Rules(RulesArgs),
+    /// List the tracked items — the open agenda in its intended order, integrity disclosed — or
+    /// show one item in full with `--id`.
+    Items(ItemsArgs),
     /// List the models each backend's provider API reports available (needs an API key: the
     /// provider's standard env var, or a saved user-layer `api_keys.*` setting).
     Models(ModelsArgs),
@@ -160,6 +163,17 @@ pub enum RunVerb {
     Aggregate(SynthArgs),
     #[command(name = NAME_ALIGN, about = VERB_ALIGN)]
     Align(SynthArgs),
+}
+
+/// Arguments for `arc items` — the agenda's read surface (see `commands::items`).
+#[derive(Debug, Args)]
+pub struct ItemsArgs {
+    /// Path to the repository whose agenda to read (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// A single item id to show in full — an open item, or a resolved one (its trail).
+    #[arg(long, value_name = "ID")]
+    pub id: Option<String>,
 }
 
 /// Arguments for `arc feedback` — one message, two possible sinks (see `commands::feedback`).

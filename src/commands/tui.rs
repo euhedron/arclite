@@ -128,6 +128,7 @@ enum Route {
     Status,
     Config,
     Rules,
+    Items,
     Log,
     Usage,
     Feedback,
@@ -150,6 +151,7 @@ enum Command {
     Log,
     Usage,
     Feedback,
+    Items,
     Doctor,
     Home,
     Quit,
@@ -163,6 +165,7 @@ impl Command {
         Command::Status,
         Command::Config,
         Command::Rules,
+        Command::Items,
         Command::Log,
         Command::Usage,
         Command::Feedback,
@@ -184,6 +187,7 @@ impl Command {
             Command::Status => "status",
             Command::Config => "config",
             Command::Rules => "rules",
+            Command::Items => "items",
             Command::Log => "log",
             Command::Usage => "usage",
             Command::Feedback => "feedback",
@@ -204,6 +208,7 @@ impl Command {
             Command::Status => "live view of in-flight runs",
             Command::Config => "settings and active layers",
             Command::Rules => "the ruleset in play: sources and rule provenance",
+            Command::Items => "the open agenda in its intended order",
             Command::Log => "browse completed runs and their results",
             Command::Usage => "spend + token rollup from the run log",
             Command::Feedback => "capture feedback: an outbound report, or a repo inbox note",
@@ -226,6 +231,7 @@ impl Command {
             Command::Status => app.route = Route::Status,
             Command::Config => app.open_config(),
             Command::Rules => app.open_rules(),
+            Command::Items => app.open_items(),
             Command::Log => app.open_log(),
             Command::Usage => app.open_usage(),
             Command::Feedback => app.open_feedback(),
@@ -340,6 +346,8 @@ struct App {
     usage: Option<UsageView>,
     /// The feedback view's state (both queues + compose), loaded when it's opened.
     feedback: Option<FeedbackView>,
+    /// The items view's state (the agenda + cursor + optional drilled-in item), loaded when opened.
+    items: Option<ItemsView>,
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
@@ -392,6 +400,7 @@ impl App {
             log: None,
             usage: None,
             feedback: None,
+            items: None,
             cwd_note,
             cwd_display,
             update: None,
@@ -400,6 +409,25 @@ impl App {
             rules: None,
             report_scroll: 0,
         }
+    }
+
+    /// Open the items view: the agenda loaded fresh through the shared loader, so the cockpit
+    /// shows exactly what `arc items` and a run's context would.
+    fn open_items(&mut self) {
+        self.route = Route::Items;
+        let agenda =
+            crate::commands::items::load(Path::new(&self.cwd)).map_err(|e| format!("{e:#}"));
+        let ids = agenda
+            .as_ref()
+            .map(|a| a.presented_ids())
+            .unwrap_or_default();
+        self.items = Some(ItemsView {
+            agenda,
+            ids,
+            selected: 0,
+            offset: 0,
+            detail: None,
+        });
     }
 
     /// Open the feedback view: both queues loaded fresh — the outbound reports (global) and the cwd
@@ -1192,6 +1220,64 @@ fn select_visible(selected: &mut usize, offset: &mut usize, i: usize) {
     }
 }
 
+/// The `items` view's state: the loaded agenda (or the error loading it), the presented ids
+/// (intended order + any unlisted, precomputed at open), the cursor + scroll offset, and — when
+/// drilled in — one item's body.
+struct ItemsView {
+    agenda: Result<crate::commands::items::Agenda, String>,
+    ids: Vec<String>,
+    selected: usize,
+    offset: usize,
+    detail: Option<ItemDetail>,
+}
+
+/// One item's detail screen: its body (or why there is none — a dangling id), scrolled, with the
+/// id for the header and the backing file (or its absence) for the info line.
+struct ItemDetail {
+    id: String,
+    body: String,
+    info: String,
+    scroll: u16,
+}
+
+impl ItemsView {
+    /// Move the cursor to `i`, scrolling the window the minimum needed to keep it visible.
+    fn select(&mut self, i: usize) {
+        select_visible(&mut self.selected, &mut self.offset, i);
+    }
+
+    /// Open the selected id's body — or, for a dangling id, the explanation (the order names it,
+    /// no file backs it), so the drilled view tells the same truth as the integrity line.
+    fn open_detail(&mut self) {
+        let Ok(agenda) = agenda_of(&self.agenda) else {
+            return;
+        };
+        let Some(id) = self.ids.get(self.selected) else {
+            return;
+        };
+        let (body, info) = match agenda.body(id) {
+            Some(body) => (body.to_owned(), format!(".arc/items/open/{id}.md")),
+            None => (
+                "(dangling: order.json names this id, but no open item file backs it)".to_owned(),
+                "no backing file".to_owned(),
+            ),
+        };
+        self.detail = Some(ItemDetail {
+            id: id.clone(),
+            body,
+            info,
+            scroll: 0,
+        });
+    }
+}
+
+/// The borrow-friendly view of an `ItemsView`'s load result.
+fn agenda_of(
+    agenda: &Result<crate::commands::items::Agenda, String>,
+) -> Result<&crate::commands::items::Agenda, &String> {
+    agenda.as_ref()
+}
+
 /// The `feedback` view's state: both queues — the outbound reports (newest first, or the error
 /// reading them, with unparsable lines disclosed) and the cwd repo's inbox notes — plus a scroll
 /// offset over the combined listing, the in-progress compose (if any), and the last capture's
@@ -1820,6 +1906,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 && rules.detail.is_some()
             {
                 rules.detail = None;
+            } else if app.route == Route::Items
+                && let Some(items) = app.items.as_mut()
+                && items.detail.is_some()
+            {
+                items.detail = None;
             } else {
                 match app.route {
                     Route::Home => app.should_quit = true,
@@ -1836,7 +1927,31 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         _ if app.route == Route::Doctor => handle_report_key(app, key.code),
         _ if app.route == Route::Usage => handle_usage_key(app, key.code),
         _ if app.route == Route::Feedback => handle_feedback_key(app, key.code),
+        _ if app.route == Route::Items => handle_items_key(app, key.code),
         _ => {}
+    }
+}
+
+/// Keys on the items view: the log view's contract — arrows/page move the list cursor (or scroll
+/// an open detail), Enter opens the highlighted item.
+fn handle_items_key(app: &mut App, code: KeyCode) {
+    let Some(items) = app.items.as_mut() else {
+        return;
+    };
+    if let Some(detail) = items.detail.as_mut() {
+        if let Some(delta) = scroll_delta(code, LIST_ROWS) {
+            detail.scroll = scrolled(detail.scroll, delta);
+        }
+        return;
+    }
+    let last = match items.ids.len() {
+        0 => return,
+        n => n - 1,
+    };
+    match list_action(code, items.selected, last) {
+        Some(ListAction::Select(i)) => items.select(i),
+        Some(ListAction::Open) => items.open_detail(),
+        None => {}
     }
 }
 
@@ -2057,6 +2172,13 @@ fn render(frame: &mut Frame, app: &App) {
             app.feedback
                 .as_ref()
                 .expect("the feedback view is loaded when its route is active"),
+            body,
+        ),
+        Route::Items => render_items(
+            frame,
+            app.items
+                .as_ref()
+                .expect("the items view is loaded when its route is active"),
             body,
         ),
         Route::Usage => {
@@ -2706,8 +2828,12 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
         rest.iter().all(|r| pool(&r.source) == p)
     });
     if report.rules.is_empty() {
+        // The same discovery line the CLI shows — an empty state names what ships instead of
+        // dead-ending (single-sourced in `rules::BUILTIN_HINT`).
         frame.render_widget(
-            Paragraph::new("no rules resolve from the active ruleset").block(Block::bordered()),
+            Paragraph::new(crate::commands::rules::BUILTIN_HINT)
+                .block(Block::bordered())
+                .wrap(Wrap { trim: false }),
             body,
         );
     } else {
@@ -2880,6 +3006,90 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
 /// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
 /// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
 /// run reads the same in the cockpit as on the CLI.
+/// Render the items view: the agenda in its intended order (dangling and unlisted rows marked
+/// inline — the drift the integrity line names, visible where it sits), or one item's body when
+/// drilled in; the info line carries the counts and the integrity verdict.
+fn render_items(frame: &mut Frame, view: &ItemsView, area: Rect) {
+    let [header, body, info] = Layout::vertical([
+        Constraint::Length(LIST_HEADER_LINES),
+        Constraint::Min(0),
+        Constraint::Length(LIST_INFO_LINES),
+    ])
+    .areas(area);
+
+    let agenda = match agenda_of(&view.agenda) {
+        Ok(agenda) => agenda,
+        Err(e) => {
+            frame.render_widget(Line::from("items").bold(), header);
+            frame.render_widget(
+                Paragraph::new(format!("agenda unreadable: {e}")).block(Block::bordered()),
+                body,
+            );
+            return;
+        }
+    };
+
+    if let Some(detail) = &view.detail {
+        frame.render_widget(Line::from(format!("items · {}", detail.id)).bold(), header);
+        frame.render_widget(
+            Paragraph::new(detail.body.clone())
+                .block(Block::bordered())
+                .wrap(Wrap { trim: false })
+                .scroll((detail.scroll, 0)),
+            body,
+        );
+        frame.render_widget(Line::from(detail.info.clone()).dim(), info);
+        return;
+    }
+
+    frame.render_widget(Line::from("items · the open agenda").bold(), header);
+    if view.ids.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                "no agenda: .arc/items/open is absent or empty, and there is no order file",
+            )
+            .block(Block::bordered()),
+            body,
+        );
+    } else {
+        let end = (view.offset + LIST_ROWS).min(view.ids.len());
+        let rows: Vec<Line> = view.ids[view.offset..end]
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let n = view.offset + i;
+                let marker = if agenda.dangling.iter().any(|d| d == id) {
+                    "  (dangling)"
+                } else if agenda.unlisted.iter().any(|u| u == id) {
+                    "  (unlisted)"
+                } else {
+                    ""
+                };
+                let line = Line::from(vec![
+                    Span::from(format!("{:>3}. {id}", n + 1)),
+                    Span::from(marker).dim(),
+                ]);
+                if n == view.selected {
+                    line.reversed()
+                } else {
+                    line
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(rows).block(Block::bordered()), body);
+    }
+    frame.render_widget(
+        Line::from(format!(
+            "{} open · {} resolved · {}",
+            agenda.items.len(),
+            agenda.resolved,
+            agenda.integrity()
+        ))
+        .dim(),
+        info,
+    );
+}
+
 /// Render the feedback view: the combined two-queue listing (windowed by the scroll offset), with
 /// the info line carrying — in priority order — the open compose's input, the last capture's
 /// outcome, or the queues' counts (unparsable outbound lines disclosed, never silently dropped).
@@ -3050,6 +3260,13 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
                     SCROLL
                 } else {
                     "/ commands · ↑↓ move · enter open · space toggle · esc back · q quit"
+                }
+            }
+            Route::Items => {
+                if app.items.as_ref().is_some_and(|i| i.detail.is_some()) {
+                    SCROLL
+                } else {
+                    BROWSE
                 }
             }
             Route::Config => match &app.config {
@@ -3312,6 +3529,7 @@ mod tests {
             log: None,
             usage: None,
             feedback: None,
+            items: None,
             cwd_note: None,
             cwd_display: ".".to_owned(),
             update: None,
