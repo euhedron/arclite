@@ -802,7 +802,9 @@ fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
     let probe = git_output(root, &["rev-parse", "--is-inside-work-tree"])?;
     if !probe.status.success() {
         let stderr = String::from_utf8_lossy(&probe.stderr);
-        if probe.status.code() == Some(128) && crate::git_stderr_says_not_a_repo(&stderr) {
+        if probe.status.code() == Some(crate::GIT_FATAL_EXIT)
+            && crate::git_stderr_says_not_a_repo(&stderr)
+        {
             return Err("target is not a Git work tree".to_owned());
         }
         return Err(format!(
@@ -1189,7 +1191,8 @@ fn repo_commit(root: &Path) -> Option<String> {
         // locked object store — is unreadable, not absent, and warns before the anchor is dropped.
         let stderr = String::from_utf8_lossy(&head.stderr);
         let benign = head.status.code() == Some(1)
-            || (head.status.code() == Some(128) && crate::git_stderr_says_not_a_repo(&stderr));
+            || (head.status.code() == Some(crate::GIT_FATAL_EXIT)
+                && crate::git_stderr_says_not_a_repo(&stderr));
         if !benign {
             unreadable(&format!(
                 "git rev-parse failed in a way that isn't \"not a repo\" ({})",

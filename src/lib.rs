@@ -159,12 +159,17 @@ pub(crate) fn git_config_get(dir: &std::path::Path, key: &str) -> anyhow::Result
     }
 }
 
+/// Git's `fatal:` exit code — the status "not a repo" and genuine faults share, so a caller pairing
+/// it with [`git_stderr_says_not_a_repo`] (the message-side discriminator) reads the two halves of
+/// one distinction from one home apiece.
+pub(crate) const GIT_FATAL_EXIT: i32 = 128;
+
 /// Git's benign not-in-a-repository verdict, read from stderr text — the one home for that fragile
-/// match. `rev-parse` collapses "not a repo" and genuine faults onto one exit code (128), so the
-/// message is the only discriminator git offers (the justified last resort when a tool exposes no
-/// machine-readable signal). Callers must pin `LC_ALL=C` on the probe so these are the words git
-/// actually emits regardless of locale; single-sourced so a change in git's wording is fixed once,
-/// not hunted across files.
+/// match. `rev-parse` collapses "not a repo" and genuine faults onto one exit code
+/// ([`GIT_FATAL_EXIT`]), so the message is the only discriminator git offers (the justified last
+/// resort when a tool exposes no machine-readable signal). Callers must pin `LC_ALL=C` on the
+/// probe so these are the words git actually emits regardless of locale; single-sourced so a
+/// change in git's wording is fixed once, not hunted across files.
 pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
     stderr.contains("not a git repository")
 }
