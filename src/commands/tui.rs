@@ -1256,7 +1256,15 @@ impl ItemsView {
             return;
         };
         let (body, info) = match agenda.body(id) {
-            Some(body) => (body.to_owned(), format!(".arc/items/open/{id}.md")),
+            Some(body) => (
+                body.to_owned(),
+                // Derived from the same layout builder every reader/writer uses (repo-relative:
+                // the empty base), so a layout change can't leave this displayed path stale.
+                crate::items_open_dir(Path::new(""))
+                    .join(format!("{id}.md"))
+                    .display()
+                    .to_string(),
+            ),
             None => (
                 "(dangling: order.json names this id, but no open item file backs it)".to_owned(),
                 "no backing file".to_owned(),

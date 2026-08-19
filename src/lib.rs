@@ -70,6 +70,13 @@ pub(crate) fn items_resolved_dir(repo_root: &std::path::Path) -> std::path::Path
     repo_root.join(ARC_DIR).join(ITEMS_DIR).join(RESOLVED_DIR)
 }
 
+/// A repo's feedback inbox directory name and path (`.arc/inbox/`) — operator notes queued for the
+/// next session (`commands::feedback`); one layout home, like the ledger dirs above.
+pub(crate) const INBOX_DIR: &str = "inbox";
+pub(crate) fn inbox_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
+    repo_root.join(ARC_DIR).join(INBOX_DIR)
+}
+
 /// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
 /// the real write in both `promote` and `retire`, so the entry-name convention has a single home.
 pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
