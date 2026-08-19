@@ -175,7 +175,7 @@ Codex CLI docs (codex is a synthesis backend — `--backend codex`; also open-so
 - <https://developers.openai.com/codex/noninteractive> — `codex exec`: the headless entry arclite drives (`--json` events, `--output-schema`, `-o`, prompt on stdin).
 - <https://developers.openai.com/api/docs/guides/function-calling> — OpenAI's parallel structure guarantee (verified 2026-08-02): `strict` mode "will ensure function calls reliably adhere to the function schema, instead of being best effort"; default is best-effort.
 - <https://developers.openai.com/codex/cli/reference> — CLI flags (top-level vs `exec`): `-m`, `-c`, `-C/--cd`, `--ephemeral`, `--strict-config`, `--output-schema`, `-o`, `--skip-git-repo-check`, `--ignore-user-config`, `--ignore-rules`.
-- <https://developers.openai.com/codex/permissions> — the least-privilege permission profile that limits default synthesis reads to Codex's minimal runtime plus Arc's fresh run directory; unlike the older broad `read-only` sandbox, the target repo is not readable unless `--ambient-memory` opts it in.
+- <https://developers.openai.com/codex/permissions> — the permission model (presets, `default_permissions`, network; it does *not* compose with `sandbox_mode`), and the least-privilege profile that limits default synthesis reads to Codex's minimal runtime plus Arc's fresh run directory — unlike the older broad `read-only` sandbox, the target repo is not readable unless `--ambient-memory` opts it in.
 - <https://developers.openai.com/codex/cli/features> — the feature surface (exec, MCP, images, resume, model selection).
 - <https://developers.openai.com/codex/cli/slash-commands> — interactive slash commands (TUI precedent; several have config/flag equivalents).
 - <https://developers.openai.com/codex/config-basic> — config basics (`~/.codex/config.toml`, model, reasoning, sandbox/approval).
@@ -184,7 +184,6 @@ Codex CLI docs (codex is a synthesis backend — `--backend codex`; also open-so
 - <https://developers.openai.com/codex/guides/agents-md> - `AGENTS.md` discovery/layering: global vs project scope, override files, fallback filenames, merge order, and `project_doc_max_bytes`.
 - <https://developers.openai.com/codex/config-sample> — a worked sample `config.toml`.
 - <https://developers.openai.com/codex/environment-variables> — env vars: `CODEX_API_KEY` (exec auth), `CODEX_HOME`, TLS/cert.
-- <https://developers.openai.com/codex/permissions> — the permission model (presets, `default_permissions`, network) — note it does *not* compose with `sandbox_mode`.
 - <https://developers.openai.com/codex/agent-approvals-security> — sandbox modes × approval policies; the locked-down non-interactive combo (`sandbox read-only` + `approval_policy=never`).
 - <https://developers.openai.com/codex/mcp> — MCP servers/tools (`[mcp_servers]`): codex's tool model (the `--allow-tool`→codex bridge target).
 - <https://github.com/openai/codex> — codex source (open-source Rust): the backend's ground truth, and a worked example for the `arc tui`.
