@@ -180,11 +180,16 @@ pub fn run(args: &ItemsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 /// Show one item in full: an open item's body, or — so the trail stays surfaceable without
 /// reconstructing history — a resolved item's file when no open one matches.
 fn show_one(agenda: &Agenda, repo: &Path, id: &str, global: &GlobalArgs) -> anyhow::Result<()> {
-    crate::commands::log::ensure_safe_run_id(id)
-        .map_err(|_| anyhow::anyhow!("`{id}` is not a usable item id (a single path segment)"))?;
     let (status, body) = if let Some(body) = agenda.body(id) {
+        // Served from the already-loaded agenda — no path is built from `id`, so every stem the
+        // listing shows is showable here, whatever characters it carries.
         ("open", body.to_owned())
     } else {
+        // Falling through to the resolved ledger joins `id` into a path, so only here must it be
+        // a safe single segment (the same bar the run-result store applies to its ids).
+        crate::commands::log::ensure_safe_run_id(id).map_err(|_| {
+            anyhow::anyhow!("`{id}` is not a usable item id (a single path segment)")
+        })?;
         let resolved_path = crate::items_resolved_dir(repo).join(format!("{id}.md"));
         match crate::read_optional(&resolved_path)
             .with_context(|| format!("cannot read {}", resolved_path.display()))?
