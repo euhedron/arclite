@@ -1,7 +1,6 @@
 {
   "order": [
     "release-verification",
-    "ruleset-discoverability",
     "onboarding-stranger-test",
     "tui-key-model",
     "items-surface",
