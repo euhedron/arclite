@@ -116,7 +116,7 @@ pub(crate) fn inbox_note(
     message: &str,
     run: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
-    let dir = repo.join(crate::ARC_DIR).join("inbox");
+    let dir = crate::inbox_dir(repo);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     match std::fs::OpenOptions::new()
         .write(true)
@@ -201,7 +201,7 @@ pub(crate) fn reports_newest_first() -> anyhow::Result<(Vec<serde_json::Value>, 
 /// A repo's inbox notes as (file name, first line), newest first by id-shaped name — the listing
 /// the TUI's feedback view shows beside the outbound queue. An absent inbox is an empty one.
 pub(crate) fn inbox_notes(repo: &Path) -> anyhow::Result<Vec<(String, String)>> {
-    let dir = repo.join(crate::ARC_DIR).join("inbox");
+    let dir = crate::inbox_dir(repo);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
