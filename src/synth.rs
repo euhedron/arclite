@@ -28,7 +28,9 @@ pub(crate) const GATE_BLOCKED_EXIT: u8 = 2;
 /// Exit code for a run that *errored* — the agent reported a failure (e.g. a tripped budget cap)
 /// mid-run. Distinct from a gate block (a clean run with findings, [`GATE_BLOCKED_EXIT`]) and from
 /// success, so a hook or script can tell "the run broke" from "the run ran and found problems".
-const ERRORED_EXIT: u8 = 1;
+/// Also formatted into the `arc --help` exit-code section (see `cli::exit_codes_help`) — the same
+/// value general errors exit with (`ExitCode::FAILURE`), stated once.
+pub(crate) const ERRORED_EXIT: u8 = 1;
 
 const LOGGING_OFF_NOTE: &str = "\nlogging: off (the `logging` setting is false)";
 
