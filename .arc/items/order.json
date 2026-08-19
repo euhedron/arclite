@@ -12,6 +12,7 @@
     "gate-round-linkage",
     "context-window-utilization",
     "tui-init",
+    "public-run-record",
     "github-check-gate",
     "release-notes-view",
     "verbs-as-configurations",
