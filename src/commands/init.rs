@@ -95,30 +95,49 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     }
 
     // Orientation, not just a file list: a stranger's first init should say which rules now apply
-    // and what to try next — the display strips the target prefix (repo-relative reads cleaner and
-    // says the same thing), while the JSON report keeps the full paths.
+    // and what to try next. The display strips the target prefix with path semantics
+    // (Path::strip_prefix — separator-correct on every OS); the JSON report keeps full paths.
     let rel = |paths: &[String]| -> Vec<String> {
-        let prefix = format!("{}/", root.display());
         paths
             .iter()
-            .map(|p| p.strip_prefix(&prefix).unwrap_or(p).to_owned())
+            .map(|p| {
+                Path::new(p)
+                    .strip_prefix(&root)
+                    .map(|r| r.display().to_string())
+                    .unwrap_or_else(|_| p.clone())
+            })
             .collect()
     };
+    // The scaffold claim is only guaranteed true when *this* init wrote the settings; a repeated
+    // init keeps whatever the repo already selected, and must say so rather than assert `default`.
+    let settings_created = created.iter().any(|p| p.ends_with(crate::SETTINGS_FILE));
+    // Follow-up commands carry the path the user typed — bare cwd-defaulting suggestions would
+    // point at the wrong repo whenever init targeted another directory.
+    let t = args.path.display().to_string();
+    let ruleset_line = if settings_created {
+        format!(
+            "ruleset: `{}` — the {} built-in rules arc ships, active immediately (curate {}/{} to grow your own)",
+            crate::DEFAULT_RULESET,
+            crate::rules::builtin().len(),
+            crate::ARC_DIR,
+            RULES_DIR,
+        )
+    } else {
+        format!("ruleset: unchanged (existing settings kept — see `arc rules {t}`)")
+    };
     let mut human = format!(
-        "created: {}\nskipped: {}\nruleset: `{}` — the {} built-in rules arc ships, active immediately (curate {}/{} to grow your own)",
+        "created: {}\nskipped: {}\n{ruleset_line}",
         crate::join_or(&rel(&created), "(none)"),
         crate::join_or(&rel(&skipped), "(none)"),
-        crate::DEFAULT_RULESET,
-        crate::rules::builtin().len(),
-        crate::ARC_DIR,
-        RULES_DIR,
     );
     if !args.hook {
-        human.push_str(
-            "\nnext: arc rules · arc run audit . --dry-run · arc init --hook (the pre-push gate)",
-        );
+        human.push_str(&format!(
+            "\nnext: arc rules {t} · arc run audit {t} --dry-run · arc init {t} --hook (the pre-push gate)"
+        ));
     } else {
-        human.push_str("\nnext: arc rules · arc run audit . --dry-run · the gate now runs on push (skip once: ARC_GATE=0 git push)");
+        human.push_str(&format!(
+            "\nnext: arc rules {t} · arc run audit {t} --dry-run · the gate now runs on push (skip once: ARC_GATE=0 git push)"
+        ));
     }
     emit(&InitReport { created, skipped }, &human, global.json)
 }
