@@ -171,9 +171,14 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
 /// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
 /// can't drift between the surfaces.
 pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
-    field(record, "repo")
-        .to_lowercase()
-        .contains(&needle.to_lowercase())
+    repo_contains(&field(record, "repo"), needle)
+}
+
+/// The documented repo-substring semantics — case-insensitive contains — as a plain string
+/// predicate: the one statement both [`repo_matches`] (ledger records) and the usage view's
+/// ledger-repo resolution (path strings) apply, so the two surfaces can't drift.
+pub fn repo_contains(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
 /// A record filter over the ledger's repo path: the CLI's documented substring semantics
