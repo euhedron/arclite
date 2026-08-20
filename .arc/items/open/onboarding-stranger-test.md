@@ -1,1 +1,0 @@
-Prove the stranger path: a downloaded binary, no sibling context, no hand-holding — the README plus `arc doctor` plus `arc init` carrying a new user end to end through extract, curate, and audit on their own repo. Walk it cold, fix what snags, keep the walk repeatable.

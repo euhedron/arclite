@@ -410,10 +410,15 @@ pub(crate) fn human(report: &Report) -> String {
         row("cwd", &crate::display_path(&report.cwd)),
         row(
             "cargo",
-            &report
-                .tools
-                .cargo
-                .display("not found (needed only to build arc from source)"),
+            // A broken-but-present cargo is still only a from-source concern — qualified like the
+            // absent case, so a failing rustup shim (common on machines that never built Rust)
+            // doesn't read as an arc problem.
+            &match &report.tools.cargo {
+                ToolStatus::Failed(e) => {
+                    format!("unavailable ({e}) — needed only to build arc from source")
+                }
+                status => status.display("not found (needed only to build arc from source)"),
+            },
         ),
         row("git", &report.tools.git.display("not found")),
         row(
