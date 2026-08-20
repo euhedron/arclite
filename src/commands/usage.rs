@@ -76,7 +76,6 @@ fn cli_currency(repo: Option<&str>) -> CurrencyLens {
     let Some(needle) = repo else {
         return current_lens(std::path::Path::new("."));
     };
-    let needle_lc = needle.to_lowercase();
     // An unreadable ledger is its own failure — never "matches no ledger repo".
     let repos = match ledger_repos() {
         Ok(r) => r,
@@ -84,7 +83,7 @@ fn cli_currency(repo: Option<&str>) -> CurrencyLens {
     };
     let matches: Vec<String> = repos
         .into_iter()
-        .filter(|r| r.to_lowercase().contains(&needle_lc))
+        .filter(|r| crate::log::repo_contains(r, needle))
         .collect();
     match matches.as_slice() {
         [one] => {
