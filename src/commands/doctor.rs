@@ -12,7 +12,20 @@ pub(crate) struct Report {
     backend: BackendSelection,
     api_keys: ApiKeys,
     logs: Logs,
+    items: ItemsHealth,
     gate: Gate,
+}
+
+/// The cwd repo's agenda and inbox at a glance — counts, order integrity, pending notes — so
+/// drift and queued notes are seen without asking (`arc items` and the feedback surfaces hold the
+/// detail). A load failure is its own state, never shown as an empty agenda.
+#[derive(Serialize)]
+struct ItemsHealth {
+    open: Option<usize>,
+    resolved: Option<usize>,
+    integrity: Option<String>,
+    inbox_pending: Option<usize>,
+    error: Option<String>,
 }
 
 /// The backend a run from this cwd would use — the configured `backend` setting, or none. There is
@@ -380,8 +393,37 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
             unparsed: runs.as_ref().ok().map(|&(_, unparsed)| unparsed),
             error: runs.as_ref().err().map(std::string::ToString::to_string),
         },
+        items: items_health(),
         gate: gate_status(),
     })
+}
+
+/// Probe the cwd repo's agenda + inbox for the report. The two failure modes stay their own
+/// states: an unreadable agenda or inbox is reported, never rendered as "0 open".
+fn items_health() -> ItemsHealth {
+    let cwd = std::path::Path::new(".");
+    match crate::commands::items::load(cwd) {
+        Ok(agenda) => {
+            let (inbox_pending, error) = match crate::commands::feedback::inbox_notes(cwd) {
+                Ok(notes) => (Some(notes.len()), None),
+                Err(e) => (None, Some(format!("inbox unreadable: {e:#}"))),
+            };
+            ItemsHealth {
+                open: Some(agenda.items.len()),
+                resolved: Some(agenda.resolved),
+                integrity: Some(agenda.integrity()),
+                inbox_pending,
+                error,
+            }
+        }
+        Err(e) => ItemsHealth {
+            open: None,
+            resolved: None,
+            integrity: None,
+            inbox_pending: None,
+            error: Some(format!("{e:#}")),
+        },
+    }
 }
 
 /// Render a [`Report`] as aligned `label  value` lines — the human view shared by `arc doctor` and the
@@ -503,6 +545,34 @@ pub(crate) fn human(report: &Report) -> String {
         };
         format!("{state} · {where_}")
     };
+    // Absent agenda reads as the compact fact it is; drift and pending notes surface inline; a
+    // zero-pending inbox stays silent (no zero-noise).
+    let items_line = match (&report.items.open, &report.items.error) {
+        (Some(open), _) => {
+            let mut line = format!(
+                "{open} open, {} resolved · {}",
+                report.items.resolved.unwrap_or(0),
+                report.items.integrity.as_deref().unwrap_or("?"),
+            );
+            if *open == 0
+                && report.items.resolved == Some(0)
+                && report.items.integrity.as_deref() == Some("no order file")
+            {
+                line = "none (.arc/items absent)".to_owned();
+            }
+            match report.items.inbox_pending {
+                Some(n) if n > 0 => line.push_str(&format!(" · inbox: {n} pending")),
+                _ => {}
+            }
+            if let Some(e) = &report.items.error {
+                line.push_str(&format!(" · {e}"));
+            }
+            line
+        }
+        (None, Some(e)) => format!("unreadable: {e}"),
+        (None, None) => "?".to_owned(),
+    };
+    lines.push(row("items", &items_line));
     lines.push(row("gate", &gate_line));
     lines.join("\n")
 }
