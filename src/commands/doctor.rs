@@ -398,30 +398,39 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
     })
 }
 
-/// Probe the cwd repo's agenda + inbox for the report. The two failure modes stay their own
-/// states: an unreadable agenda or inbox is reported, never rendered as "0 open".
+/// Probe the cwd repo's agenda + inbox for the report — independently: they are independent
+/// surfaces (the masthead probes them the same way), so an unreadable agenda can't hide pending
+/// inbox notes, nor the reverse. Every failure is carried in `error`, never rendered as "0 open".
 fn items_health() -> ItemsHealth {
     let cwd = std::path::Path::new(".");
-    match crate::commands::items::load(cwd) {
-        Ok(agenda) => {
-            let (inbox_pending, error) = match crate::commands::feedback::inbox_notes(cwd) {
-                Ok(notes) => (Some(notes.len()), None),
-                Err(e) => (None, Some(format!("inbox unreadable: {e:#}"))),
-            };
-            ItemsHealth {
-                open: Some(agenda.items.len()),
-                resolved: Some(agenda.resolved),
-                integrity: Some(agenda.integrity()),
-                inbox_pending,
-                error,
-            }
+    let mut errors = Vec::new();
+    let (open, resolved, integrity) = match crate::commands::items::load(cwd) {
+        Ok(agenda) => (
+            Some(agenda.items.len()),
+            Some(agenda.resolved),
+            Some(agenda.integrity()),
+        ),
+        Err(e) => {
+            errors.push(format!("agenda unreadable: {e:#}"));
+            (None, None, None)
         }
-        Err(e) => ItemsHealth {
-            open: None,
-            resolved: None,
-            integrity: None,
-            inbox_pending: None,
-            error: Some(format!("{e:#}")),
+    };
+    let inbox_pending = match crate::commands::feedback::inbox_notes(cwd) {
+        Ok(notes) => Some(notes.len()),
+        Err(e) => {
+            errors.push(format!("inbox unreadable: {e:#}"));
+            None
+        }
+    };
+    ItemsHealth {
+        open,
+        resolved,
+        integrity,
+        inbox_pending,
+        error: if errors.is_empty() {
+            None
+        } else {
+            Some(errors.join(" · "))
         },
     }
 }
@@ -546,31 +555,33 @@ pub(crate) fn human(report: &Report) -> String {
         format!("{state} · {where_}")
     };
     // Absent agenda reads as the compact fact it is; drift and pending notes surface inline; a
-    // zero-pending inbox stays silent (no zero-noise).
-    let items_line = match (&report.items.open, &report.items.error) {
-        (Some(open), _) => {
-            let mut line = format!(
-                "{open} open, {} resolved · {}",
-                report.items.resolved.unwrap_or(0),
-                report.items.integrity.as_deref().unwrap_or("?"),
-            );
-            if *open == 0
+    // zero-pending inbox stays silent (no zero-noise). Each part renders from whichever probes
+    // succeeded — pending notes show even when the agenda itself is unreadable.
+    let items_line = {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(open) = report.items.open {
+            if open == 0
                 && report.items.resolved == Some(0)
                 && report.items.integrity.as_deref() == Some("no order file")
             {
-                line = "none (.arc/items absent)".to_owned();
+                parts.push("none (.arc/items absent)".to_owned());
+            } else {
+                parts.push(format!(
+                    "{open} open, {} resolved · {}",
+                    report.items.resolved.unwrap_or(0),
+                    report.items.integrity.as_deref().unwrap_or("?"),
+                ));
             }
-            match report.items.inbox_pending {
-                Some(n) if n > 0 => line.push_str(&format!(" · inbox: {n} pending")),
-                _ => {}
-            }
-            if let Some(e) = &report.items.error {
-                line.push_str(&format!(" · {e}"));
-            }
-            line
         }
-        (None, Some(e)) => format!("unreadable: {e}"),
-        (None, None) => "?".to_owned(),
+        if let Some(n) = report.items.inbox_pending
+            && n > 0
+        {
+            parts.push(format!("inbox: {n} pending"));
+        }
+        if let Some(e) = &report.items.error {
+            parts.push(e.clone());
+        }
+        parts.join(" · ")
     };
     lines.push(row("items", &items_line));
     lines.push(row("gate", &gate_line));
