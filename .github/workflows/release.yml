@@ -169,6 +169,12 @@ jobs:
   verify:
     needs: [create-release, publish-release]
     if: needs.create-release.outputs.already_published != 'true'
+    # The workflow's top-level grant is contents-only, which zeroes every other permission — and
+    # creating a workflow_dispatch event needs `actions: write`. Granted here, on the one job that
+    # dispatches, rather than widened for the whole workflow.
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch verify-release against this tag
