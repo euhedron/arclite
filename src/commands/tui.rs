@@ -1203,6 +1203,18 @@ fn load_config_view(cwd: &str, selected: usize) -> ConfigView {
 const LIST_HEADER_LINES: u16 = LINE;
 const LIST_INFO_LINES: u16 = LINE;
 
+/// The list views' shared chrome split — title line, boxed body, information line — stated once for
+/// rules/items/log/feedback, from the same constants [`LIST_ROWS`] derives from, so the split and
+/// the row math can't diverge.
+fn list_chrome(area: Rect) -> [Rect; 3] {
+    Layout::vertical([
+        Constraint::Length(LIST_HEADER_LINES),
+        Constraint::Min(0),
+        Constraint::Length(LIST_INFO_LINES),
+    ])
+    .areas(area)
+}
+
 /// Visible rows inside a list/detail view's bordered box — the inline viewport less the global footer,
 /// the header, the info line, and the border. One source for both the cursor math ([`select_visible`],
 /// PageUp/Down) and the render window, so they can't disagree on how many rows are on screen.
@@ -2753,12 +2765,7 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
 /// per-row path would say the id twice; with one shared pool the rows are bare ids. (The CLI's
 /// `arc rules` keeps full per-line paths deliberately — the grep-friendly, agent-first form.)
 fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
-    let [header, body, info] = Layout::vertical([
-        Constraint::Length(LIST_HEADER_LINES),
-        Constraint::Min(0),
-        Constraint::Length(LIST_INFO_LINES),
-    ])
-    .areas(area);
+    let [header, body, info] = list_chrome(area);
 
     let report = match &view.report {
         Ok(report) => report,
@@ -3015,12 +3022,7 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
 /// inline — the drift the integrity line names, visible where it sits), or one item's body when
 /// drilled in; the info line carries the counts and the integrity verdict.
 fn render_items(frame: &mut Frame, view: &ItemsView, area: Rect) {
-    let [header, body, info] = Layout::vertical([
-        Constraint::Length(LIST_HEADER_LINES),
-        Constraint::Min(0),
-        Constraint::Length(LIST_INFO_LINES),
-    ])
-    .areas(area);
+    let [header, body, info] = list_chrome(area);
 
     let agenda = match agenda_of(&view.agenda) {
         Ok(agenda) => agenda,
@@ -3100,12 +3102,7 @@ fn render_items(frame: &mut Frame, view: &ItemsView, area: Rect) {
 /// the info line carrying — in priority order — the open compose's input, the last capture's
 /// outcome, or the queues' counts (unparsable outbound lines disclosed, never silently dropped).
 fn render_feedback(frame: &mut Frame, view: &FeedbackView, area: Rect) {
-    let [header, body, info] = Layout::vertical([
-        Constraint::Length(LIST_HEADER_LINES),
-        Constraint::Min(0),
-        Constraint::Length(LIST_INFO_LINES),
-    ])
-    .areas(area);
+    let [header, body, info] = list_chrome(area);
 
     frame.render_widget(Line::from("feedback").bold(), header);
     let rows = view.rows();
@@ -3151,12 +3148,7 @@ fn render_feedback(frame: &mut Frame, view: &FeedbackView, area: Rect) {
 /// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
 /// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
-    let [header, body, info] = Layout::vertical([
-        Constraint::Length(LIST_HEADER_LINES),
-        Constraint::Min(0),
-        Constraint::Length(LIST_INFO_LINES),
-    ])
-    .areas(area);
+    let [header, body, info] = list_chrome(area);
 
     let runs = match &log.runs {
         Ok(runs) => runs,
