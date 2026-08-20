@@ -3357,21 +3357,29 @@ fn render_palette(frame: &mut Frame, palette: &Palette, area: Rect) {
         return;
     }
     // The description's budget: the popup's inner width less the selection prefix and name column.
-    let desc_width = (inner.width as usize).saturating_sub(2 + PALETTE_NAME_WIDTH + 1);
+    // The row shape stated once: prefix + padded name + separator + description. The description
+    // budget derives from the same strings/format the rows are built with, so restyling the prefix
+    // or separator can't silently misalign the ellipsis math.
+    const ROW_PREFIX_SELECTED: &str = "› ";
+    const ROW_PREFIX_UNSELECTED: &str = "  ";
+    const NAME_DESC_SEPARATOR: &str = " ";
+    let desc_width = (inner.width as usize).saturating_sub(
+        ROW_PREFIX_SELECTED.chars().count() + PALETTE_NAME_WIDTH + NAME_DESC_SEPARATOR.len(),
+    );
     let lines: Vec<Line> = matches
         .iter()
         .enumerate()
         .map(|(i, c)| {
             let text = format!(
-                "{:<width$} {}",
+                "{:<width$}{NAME_DESC_SEPARATOR}{}",
                 c.name(),
                 ellipsize(c.description(), desc_width),
                 width = PALETTE_NAME_WIDTH
             );
             if i == palette.selected {
-                Line::from(format!("› {text}")).bold()
+                Line::from(format!("{ROW_PREFIX_SELECTED}{text}")).bold()
             } else {
-                Line::from(format!("  {text}")).dim()
+                Line::from(format!("{ROW_PREFIX_UNSELECTED}{text}")).dim()
             }
         })
         .collect();
