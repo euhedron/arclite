@@ -2272,9 +2272,6 @@ fn render(frame: &mut Frame, app: &App) {
     }
 }
 
-/// A warning for the home view if the launch directory is a poor place to run arc — the home folder
-/// (a run there scans the whole home tree) or outside any git repo; None for a normal repo. Computed
-/// once at startup (it does filesystem probes), so [`render`] stays a pure function of state.
 /// A home-masthead warning when the launch repo's agenda has drift or its inbox holds pending
 /// notes — seen without asking, computed once at startup like [`cwd_warning`] (render stays pure;
 /// the items/feedback views re-read live on open). An *unreadable* agenda or inbox is itself the
@@ -2308,6 +2305,9 @@ fn agenda_warning(cwd: &Path) -> Option<String> {
     }
 }
 
+/// A warning for the home view if the launch directory is a poor place to run arc — the home folder
+/// (a run there scans the whole home tree) or outside any git repo; None for a normal repo. Computed
+/// once at startup (it does filesystem probes), so [`render`] stays a pure function of state.
 fn cwd_warning(cwd: &Path) -> Option<String> {
     if Some(cwd) == dirs::home_dir().as_deref() {
         return Some(
