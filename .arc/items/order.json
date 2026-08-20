@@ -1,7 +1,6 @@
 {
   "order": [
     "release-verification",
-    "tui-key-model",
     "items-surface",
     "behavioral-ruleset",
     "live-transcript-auditing",
