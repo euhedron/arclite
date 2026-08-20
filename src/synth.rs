@@ -476,11 +476,6 @@ fn gather_rules(
     ))
 }
 
-/// Render the repo's open findings ledger (`.arc/findings/open/*.md`) as a context block. With
-/// `recheck` (the verify verb) the findings are presented for re-checking against the current code;
-/// otherwise a run is told to hunt *beyond* them rather than re-surface them. Absent/empty ledger → no
-/// block. A finding is Markdown like a rule, so the rule loader/renderer applies — each rendered under a
-/// `## <id>` heading, so a verdict can key back to it — guarded against an absent dir.
 /// The tracked items — the open agenda — rendered as the align verb's subject: the intended order
 /// first (`order.json`, its integrity computed deterministically — duplicates, ids resolving to no
 /// item, open items it omits — each disclosed, so order drift is a flagged state, never silent
@@ -553,6 +548,11 @@ pub(crate) fn load_ledger_dir(dir: &Path, what: &str) -> anyhow::Result<Vec<crat
     }
 }
 
+/// Render the repo's open findings ledger (`.arc/findings/open/*.md`) as a context block. With
+/// `recheck` (the verify verb) the findings are presented for re-checking against the current code;
+/// otherwise a run is told to hunt *beyond* them rather than re-surface them. Absent/empty ledger →
+/// no block. A finding is Markdown like a rule, so the rule loader/renderer applies — each rendered
+/// under a `## <id>` heading, so a verdict can key back to it — guarded against an absent dir.
 fn gather_findings(
     root: &Path,
     sources: &mut Vec<String>,

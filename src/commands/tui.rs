@@ -3011,9 +3011,6 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
     }
 }
 
-/// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
-/// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
-/// run reads the same in the cockpit as on the CLI.
 /// Render the items view: the agenda in its intended order (dangling and unlisted rows marked
 /// inline — the drift the integrity line names, visible where it sits), or one item's body when
 /// drilled in; the info line carries the counts and the integrity verdict.
@@ -3150,6 +3147,9 @@ fn render_feedback(frame: &mut Frame, view: &FeedbackView, area: Rect) {
     frame.render_widget(info_line, info);
 }
 
+/// The `log` view: a cursor-driven list of completed runs (newest first), or the selected run's detail
+/// when drilled in. The rows reuse `arc log`'s projection and the detail reuses `arc log <id>`'s, so a
+/// run reads the same in the cockpit as on the CLI.
 fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     let [header, body, info] = Layout::vertical([
         Constraint::Length(LIST_HEADER_LINES),
