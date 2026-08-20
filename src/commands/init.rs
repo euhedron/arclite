@@ -138,19 +138,14 @@ fn write_if_absent(
     created: &mut Vec<String>,
     skipped: &mut Vec<String>,
 ) -> anyhow::Result<bool> {
-    use std::io::Write;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(mut file) => {
-            file.write_all(content.as_bytes())
-                .with_context(|| format!("cannot write {}", path.display()))?;
+    // The atomic seed itself is the shared skeleton; this wrapper adds init's created/skipped
+    // reporting on top.
+    match crate::seed_if_absent(path, content) {
+        Ok(true) => {
             created.push(path.display().to_string());
             Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+        Ok(false) => {
             skipped.push(path.display().to_string());
             Ok(false)
         }

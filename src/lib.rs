@@ -77,6 +77,27 @@ pub(crate) fn inbox_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
     repo_root.join(ARC_DIR).join(INBOX_DIR)
 }
 
+/// Atomically create `path` with `content` if absent: `create_new` claims the name, an existing
+/// file is the benign already-seeded case (`Ok(false)`, left untouched — seeding never overwrites),
+/// any other error propagates. The seed-if-absent skeleton stated once — init's scaffold files, the
+/// ledger READMEs, the inbox README all seed through here; [`claim_findings_entry`] stays the
+/// suffix-bumping variant for entries that must never collide rather than quietly stand down.
+pub(crate) fn seed_if_absent(path: &std::path::Path, content: &str) -> std::io::Result<bool> {
+    use std::io::Write as _;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(content.as_bytes())?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// The ledger path for an entry id: `<dir>/<id>.md`. One definition shared by the dry-run preview and
 /// the real write in both `promote` and `retire`, so the entry-name convention has a single home.
 pub(crate) fn findings_entry_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
