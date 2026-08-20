@@ -399,6 +399,33 @@ fn write_best_effort(
     }
 }
 
+/// One `write` call of `line` *and* its newline, appended to `path`: the kernel atomically
+/// positions each single write at EOF under O_APPEND, so concurrent sessions appending to a shared
+/// JSONL file can't interleave *within* a record — a guarantee `write_all` would forfeit, since
+/// its retry loop may split the buffer across calls. A rare partial write is surfaced as an error
+/// (the JSONL readers already tolerate and disclose an unparsable line) instead of silently
+/// continued into an interleaving risk. The no-interleave idiom's one home — the run log wraps it
+/// best-effort (logging never fails the run); the feedback queue propagates it (capture *is* the
+/// command).
+pub fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let buf = format!("{line}\n");
+    let n = file.write(buf.as_bytes())?;
+    if n != buf.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            format!(
+                "partial append ({n} of {} bytes) — the record line may be truncated",
+                buf.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Append `record` as one JSON line to the [`path`] run log, returning the path written, or `None`
 /// (with a warning) if it can't be — logging never breaks the command.
 pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
@@ -407,30 +434,7 @@ pub fn append<T: Serialize>(record: &T) -> Option<PathBuf> {
         return None;
     };
     let line = serde_json::to_string(record).expect("a run record serializes");
-    write_best_effort(target, "run not logged", |p| {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)?;
-        // ONE `write` call of the record *and* its newline: the kernel atomically positions each
-        // single write at EOF under O_APPEND, so concurrent sessions logging to the shared
-        // `runs.jsonl` can't interleave *within* a call — a guarantee `write_all` would forfeit,
-        // since its retry loop may split the buffer across calls. A rare partial write is therefore
-        // surfaced as this best-effort append's failure (the log reader already tolerates and
-        // discloses an unparsable line) instead of silently continued into an interleaving risk.
-        let buf = format!("{line}\n");
-        let n = file.write(buf.as_bytes())?;
-        if n != buf.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WriteZero,
-                format!(
-                    "partial append ({n} of {} bytes) — the record line may be truncated",
-                    buf.len()
-                ),
-            ));
-        }
-        Ok(())
-    })
+    write_best_effort(target, "run not logged", |p| append_line(p, &line))
 }
 
 /// Store one run's full result at [`result_path`] (best-effort, like [`append`]). Returns the path

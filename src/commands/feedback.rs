@@ -87,23 +87,9 @@ pub(crate) fn capture(id: &str, message: &str, run: Option<&str>) -> anyhow::Res
         message,
         run,
     };
-    let line = format!(
-        "{}\n",
-        serde_json::to_string(&record).expect("a report serializes")
-    );
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("opening the feedback queue at {}", path.display()))?;
-    // One write of line + newline, the run log's O_APPEND no-interleave idiom (see log::append).
-    let n = file.write(line.as_bytes())?;
-    anyhow::ensure!(
-        n == line.len(),
-        "partial append ({n} of {} bytes) to {}",
-        line.len(),
-        path.display()
-    );
+    let line = serde_json::to_string(&record).expect("a report serializes");
+    crate::log::append_line(&path, &line)
+        .with_context(|| format!("appending to the feedback queue at {}", path.display()))?;
     Ok(path)
 }
 
@@ -118,17 +104,8 @@ pub(crate) fn inbox_note(
 ) -> anyhow::Result<PathBuf> {
     let dir = crate::inbox_dir(repo);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dir.join("README.md"))
-    {
-        Ok(mut f) => f
-            .write_all(INBOX_README.as_bytes())
-            .context("seeding the inbox README")?,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(anyhow::Error::new(e).context("seeding the inbox README")),
-    }
+    crate::seed_if_absent(&dir.join("README.md"), INBOX_README)
+        .context("seeding the inbox README")?;
     let path = dir.join(format!("{id}.md"));
     let body = match run {
         Some(run) => format!("{message}\n\n(run: {run})\n"),

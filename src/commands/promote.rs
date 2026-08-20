@@ -354,18 +354,7 @@ fn seed_ledger_readme(repo: &Path) -> std::io::Result<bool> {
         .parent()
         .expect("the open ledger always sits inside .arc/findings")
         .join("README.md");
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut file) => {
-            file.write_all(ledger_readme().as_bytes())?;
-            Ok(true)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(e) => Err(e),
-    }
+    crate::seed_if_absent(&path, &ledger_readme())
 }
 
 #[cfg(test)]
