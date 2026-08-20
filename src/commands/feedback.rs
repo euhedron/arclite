@@ -104,8 +104,12 @@ pub(crate) fn inbox_note(
 ) -> anyhow::Result<PathBuf> {
     let dir = crate::inbox_dir(repo);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    crate::seed_if_absent(&dir.join("README.md"), INBOX_README)
-        .context("seeding the inbox README")?;
+    // The orientation README is auxiliary to the note — the primary work — so a failed seed warns
+    // and proceeds rather than aborting the capture (promote seeds the ledger README with the same
+    // posture, for the same reason).
+    if let Err(e) = crate::seed_if_absent(&dir.join("README.md"), INBOX_README) {
+        eprintln!("arclite: couldn't seed the inbox README ({e}); continuing with the note");
+    }
     let path = dir.join(format!("{id}.md"));
     let body = match run {
         Some(run) => format!("{message}\n\n(run: {run})\n"),
