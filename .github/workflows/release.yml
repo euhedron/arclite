@@ -162,6 +162,22 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh release edit "$TAG" --repo "$REPO" --draft=false
 
+  # Chain the post-release verifier explicitly: the `release: published` event this workflow
+  # causes is suppressed for other workflows (it was created by the workflow token — GitHub's
+  # recursion guard), and workflow_dispatch is the documented exception that does run. Without
+  # this, the verifier only runs when dispatched by hand.
+  verify:
+    needs: [create-release, publish-release]
+    if: needs.create-release.outputs.already_published != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch verify-release against this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run verify-release.yml --repo "$REPO" -f "tag=$TAG"
+
   # Bump the Homebrew tap (euhedron/homebrew-arc) to the just-published release. The cross-repo
   # push needs a fine-grained PAT with contents:write on the tap repo, stored as the
   # TAP_GITHUB_TOKEN secret (set out-of-band; its value never appears in output or argv — it rides

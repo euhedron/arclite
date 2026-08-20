@@ -6,6 +6,11 @@ name: Verify release
 # Homebrew tap, and the `arc update --apply` path from the previous release — so a broken asset or
 # channel is caught by ephemeral clean machines instead of a user.
 #
+# The `release: published` trigger below never fires for our own releases: they are published by
+# release.yml using the workflow token, and GitHub suppresses workflow triggers for events that
+# token creates. release.yml therefore dispatches this workflow explicitly (its `verify` job) —
+# the trigger is kept for a release published by hand.
+#
 # Assertions are tag-strict where the channel is tag-addressable (asset downloads, install.sh's
 # version pin) and runs-strict where the channel serves only the latest (install.ps1, the tap —
 # whose bump also races this workflow on a fresh publish): those channels assert a working install
