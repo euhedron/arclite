@@ -1,1 +1,0 @@
-Surface the agenda ambiently, beyond the landed read surfaces (`arc items` and the TUI items view): a doctor line (item counts + order integrity), a TUI masthead warning when integrity is broken, and pending inbox notes surfaced the same way — so drift and queued notes are seen without asking.

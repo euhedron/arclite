@@ -351,6 +351,8 @@ struct App {
     /// A home-masthead warning when the launch dir is a poor place to run arc (home folder / not a git
     /// repo), else None. Computed once at startup (filesystem probes) so render stays pure.
     cwd_note: Option<String>,
+    /// The agenda/inbox masthead warning ([`agenda_warning`]), same startup-computed posture.
+    agenda_note: Option<String>,
     /// The launch dir, home-abbreviated for the masthead — precomputed in `new` (display_path probes
     /// the home dir) so render stays a pure function of state.
     cwd_display: String,
@@ -376,6 +378,7 @@ struct App {
 impl App {
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         let cwd_note = cwd_warning(Path::new(&cwd));
+        let agenda_note = agenda_warning(Path::new(&cwd));
         let cwd_display = crate::display_path(&cwd);
         let backend_unset = backend_unset(&cwd);
         // Check for a newer release off the main thread (it's a network call); the footer flags it when
@@ -402,6 +405,7 @@ impl App {
             feedback: None,
             items: None,
             cwd_note,
+            agenda_note,
             cwd_display,
             update: None,
             backend_unset,
@@ -2188,7 +2192,13 @@ fn render(frame: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(LINE)]).areas(frame.area());
 
     match app.route {
-        Route::Home => render_home(frame, body, &app.cwd_display, app.cwd_note.as_deref()),
+        Route::Home => render_home(
+            frame,
+            body,
+            &app.cwd_display,
+            app.cwd_note.as_deref(),
+            app.agenda_note.as_deref(),
+        ),
         Route::Status => render_status(frame, &app.status, body),
         Route::Config => render_config(
             frame,
@@ -2265,6 +2275,39 @@ fn render(frame: &mut Frame, app: &App) {
 /// A warning for the home view if the launch directory is a poor place to run arc — the home folder
 /// (a run there scans the whole home tree) or outside any git repo; None for a normal repo. Computed
 /// once at startup (it does filesystem probes), so [`render`] stays a pure function of state.
+/// A home-masthead warning when the launch repo's agenda has drift or its inbox holds pending
+/// notes — seen without asking, computed once at startup like [`cwd_warning`] (render stays pure;
+/// the items/feedback views re-read live on open). An *unreadable* agenda or inbox is itself the
+/// warning — a failure must not render as all-clear; a repo with no agenda at all stays silent.
+fn agenda_warning(cwd: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    match crate::commands::items::load(cwd) {
+        Err(e) => parts.push(format!("agenda unreadable — {e:#}")),
+        Ok(agenda) => {
+            let drifted = !agenda.is_absent()
+                && (agenda.order.is_none()
+                    || !(agenda.unlisted.is_empty()
+                        && agenda.dangling.is_empty()
+                        && agenda.duplicated.is_empty()));
+            if drifted {
+                parts.push(format!("agenda — {} (see arc items)", agenda.integrity()));
+            }
+        }
+    }
+    match crate::commands::feedback::inbox_notes(cwd) {
+        Ok(notes) if !notes.is_empty() => {
+            parts.push(format!("inbox: {} note(s) pending triage", notes.len()));
+        }
+        Ok(_) => {}
+        Err(e) => parts.push(format!("inbox unreadable — {e:#}")),
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
+}
+
 fn cwd_warning(cwd: &Path) -> Option<String> {
     if Some(cwd) == dirs::home_dir().as_deref() {
         return Some(
@@ -2297,9 +2340,17 @@ fn backend_unset(cwd: &str) -> bool {
 /// The home view the TUI opens on — a compact masthead (name + version, the target directory, and a
 /// warning when that directory is a poor place to run arc). The footer carries live state and key
 /// hints, so home doesn't repeat them; the space below is the open launchpad.
-fn render_home(frame: &mut Frame, area: Rect, cwd_display: &str, note: Option<&str>) {
-    // The masthead grows by a line when there's a cwd warning to show.
-    let height = MASTHEAD_HEIGHT + if note.is_some() { LINE } else { 0 };
+fn render_home(
+    frame: &mut Frame,
+    area: Rect,
+    cwd_display: &str,
+    note: Option<&str>,
+    agenda_note: Option<&str>,
+) {
+    // The masthead grows by a line per warning it has to show.
+    let height = MASTHEAD_HEIGHT
+        + if note.is_some() { LINE } else { 0 }
+        + if agenda_note.is_some() { LINE } else { 0 };
     let [masthead, _] =
         Layout::vertical([Constraint::Length(height), Constraint::Min(0)]).areas(area);
     let mut lines = vec![
@@ -2307,6 +2358,9 @@ fn render_home(frame: &mut Frame, area: Rect, cwd_display: &str, note: Option<&s
         Line::from(cwd_display).dim(),
     ];
     if let Some(w) = note {
+        lines.push(Line::from(w).yellow());
+    }
+    if let Some(w) = agenda_note {
         lines.push(Line::from(w).yellow());
     }
     frame.render_widget(Paragraph::new(lines).block(Block::bordered()), masthead);
@@ -3562,6 +3616,7 @@ mod tests {
             feedback: None,
             items: None,
             cwd_note: None,
+            agenda_note: None,
             cwd_display: ".".to_owned(),
             update: None,
             backend_unset: false,
