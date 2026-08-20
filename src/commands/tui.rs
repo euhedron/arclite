@@ -910,6 +910,11 @@ impl UsageView {
         self.lens = (self.lens + 1) % self.lenses.len();
         self.reload();
     }
+
+    fn cycle_lens_back(&mut self) {
+        self.lens = (self.lens + self.lenses.len() - 1) % self.lenses.len();
+        self.reload();
+    }
 }
 
 /// The rules view's state: the resolved ruleset (or the resolution error), the cursor + scroll offset
@@ -2061,16 +2066,28 @@ fn handle_usage_key(app: &mut App, code: KeyCode) {
         return;
     };
     match code {
-        KeyCode::Char('r') => {
+        // The two pages are arrow-navigable tabs (the tui-key-model bar: letters are labeled
+        // accelerators, never a function's only path — ←/→ carry the primary switch).
+        KeyCode::Left | KeyCode::Right => {
             view.firing = !view.firing;
             view.scroll = 0;
         }
         KeyCode::Char('p') => view.cycle_lens(),
         _ => {
-            if view.firing
-                && let Some(delta) = scroll_delta(code, REPORT_ROWS)
-            {
-                view.scroll = scrolled(view.scroll, delta);
+            if view.firing {
+                // Firing: ↑↓ scroll the rule list (it outruns the viewport); the lens keeps its
+                // labeled letter path.
+                if let Some(delta) = scroll_delta(code, REPORT_ROWS) {
+                    view.scroll = scrolled(view.scroll, delta);
+                }
+            } else {
+                // Spend: fixed tables, nothing to scroll — ↑↓ cycle the repo lens, so the lens too
+                // has an arrow path (the footer names the per-page meaning, the log-view pattern).
+                match code {
+                    KeyCode::Down => view.cycle_lens(),
+                    KeyCode::Up => view.cycle_lens_back(),
+                    _ => {}
+                }
             }
         }
     }
@@ -2210,7 +2227,7 @@ fn render(frame: &mut Frame, app: &App) {
                 render_text_report(
                     frame,
                     body,
-                    &format!("rule firing · {}", view.lens_label()),
+                    &format!("usage · firing · {}  (← spend)", view.lens_label()),
                     &view.firing_text,
                     view.scroll,
                 );
@@ -2933,8 +2950,13 @@ fn render_rules(frame: &mut Frame, view: &RulesView, area: Rect) {
 fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
     let [header, body] =
         Layout::vertical([Constraint::Length(LINE), Constraint::Min(0)]).areas(area);
+    // The page pair reads as tabs: the active page plain-named, its sibling dimmed behind the
+    // arrow that reaches it — the visible half of the ←→ navigation the footer names.
     frame.render_widget(
-        Line::from(format!("usage · {}", view.lens_label())).bold(),
+        Line::from(vec![
+            Span::from(format!("usage · spend · {}", view.lens_label())).bold(),
+            Span::from("  (→ firing)").dim(),
+        ]),
         header,
     );
 
@@ -3300,9 +3322,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             // Like the config/rules arms, the hint tracks the view's mode — and like every render
             // arm, the view's presence on its own route is an invariant, not an option to hedge.
             Route::Usage => {
-                const SPEND: &str = "/ commands · r firing · p repo · esc back · q quit";
+                const SPEND: &str = "/ commands · ←→ page · ↑↓ repo · esc back · q quit";
                 const FIRING: &str =
-                    "/ commands · r spend · p repo · ↑↓ scroll · esc back · q quit";
+                    "/ commands · ←→ page · ↑↓ scroll · p repo · esc back · q quit";
                 if app
                     .usage
                     .as_ref()
