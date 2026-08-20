@@ -94,11 +94,32 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         activate_hooks(&root)?;
     }
 
-    let human = format!(
-        "created: {}\nskipped: {}",
-        crate::join_or(&created, "(none)"),
-        crate::join_or(&skipped, "(none)")
+    // Orientation, not just a file list: a stranger's first init should say which rules now apply
+    // and what to try next — the display strips the target prefix (repo-relative reads cleaner and
+    // says the same thing), while the JSON report keeps the full paths.
+    let rel = |paths: &[String]| -> Vec<String> {
+        let prefix = format!("{}/", root.display());
+        paths
+            .iter()
+            .map(|p| p.strip_prefix(&prefix).unwrap_or(p).to_owned())
+            .collect()
+    };
+    let mut human = format!(
+        "created: {}\nskipped: {}\nruleset: `{}` — the {} built-in rules arc ships, active immediately (curate {}/{} to grow your own)",
+        crate::join_or(&rel(&created), "(none)"),
+        crate::join_or(&rel(&skipped), "(none)"),
+        crate::DEFAULT_RULESET,
+        crate::rules::builtin().len(),
+        crate::ARC_DIR,
+        RULES_DIR,
     );
+    if !args.hook {
+        human.push_str(
+            "\nnext: arc rules · arc run audit . --dry-run · arc init --hook (the pre-push gate)",
+        );
+    } else {
+        human.push_str("\nnext: arc rules · arc run audit . --dry-run · the gate now runs on push (skip once: ARC_GATE=0 git push)");
+    }
     emit(&InitReport { created, skipped }, &human, global.json)
 }
 

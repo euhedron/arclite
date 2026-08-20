@@ -1730,7 +1730,12 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             (false, _) => preview.push_str(LOGGING_OFF_NOTE),
             (true, None) => {}
         }
-        let human = format!("{preview}\n\n{prompt}");
+        // Prompt first, summary last: a terminal leaves the *tail* visible, and the human-relevant
+        // digest (parameters, estimate, gate/logging state) must be what remains on screen — not
+        // the middle of a rules block. Agents read the whole artifact either way; the JSON carries
+        // both fields regardless of order.
+        let human =
+            format!("[dry run] the exact prompt a real run would send:\n\n{prompt}\n\n{preview}");
         let out = DryRunOutput {
             dry_run: true,
             run: report,

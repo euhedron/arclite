@@ -124,11 +124,11 @@ if [ -n "$adv_outs" ]; then
 fi
 
 if [ "$gate" -ne 0 ]; then
-    echo "arclite gate: push blocked (arc audit exit $gate) · findings: arc log --last --command audit · skip once: ARC_GATE=0 git push" >&2
+    echo "arclite gate: push blocked (arc audit exit $gate) · findings: arc log --last --command audit --repo \"$PWD\" · skip once: ARC_GATE=0 git push" >&2
     exit "$gate"
 fi
 if [ "$align" -ne 0 ]; then
-    echo "arclite gate: push blocked (arc align exit $align) · findings: arc log --last --command align · skip once: ARC_GATE=0 git push" >&2
+    echo "arclite gate: push blocked (arc align exit $align) · findings: arc log --last --command align --repo \"$PWD\" · skip once: ARC_GATE=0 git push" >&2
     exit "$align"
 fi
 
