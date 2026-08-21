@@ -181,37 +181,29 @@ fn move_entry(
 ) -> std::io::Result<PathBuf> {
     let resolved_body = mark_resolved(&std::fs::read_to_string(src)?, reason, run_id);
     let (dest, mut file) = crate::claim_findings_entry(dir, id)?;
+    // One rollback idiom for both failure points below: remove the resolved copy so the ledger is
+    // left either fully moved or not moved at all; a rollback that itself fails is named inside
+    // the original error (best-effort — the open entry is intact either way).
+    let rolled_back = |e: std::io::Error, dest: &Path, consequence: &str| -> std::io::Error {
+        if let Err(rm) = std::fs::remove_file(dest) {
+            return std::io::Error::new(
+                e.kind(),
+                format!("{e} ({}: {rm}{consequence})", dest.display()),
+            );
+        }
+        e
+    };
     if let Err(e) = file.write_all(resolved_body.as_bytes()) {
-        // A half-written resolved copy must not linger: a later retry would suffix past it, leaving
-        // a partial duplicate in the ledger. Roll the claim back (best-effort — a failed cleanup is
-        // named in the error, and the open entry is still intact either way).
+        // A half-written resolved copy must not linger: a later retry would suffix past it,
+        // leaving a partial duplicate in the ledger.
         drop(file);
-        if let Err(rm) = std::fs::remove_file(&dest) {
-            return Err(std::io::Error::new(
-                e.kind(),
-                format!(
-                    "{e} (and the partial {} could not be removed: {rm})",
-                    dest.display()
-                ),
-            ));
-        }
-        return Err(e);
+        return Err(rolled_back(e, &dest, " — the partial copy remains"));
     }
-    // Reached only after the resolved copy is safely written, so the finding is never lost. A failed
-    // source removal rolls the whole move back (removes the resolved copy): the ledger is left
-    // either fully moved or not moved at all — never holding both copies for a re-run to suffix
-    // past instead of reconcile. A rollback that itself fails is named in the error.
+    // Reached only after the resolved copy is safely written, so the finding is never lost. A
+    // failed source removal rolls the whole move back — never holding both copies for a re-run to
+    // suffix past instead of reconcile.
     if let Err(e) = std::fs::remove_file(src) {
-        if let Err(rm) = std::fs::remove_file(&dest) {
-            return Err(std::io::Error::new(
-                e.kind(),
-                format!(
-                    "{e} (and rolling back the resolved copy {} failed: {rm} — both copies remain)",
-                    dest.display()
-                ),
-            ));
-        }
-        return Err(e);
+        return Err(rolled_back(e, &dest, " — both copies remain"));
     }
     Ok(dest)
 }
