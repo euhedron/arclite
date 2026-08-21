@@ -1,1 +1,1 @@
-A release-notes view: current and past release bodies — the same Releases data `arc update` already reads — browsable in the TUI, so what changed is readable where updating happens.
+A release-notes view: current and past release bodies, browsable in the TUI, so what changed is readable where updating happens. Needs a new read — `arc update` today consults only tags and the release's assets array, never `body` — but from the same releases API endpoint the updater already calls: a field addition to that read, not a new integration.
