@@ -94,9 +94,13 @@ const BREW_UPGRADE: &str = "brew upgrade euhedron/arc/arc";
 /// detection, not a `brew` invocation — the binary's own location is the fact, and it holds even
 /// where `brew` isn't on `PATH`.
 fn homebrew_managed(exe: &Path) -> bool {
+    /// The keg-path fragments that betray a Homebrew-owned binary: every macOS prefix keeps kegs
+    /// under `Cellar`, and Linuxbrew lives under `.linuxbrew` — stable Homebrew layout, named so
+    /// the detection reads as the two layouts it covers.
+    const KEG_PATH_FRAGMENTS: [&str; 2] = ["/Cellar/", "/.linuxbrew/"];
     let canonical = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
     let path = canonical.to_string_lossy();
-    path.contains("/Cellar/") || path.contains("/.linuxbrew/")
+    KEG_PATH_FRAGMENTS.iter().any(|f| path.contains(f))
 }
 
 /// Download the target release's binary and install it over the running one. With no newer release,
