@@ -1353,8 +1353,9 @@ impl FeedbackView {
                     rows.push((false, "  (no reports captured)".to_owned()));
                 }
                 for r in reports {
-                    let ts = r.get("ts").and_then(Value::as_u64).unwrap_or(0);
-                    let age = crate::commands::log::age(self.now.saturating_sub(ts));
+                    // The single ts→age extraction (missing ts discloses as "?", never a
+                    // fabricated epoch-based age) — the drift the audit gate caught here.
+                    let age = crate::commands::log::record_age(r, self.now);
                     let message = r
                         .get("message")
                         .and_then(Value::as_str)
