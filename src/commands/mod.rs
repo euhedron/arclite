@@ -360,6 +360,7 @@ pub fn run_synthesis(
             dir: &ctx.root,
             sources: &ctx.sources,
             rules_active: &ctx.rules_active,
+            scope: &ctx.scope,
             taxonomy: &taxonomy,
             excluded: &ctx.excluded,
             config: &config,

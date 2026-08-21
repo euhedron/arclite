@@ -1,1 +1,0 @@
-Make each audit's scope first-class structured data on the run record — new fields for the files it read (count, lines, token estimate) and the rules' share of the prompt — never re-parsed from the sources prose. The commit anchor, prompt_chars, and real token usage already on the record are the seed; this completes them into a queryable scope.

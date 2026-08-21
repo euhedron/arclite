@@ -200,6 +200,8 @@ pub struct SynthOptions<'a> {
     /// The effective taxonomy (kind + description fingerprint), recorded structured on the run —
     /// the same version-aware pattern applied to the vocabulary lever.
     pub taxonomy: &'a [ActiveKind],
+    /// The measured context scope ([`Scope`]), recorded structured on the run.
+    pub scope: &'a Scope,
     /// Notable context excluded by default (e.g. source files), surfaced so defaults aren't hidden.
     pub excluded: &'a [String],
     /// The active `.arc/settings.json` layers (user then project); empty = built-in defaults only.
@@ -306,6 +308,7 @@ fn gather_includes(
     excluder: &ignore::gitignore::Gitignore,
     seen: &mut SeenFiles,
     sources: &mut Vec<String>,
+    scope: &mut Scope,
 ) -> anyhow::Result<String> {
     let mut ctx = String::new();
     let mut walked_dir = false;
@@ -341,7 +344,7 @@ fn gather_includes(
                 continue; // dropped by an --exclude pattern
             }
             let label = file.display().to_string();
-            match add_unless_seen(file, &label, max, &mut ctx, sources, seen) {
+            match add_unless_seen(file, &label, max, &mut ctx, sources, scope, seen) {
                 Added::Ok => {}
                 Added::Duplicate => duplicate += 1, // already in context — not read or billed twice
                 // An explicit --include that's absent reads as missing; one present-but-unreadable as
@@ -622,11 +625,17 @@ fn append_file(
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
+    scope: &mut Scope,
 ) -> std::io::Result<bool> {
     let Some(cap) = read_file(path, max)? else {
         return Ok(false);
     };
     sources.push(source_label(label, &cap));
+    // The one funnel every file body enters context through — measured here, so the recorded
+    // scope can't miss a path or double-count a deduped one.
+    scope.files += 1;
+    scope.file_chars += cap.body.chars().count();
+    scope.file_lines += cap.body.lines().count();
     text.push_str(&format!("\n{label}:\n{}\n", cap.body));
     Ok(true)
 }
@@ -677,6 +686,7 @@ fn add_unless_seen(
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
+    scope: &mut Scope,
     seen: &mut SeenFiles,
 ) -> Added {
     let canon = canonical(path);
@@ -685,7 +695,7 @@ fn add_unless_seen(
     {
         return Added::Duplicate;
     }
-    match append_file(label, path, max, text, sources) {
+    match append_file(label, path, max, text, sources, scope) {
         Ok(true) => {
             if let Some(c) = &canon {
                 seen.identities.push(c.clone());
@@ -710,9 +720,10 @@ fn add_file(
     max: Option<usize>,
     text: &mut String,
     sources: &mut Vec<String>,
+    scope: &mut Scope,
     seen: &mut SeenFiles,
 ) {
-    if let Added::Unreadable = add_unless_seen(path, label, max, text, sources, seen) {
+    if let Added::Unreadable = add_unless_seen(path, label, max, text, sources, scope, seen) {
         sources.push(unreadable_label(label));
     }
 }
@@ -1102,6 +1113,25 @@ pub struct Context {
     /// pairs — recorded structured on the run so firing stats can join findings to the exposed
     /// rule *version*, never by reparsing display prose.
     pub rules_active: Vec<crate::rules::ActiveRule>,
+    /// The measured scope ([`Scope`]) — accumulated while assembling, recorded on the run.
+    pub scope: Scope,
+}
+
+/// A run's measured scope, recorded structured on the run record — queryable, never re-parsed
+/// from the sources prose. File figures count content as it *entered* the context (post-cap: the
+/// run's real exposure); the rules block's chars put the rules' share of the prompt beside the
+/// record's existing `prompt_chars`. Token estimates stay derived (chars over the shared
+/// chars-per-token ratio) rather than stored — no derived data recorded beside its source.
+#[derive(serde::Serialize, Clone, Default)]
+pub struct Scope {
+    /// Files whose contents entered the context (README, manifests, `--include`/`--changed`).
+    pub files: usize,
+    /// Those files' summed lines, as entered.
+    pub file_lines: usize,
+    /// Those files' summed chars, as entered.
+    pub file_chars: usize,
+    /// The rules block's chars — with `prompt_chars`, the rules' share of the prompt.
+    pub rules_chars: usize,
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
@@ -1297,6 +1327,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     let mut text = String::new();
     let mut sources: Vec<String> = Vec::new();
     let mut seen = SeenFiles::default();
+    let mut scope = Scope::default();
 
     if let Some(report) = &report {
         text = format!(
@@ -1312,6 +1343,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         max,
         &mut text,
         &mut sources,
+        &mut scope,
         &mut seen,
     );
     // The manifests come from the scan (root *or* nested) — included only when scanning, keeping the
@@ -1325,6 +1357,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
                 max,
                 &mut text,
                 &mut sources,
+                &mut scope,
                 &mut seen,
             );
         }
@@ -1379,11 +1412,13 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         &excluder,
         &mut seen,
         &mut sources,
+        &mut scope,
     )?);
     let git_truth = gather_git_truth(&root, &seen.included);
     text.push_str(&git_truth.text);
     sources.push(git_truth.source);
     let (rules_text, rules_active) = gather_rules(rule_sources, disabled_rules, &mut sources)?;
+    scope.rules_chars = rules_text.chars().count();
     text.push_str(&rules_text);
     if findings || recheck_findings {
         text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
@@ -1417,6 +1452,7 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
         excluded,
         root,
         rules_active,
+        scope,
     })
 }
 
@@ -1584,6 +1620,10 @@ struct RunRecord<'a> {
     /// as `rules`, for the vocabulary lever ([`ActiveKind`]). Absent on records predating the
     /// field (unknown, never zero); `[]` = the run had no taxonomy in play.
     taxonomy: &'a [ActiveKind],
+    /// The measured context scope ([`Scope`]) — files/lines/chars that entered, the rules block's
+    /// share — queryable beside `prompt_chars`. Absent on records predating the field: unknown,
+    /// never zero.
+    scope: &'a Scope,
     usage: &'a ai::Usage,
     /// The findings field gated on (`--fail-on-findings`), or `None` — with `blocked`, this lets
     /// metrics ask "how often does the gate actually block?" (the spend-vs-value question).
@@ -1901,6 +1941,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             sources: opts.sources,
             rules: opts.rules_active,
             taxonomy: opts.taxonomy,
+            scope: opts.scope,
             usage: &usage,
             gate: opts.gate,
             blocked: gate_blocked,
