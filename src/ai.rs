@@ -1065,7 +1065,7 @@ fn drive(
 /// Build the complete Claude invocation without spawning it. Keeping policy construction separate
 /// from process driving makes the security boundary deterministically testable at zero spend.
 fn claude_command(req: &Request) -> anyhow::Result<Command> {
-    let mut cmd = command("claude")?;
+    let mut cmd = command(CLAUDE)?;
     // stream-json + --verbose + partial messages: stream events as the run proceeds — `assistant`
     // events at turn boundaries plus fine-grained `content_block_delta`s — so live stats update
     // continuously; the final `result` event carries the same payload `--output-format json` would.
@@ -1505,7 +1505,7 @@ fn codex_command(
     out_path: &Path,
     schema_path: Option<&Path>,
 ) -> anyhow::Result<Command> {
-    let mut cmd = command("codex")?;
+    let mut cmd = command(CODEX)?;
     let agent_root = if req.ambient_memory { req.dir } else { work };
     cmd.arg("exec")
         .arg("--json")
