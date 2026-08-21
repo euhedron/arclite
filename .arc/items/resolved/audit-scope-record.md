@@ -1,0 +1,4 @@
+Make each audit's scope first-class structured data on the run record — new fields for the files it read (count, lines, token estimate) and the rules' share of the prompt — never re-parsed from the sources prose. The commit anchor, prompt_chars, and real token usage already on the record are the seed; this completes them into a queryable scope.
+
+---
+Resolved: the run record carries a structured `scope` — files whose contents entered the context with their summed lines and chars (as entered, post-cap — measured at the one funnel every file body flows through), and the rules block's chars beside the existing `prompt_chars`. Token estimates stay derived from chars, never stored. Verified on a live run: {"files": 2, "file_lines": 3, "file_chars": 54, "rules_chars": 0}. Records predating the field read as unknown, never zero.
