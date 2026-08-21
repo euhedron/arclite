@@ -1,7 +1,6 @@
 {
   "order": [
     "release-verification",
-    "behavioral-ruleset",
     "live-transcript-auditing",
     "repo-mute",
     "repo-drift-metrics",
