@@ -631,8 +631,9 @@ fn append_file(
         return Ok(false);
     };
     sources.push(source_label(label, &cap));
-    // The one funnel every file body enters context through — measured here, so the recorded
-    // scope can't miss a path or double-count a deduped one.
+    // The one funnel every *repo file* body enters context through — measured here, so the file
+    // figures can't miss a path or double-count a deduped one. (Ledger blocks — findings, agenda,
+    // prior runs — enter elsewhere and are measured into `ledger_chars` at their own append sites.)
     scope.files += 1;
     scope.file_chars += cap.body.chars().count();
     scope.file_lines += cap.body.lines().count();
@@ -1132,6 +1133,10 @@ pub struct Scope {
     pub file_chars: usize,
     /// The rules block's chars — with `prompt_chars`, the rules' share of the prompt.
     pub rules_chars: usize,
+    /// Chars of context loaded from arc's own ledgers rather than repo files — the findings block
+    /// (`--findings`/verify), the agenda block (align), and prior-run blocks (`--from`) — so a
+    /// ledger-fed run's scope decomposition covers what actually entered, not only baseline files.
+    pub ledger_chars: usize,
 }
 
 /// Files with uncommitted changes (staged, unstaged, or untracked) under `root`, per git —
@@ -1421,13 +1426,19 @@ pub fn gather_context(path: &Path, spec: &ContextSpec) -> anyhow::Result<Context
     scope.rules_chars = rules_text.chars().count();
     text.push_str(&rules_text);
     if findings || recheck_findings {
-        text.push_str(&gather_findings(&root, &mut sources, recheck_findings)?);
+        let block = gather_findings(&root, &mut sources, recheck_findings)?;
+        scope.ledger_chars += block.chars().count();
+        text.push_str(&block);
     }
     if agenda {
-        text.push_str(&gather_agenda(&root, &mut sources)?);
+        let block = gather_agenda(&root, &mut sources)?;
+        scope.ledger_chars += block.chars().count();
+        text.push_str(&block);
     }
     if !from_runs.is_empty() {
-        text.push_str(&gather_runs(from_runs, &mut sources)?);
+        let block = gather_runs(from_runs, &mut sources)?;
+        scope.ledger_chars += block.chars().count();
+        text.push_str(&block);
     }
 
     let mut excluded = if includes.is_empty() {
