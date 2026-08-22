@@ -251,28 +251,8 @@ pub(crate) fn rules_rollup(
     filter: Option<&crate::log::RepoFilter>,
     current: CurrencyLens,
 ) -> anyhow::Result<(RulesRollup, String)> {
-    let (mut records, unparsed) = crate::log::records()?;
-    // The same default-view mute lens as the spend rollup — explicit selections bypass, and both
-    // the filtered count and an unreadable-settings state disclose in the notes.
-    let mut mute_note: Option<String> = None;
-    if filter.is_none() {
-        match crate::settings::Settings::load(std::path::Path::new(".")) {
-            Ok(s) => {
-                let (kept, dropped) = crate::log::split_muted(records, &s.muted_repos);
-                records = kept;
-                if dropped > 0 {
-                    mute_note = Some(format!(
-                        "{dropped} run(s) from muted repo(s) excluded (muted_repos; a repo lens or --repo bypasses)"
-                    ));
-                }
-            }
-            Err(e) => {
-                mute_note = Some(format!(
-                    "mute lens not applied (settings unreadable: {e:#})"
-                ));
-            }
-        }
-    }
+    let (records, unparsed) = crate::log::records()?;
+    let (records, mute_note) = apply_mute_lens(records, filter.is_some());
     let now = crate::log::now_secs();
     #[derive(Default)]
     struct Agg {
@@ -530,30 +510,36 @@ pub(crate) fn rules_rollup(
 /// rendered directly by the TUI usage view) and the joined human-readable lines — one shape, so the
 /// CLI and TUI can't drift. `filter` scopes the ledger — the CLI's substring `--repo`, or an
 /// exact-path lens ([`crate::log::RepoFilter`]); `None` = the whole ledger.
-pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {
-    let (mut all_records, unparsed) = crate::log::records()?;
-    // The mute lens applies to the *default* whole-ledger view only — an explicit repo selection
-    // (either kind of filter) bypasses it. Filtered counts and an unreadable-settings state are
-    // both disclosed in the notes; neither is ever silent.
-    let mut mute_note: Option<String> = None;
-    if filter.is_none() {
-        match crate::settings::Settings::load(std::path::Path::new(".")) {
-            Ok(s) => {
-                let (kept, dropped) = crate::log::split_muted(all_records, &s.muted_repos);
-                all_records = kept;
-                if dropped > 0 {
-                    mute_note = Some(format!(
-                        "{dropped} run(s) from muted repo(s) excluded (muted_repos; a repo lens or --repo bypasses)"
-                    ));
-                }
-            }
-            Err(e) => {
-                mute_note = Some(format!(
-                    "mute lens not applied (settings unreadable: {e:#})"
-                ));
-            }
-        }
+/// The default-view mute lens for the ledger rollups: applies `muted_repos` when no explicit
+/// filter is in play, returning the kept records plus the disclosure note — a filtered count, or
+/// the unreadable-settings state (the lens fails open: showing more, never hiding silently). One
+/// wrapper, so the two rollups can't drift in guard, split, or wording.
+fn apply_mute_lens(records: Vec<Value>, filtered: bool) -> (Vec<Value>, Option<String>) {
+    if filtered {
+        return (records, None);
     }
+    match crate::settings::Settings::load(std::path::Path::new(".")) {
+        Ok(s) => {
+            let (kept, dropped) = crate::log::split_muted(records, &s.muted_repos);
+            let note = (dropped > 0).then(|| {
+                format!(
+                    "{dropped} run(s) from muted repo(s) excluded (muted_repos; a repo lens or --repo bypasses)"
+                )
+            });
+            (kept, note)
+        }
+        Err(e) => (
+            records,
+            Some(format!(
+                "mute lens not applied (settings unreadable: {e:#})"
+            )),
+        ),
+    }
+}
+
+pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {
+    let (all_records, unparsed) = crate::log::records()?;
+    let (all_records, mute_note) = apply_mute_lens(all_records, filter.is_some());
     let records: Vec<&Value> = all_records
         .iter()
         .filter(|r| filter.is_none_or(|f| f.matches(r)))
