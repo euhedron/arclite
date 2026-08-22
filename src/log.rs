@@ -191,6 +191,37 @@ pub fn split_muted(
     (kept, dropped)
 }
 
+/// The default-view mute lens whole: load `muted_repos` and [`split_muted`]. Returns
+/// `(kept, muted_count, settings_error)` — on unreadable settings the lens fails *open*
+/// (unfiltered: showing more, never hiding) with the error carried for the surface to disclose.
+/// One loader for every default view (usage rollups, `arc log`, the TUI log view and status
+/// tail), so the load/split/fail-open behavior can't drift between them.
+pub fn apply_mute(
+    records: Vec<serde_json::Value>,
+) -> (Vec<serde_json::Value>, usize, Option<String>) {
+    match crate::settings::Settings::load(Path::new(".")) {
+        Ok(s) => {
+            let (kept, dropped) = split_muted(records, &s.muted_repos);
+            (kept, dropped, None)
+        }
+        Err(e) => (records, 0, Some(format!("{e:#}"))),
+    }
+}
+
+/// The mute lens's sentence-form disclosures, single-sourced: the excluded count (with `bypass`
+/// naming the calling surface's own override, so the hint stays actionable in place), or the
+/// lens-not-applied line on unreadable settings; `None` when there is nothing to say. Compact
+/// surfaces (the TUI's dim facts) render the count their own way — the wording here is for the
+/// note/line channels.
+pub fn mute_note(muted: usize, settings_error: Option<&str>, bypass: &str) -> Option<String> {
+    if let Some(e) = settings_error {
+        return Some(format!("mute lens not applied (settings unreadable: {e})"));
+    }
+    (muted > 0).then(|| {
+        format!("{muted} run(s) from muted repo(s) excluded (muted_repos; {bypass} bypasses)")
+    })
+}
+
 /// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
 /// can't drift between the surfaces.
 pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
