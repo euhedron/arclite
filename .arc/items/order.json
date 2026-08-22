@@ -1,9 +1,9 @@
 {
   "order": [
     "release-verification",
+    "repo-mute",
     "device-awareness",
     "live-transcript-auditing",
-    "repo-mute",
     "gate-round-linkage",
     "repo-drift-metrics",
     "context-window-utilization",
