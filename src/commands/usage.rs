@@ -252,6 +252,7 @@ pub(crate) fn rules_rollup(
     current: CurrencyLens,
 ) -> anyhow::Result<(RulesRollup, String)> {
     let (records, unparsed) = crate::log::records()?;
+    let (records, mute_note) = apply_mute_lens(records, filter.is_some());
     let now = crate::log::now_secs();
     #[derive(Default)]
     struct Agg {
@@ -412,6 +413,9 @@ pub(crate) fn rules_rollup(
 
     let mut notes =
         vec!["fires are audit findings only — other verbs don't cite rule ids".to_owned()];
+    if let Some(note) = mute_note {
+        notes.push(note);
+    }
     if exposure_unknown_runs > 0 {
         notes.push(format!(
             "{exposure_unknown_runs} run(s) predate the structured rules field — their exposure is unknown (never zero) and their findings sit in the @pre-record bucket"
@@ -506,8 +510,36 @@ pub(crate) fn rules_rollup(
 /// rendered directly by the TUI usage view) and the joined human-readable lines — one shape, so the
 /// CLI and TUI can't drift. `filter` scopes the ledger — the CLI's substring `--repo`, or an
 /// exact-path lens ([`crate::log::RepoFilter`]); `None` = the whole ledger.
+/// The default-view mute lens for the ledger rollups: applies `muted_repos` when no explicit
+/// filter is in play, returning the kept records plus the disclosure note — a filtered count, or
+/// the unreadable-settings state (the lens fails open: showing more, never hiding silently). One
+/// wrapper, so the two rollups can't drift in guard, split, or wording.
+fn apply_mute_lens(records: Vec<Value>, filtered: bool) -> (Vec<Value>, Option<String>) {
+    if filtered {
+        return (records, None);
+    }
+    match crate::settings::Settings::load(std::path::Path::new(".")) {
+        Ok(s) => {
+            let (kept, dropped) = crate::log::split_muted(records, &s.muted_repos);
+            let note = (dropped > 0).then(|| {
+                format!(
+                    "{dropped} run(s) from muted repo(s) excluded (muted_repos; a repo lens or --repo bypasses)"
+                )
+            });
+            (kept, note)
+        }
+        Err(e) => (
+            records,
+            Some(format!(
+                "mute lens not applied (settings unreadable: {e:#})"
+            )),
+        ),
+    }
+}
+
 pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {
     let (all_records, unparsed) = crate::log::records()?;
+    let (all_records, mute_note) = apply_mute_lens(all_records, filter.is_some());
     let records: Vec<&Value> = all_records
         .iter()
         .filter(|r| filter.is_none_or(|f| f.matches(r)))
@@ -670,6 +702,9 @@ pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<
     // and carried in the payload, so the TUI usage view renders the same wording rather than
     // re-deriving (and drifting from) it.
     let mut notes: Vec<String> = Vec::new();
+    if let Some(note) = mute_note {
+        notes.push(note);
+    }
     if tokens_only > 0 {
         notes.push(format!(
             "{tokens_only} run(s) report tokens only — no dollar cost (codex); counted in the token sums, not the cost"

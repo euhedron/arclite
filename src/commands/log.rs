@@ -10,7 +10,12 @@ pub fn run(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if let Some(id) = &args.id {
         show(id, global)
     } else if args.last {
-        let (records, unparsed) = matching_records(args)?;
+        let (records, unparsed, muted) = matching_records(args)?;
+        if muted > 0 {
+            eprintln!(
+                "arclite: {muted} run(s) from muted repo(s) excluded (muted_repos; --repo <path> bypasses)"
+            );
+        }
         // With corrupt lines in the log, "newest parsed" may not be "newest run" — disclosed, so
         // --last can't silently answer with an older record (distinguish-absent-from-unreadable).
         if unparsed > 0 {
@@ -34,11 +39,26 @@ pub fn run(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 const DEFAULT_LIMIT: usize = 20;
 
 /// The run records (newest first) that pass the `--command`/`--repo`/`--blocked` filters, plus how
-/// many log lines didn't parse.
-fn matching_records(args: &LogArgs) -> anyhow::Result<(Vec<Value>, usize)> {
+/// many log lines didn't parse and how many the `muted_repos` lens excluded. An explicit `--repo`
+/// bypasses the mute (a default lens, never a lock); unreadable settings disclose and proceed
+/// unfiltered rather than silently hiding or showing.
+fn matching_records(args: &LogArgs) -> anyhow::Result<(Vec<Value>, usize, usize)> {
     let (mut records, unparsed) = crate::log::records_newest_first()?;
+    let mut muted_count = 0;
+    if args.repo.is_none() {
+        let muted = match crate::settings::Settings::load(std::path::Path::new(".")) {
+            Ok(s) => s.muted_repos,
+            Err(e) => {
+                eprintln!("arclite: mute lens not applied (settings unreadable: {e:#})");
+                Vec::new()
+            }
+        };
+        let (kept, dropped) = crate::log::split_muted(records, &muted);
+        records = kept;
+        muted_count = dropped;
+    }
     records.retain(|r| keep(r, args));
-    Ok((records, unparsed))
+    Ok((records, unparsed, muted_count))
 }
 
 /// Whether one record passes the selection filters.
@@ -60,7 +80,7 @@ fn keep(r: &Value, args: &LogArgs) -> bool {
 }
 
 fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    let (records, unparsed) = matching_records(args)?;
+    let (records, unparsed, muted) = matching_records(args)?;
     let total = records.len();
     let shown = if args.all {
         &records[..]
@@ -82,11 +102,18 @@ fn list(args: &LogArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     if unparsed > 0 {
         lines.push(crate::log::unparsed_note(unparsed));
     }
+    // The mute lens always discloses what it filtered — a default view, never a silent one.
+    if muted > 0 {
+        lines.push(format!(
+            "{muted} run(s) from muted repo(s) excluded (muted_repos; --repo <path> bypasses)"
+        ));
+    }
     let payload = serde_json::json!({
         "runs": shown,
         "shown": shown.len(),
         "total": total,
         "unparsed": unparsed,
+        "muted": muted,
     });
     emit(&payload, &lines.join("\n"), global.json)
 }

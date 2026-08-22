@@ -168,6 +168,29 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
 }
 
 /// Whether a record's repo path contains `needle`, case-insensitively — the one statement of the
+/// Split records under the operator's `muted_repos` lens: `(kept, muted_count)` — exact match on
+/// the recorded repo path, the same lossless strings the setting stores. The one statement of the
+/// mute filter: every *default* view applies it and discloses the count; an explicit repo
+/// selection bypasses it (a mute is a default lens, never a lock, and the records are permanent).
+pub fn split_muted(
+    records: Vec<serde_json::Value>,
+    muted: &[String],
+) -> (Vec<serde_json::Value>, usize) {
+    if muted.is_empty() {
+        return (records, 0);
+    }
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    for r in records {
+        if muted.iter().any(|m| field(&r, "repo") == *m) {
+            dropped += 1;
+        } else {
+            kept.push(r);
+        }
+    }
+    (kept, dropped)
+}
+
 /// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
 /// can't drift between the surfaces.
 pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
