@@ -1448,6 +1448,21 @@ impl LogView {
     }
 }
 
+/// Apply a text-editing key to `buffer` — the one Backspace-pops/Char-pushes idiom every typed
+/// input shares (the palette query, the config text edit, the feedback compose), factored like the
+/// cross-view navigation helpers. Returns whether the buffer changed, so a caller that derives
+/// state from the text (the palette's match filter) knows to re-derive.
+fn edit_buffer(buffer: &mut String, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Backspace => buffer.pop().is_some(),
+        KeyCode::Char(c) => {
+            buffer.push(c);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// A scroll offset moved by `delta` rows — the one clamp for every scrolled text body (the log detail,
 /// the doctor/rules reports). Clamped at the top only: the bodies wrap, so their on-screen height isn't
 /// known here — let the bottom over-scroll into blank rather than hide wrapped tail lines (a precise
@@ -2029,9 +2044,6 @@ fn handle_feedback_compose_key(app: &mut App, code: KeyCode) {
         };
         match code {
             KeyCode::Esc => view.compose = None,
-            KeyCode::Backspace => {
-                compose.text.pop();
-            }
             KeyCode::Enter => {
                 let message = compose.text.trim().to_owned();
                 let inbox = compose.inbox;
@@ -2042,8 +2054,9 @@ fn handle_feedback_compose_key(app: &mut App, code: KeyCode) {
                     save = Some((inbox, message));
                 }
             }
-            KeyCode::Char(c) => compose.text.push(c),
-            _ => {}
+            code => {
+                edit_buffer(&mut compose.text, code);
+            }
         }
     }
     let Some((inbox, message)) = save else { return };
@@ -2146,15 +2159,10 @@ fn handle_palette_key(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Backspace => {
-            if let Some(p) = app.palette.as_mut() {
-                p.query.pop();
-                p.reclamp();
-            }
-        }
-        KeyCode::Char(ch) => {
-            if let Some(p) = app.palette.as_mut() {
-                p.query.push(ch);
+        KeyCode::Backspace | KeyCode::Char(_) => {
+            if let Some(p) = app.palette.as_mut()
+                && edit_buffer(&mut p.query, code)
+            {
                 p.reclamp();
             }
         }
@@ -2790,11 +2798,9 @@ fn handle_config_edit_key(app: &mut App, code: KeyCode) {
                     KeyCode::Enter => {
                         save = Some((values[*selected].key.clone(), buffer.clone(), *selected));
                     }
-                    KeyCode::Backspace => {
-                        buffer.pop();
+                    code => {
+                        edit_buffer(buffer, code);
                     }
-                    KeyCode::Char(c) => buffer.push(c),
-                    _ => {}
                 },
                 ConfigEdit::Pick { options, index } => match code {
                     KeyCode::Up | KeyCode::Left => {
