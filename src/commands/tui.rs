@@ -691,13 +691,22 @@ impl App {
     /// the list rows and the drill-in detail reuse `arc log`'s own projections, so they can't drift.
     fn open_log(&mut self) {
         self.route = Route::Log;
-        let (runs, unparsed) = match crate::log::records_newest_first() {
-            Ok((records, unparsed)) => (Ok(records), unparsed),
-            Err(e) => (Err(format!("{e:#}")), 0),
+        let (runs, unparsed, muted) = match crate::log::records_newest_first() {
+            Ok((records, unparsed)) => {
+                // The default-view mute lens (failing open on unreadable settings — showing more,
+                // never hiding; the config view surfaces the settings failure itself).
+                let muted_list = crate::settings::Settings::load(Path::new(&self.cwd))
+                    .map(|s| s.muted_repos)
+                    .unwrap_or_default();
+                let (kept, dropped) = crate::log::split_muted(records, &muted_list);
+                (Ok(kept), unparsed, dropped)
+            }
+            Err(e) => (Err(format!("{e:#}")), 0, 0),
         };
         self.log = Some(LogView {
             runs,
             unparsed,
+            muted,
             now: crate::log::now_secs(),
             selected: 0,
             offset: 0,
@@ -842,6 +851,9 @@ struct UsageView {
     /// Scroll over the firing page (its rule list can outrun the viewport; the spend page is fixed
     /// tables).
     scroll: u16,
+    /// The `muted_repos` list at load — labels muted lenses and backs the `m` toggle. Reloaded
+    /// after every toggle, so shown state is re-read from disk, never assumed from the write.
+    muted: Vec<String>,
     spend: Result<Rollup, String>,
     firing_text: Result<String, String>,
 }
@@ -860,16 +872,16 @@ impl UsageView {
         }
         // A ledger read failure here degrades the lens list to the two structural lenses — not
         // silently: the same read powers the page load below, whose `Result` puts the cause on
-        // the body, so fewer lenses never impersonate a smaller ledger. Muted repos are left out
-        // of the cycle (the mute is exactly a default-lens exclusion; the all-repos page's notes
-        // disclose the filtered count) — except the launch cwd, which is an explicit selection by
-        // presence and stays.
+        // the body, so fewer lenses never impersonate a smaller ledger. Muted repos STAY in the
+        // cycle, labeled — selecting one is an explicit selection (which bypasses the mute), and
+        // keeping them visible is what makes the `m` toggle able to unmute; only the all-repos
+        // page's *data* excludes them, disclosed in its notes.
         let muted = crate::settings::Settings::load(Path::new(cwd))
             .map(|s| s.muted_repos)
             .unwrap_or_default();
         if let Ok(repos) = crate::commands::usage::ledger_repos() {
             for repo in repos {
-                if cwd_abs.as_ref() != Some(&repo) && !muted.contains(&repo) {
+                if cwd_abs.as_ref() != Some(&repo) {
                     lenses.push(Some(repo));
                 }
             }
@@ -879,6 +891,7 @@ impl UsageView {
             lens: 0,
             firing: false,
             scroll: 0,
+            muted,
             spend: Err(String::new()),
             firing_text: Err(String::new()),
         };
@@ -912,6 +925,9 @@ impl UsageView {
     fn lens_label(&self) -> String {
         match &self.lenses[self.lens] {
             None => "all repos".to_owned(),
+            // A muted lens says so in its label — the visible state the `m` toggle flips, and the
+            // reminder that this page shows data only because selecting it is explicit.
+            Some(p) if self.muted.contains(p) => format!("{} · muted", crate::display_path(p)),
             Some(p) => crate::display_path(p),
         }
     }
@@ -1386,6 +1402,8 @@ struct LogView {
     runs: Result<Vec<Value>, String>,
     /// Run-log lines that couldn't be parsed — surfaced in the hint, never silently dropped.
     unparsed: usize,
+    /// Runs the `muted_repos` lens excluded from this default view — disclosed on the info line.
+    muted: usize,
     /// Reference time for the rows' relative ages, captured at load.
     now: u64,
     selected: usize,
@@ -2107,6 +2125,40 @@ fn handle_usage_key(app: &mut App, code: KeyCode) {
             view.scroll = 0;
         }
         KeyCode::Char('p') => view.cycle_lens(),
+        // Toggle the current repo lens's mute — written through the same validated path as
+        // `arc config set muted_repos` (one write path), then the whole view reloads so labels,
+        // notes, and data are re-read from disk. A no-op on the all-repos lens.
+        KeyCode::Char('m') => {
+            if let Some(repo) = view.lenses[view.lens].clone() {
+                let mut muted = view.muted.clone();
+                match muted.iter().position(|m| *m == repo) {
+                    Some(i) => {
+                        muted.remove(i);
+                    }
+                    None => muted.push(repo),
+                }
+                let lens = view.lens;
+                let firing = view.firing;
+                match crate::commands::config::set_value(
+                    Path::new(&app.cwd),
+                    "muted_repos",
+                    &muted.join(","),
+                    true,
+                ) {
+                    Ok(_) => {
+                        let mut fresh = UsageView::open(&app.cwd);
+                        fresh.lens = lens.min(fresh.lenses.len().saturating_sub(1));
+                        fresh.firing = firing;
+                        fresh.reload();
+                        app.usage = Some(fresh);
+                    }
+                    Err(e) => {
+                        // A failed write surfaces on the page body's error slot, never silently.
+                        view.spend = Err(format!("mute toggle failed: {e:#}"));
+                    }
+                }
+            }
+        }
         _ => {
             if view.firing {
                 // Firing: ↑↓ scroll the rule list (it outruns the viewport); the lens keeps its
@@ -3307,6 +3359,9 @@ fn render_log(frame: &mut Frame, log: &LogView, area: Rect) {
     if log.unparsed > 0 {
         info_text.push_str(&format!(" · {}", crate::log::unparsed_note(log.unparsed)));
     }
+    if log.muted > 0 {
+        info_text.push_str(&format!(" · {} muted", log.muted));
+    }
     frame.render_widget(Line::from(info_text).dim(), info);
 }
 
@@ -3402,9 +3457,9 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             // Like the config/rules arms, the hint tracks the view's mode — and like every render
             // arm, the view's presence on its own route is an invariant, not an option to hedge.
             Route::Usage => {
-                const SPEND: &str = "/ commands · ←→ page · ↑↓ repo · esc back · q quit";
+                const SPEND: &str = "/ commands · ←→ page · ↑↓ repo · m mute · esc back · q quit";
                 const FIRING: &str =
-                    "/ commands · ←→ page · ↑↓ scroll · p repo · esc back · q quit";
+                    "/ commands · ←→ page · ↑↓ scroll · p repo · m mute · esc back · q quit";
                 if app
                     .usage
                     .as_ref()

@@ -153,13 +153,28 @@ const SETTINGS: &[Setting] = &[
         key: "muted_repos",
         read: |s| (!s.muted_repos.is_empty()).then(|| s.muted_repos.join(",")),
         parse: |v| {
-            Ok(serde_json::Value::Array(
-                v.split(',')
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                    .map(|p| serde_json::Value::String(p.to_owned()))
-                    .collect(),
-            ))
+            let entries: Vec<serde_json::Value> = v
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                // An existing path normalizes to the ledger's own record string (so `.` or a
+                // relative spelling can't store a verbatim form that exact-matches nothing — a
+                // set that silently mutes nothing); a non-existing entry stays verbatim, since
+                // muting a *deleted* repo's history is the feature's own use case and the
+                // pasteable ledger string is then the only handle.
+                .map(|p| {
+                    let normalized = std::fs::canonicalize(p)
+                        .map(|c| crate::log::repo_record_string(&c))
+                        .unwrap_or_else(|_| p.to_owned());
+                    serde_json::Value::String(normalized)
+                })
+                .collect();
+            // Empty clears by *removing the key* (the secrets' Null path) — an empty list held no
+            // information, and a stored-but-empty key is pure surface for cross-version friction.
+            if entries.is_empty() {
+                return Ok(serde_json::Value::Null);
+            }
+            Ok(serde_json::Value::Array(entries))
         },
         space: open_space,
     },
@@ -425,6 +440,7 @@ pub(crate) fn set_value(
 fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     let path = set_value(std::path::Path::new("."), key, value, user)?;
     // A secret's value is never echoed — not to the terminal, not into a --json consumer's log.
+    let reloaded;
     let shown = if secret_key(key) {
         if value.trim().is_empty() {
             crate::settings::UNSET
@@ -432,7 +448,13 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
             crate::settings::SET_MASK
         }
     } else {
-        value
+        // Echo the *stored* value, re-read from disk — a parse may normalize (muted_repos resolves
+        // paths to the ledger's record strings), and confirming the input would misreport what was
+        // kept (reload canonical state after write).
+        reloaded = Settings::load(std::path::Path::new("."))
+            .ok()
+            .and_then(|s| (setting(key).expect("set_value validated the key").read)(&s));
+        reloaded.as_deref().unwrap_or(crate::settings::UNSET)
     };
     let human = format!("set {key} = {shown}  ({})", path.display());
     emit(
