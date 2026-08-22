@@ -60,11 +60,17 @@ pub struct Settings {
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
 
-// Every Raw* layer rejects unknown fields: a misspelled key (`source` for `sources`, `modle`) would
-// otherwise deserialize cleanly and silently leave the requested behavior inactive — the exact
-// silent-drop reject-unsupported-option-before-acting forbids. The error names the bad key and file.
+// Unknown top-level keys are captured and *warned about by name*, never fatal. Two goods compete
+// here: a misspelled key silently deactivating its behavior (the silent-drop
+// reject-unsupported-option-before-acting forbids) versus forward compatibility — the user layer
+// is one file shared by every arc binary on the machine, and a strict reader turns each new
+// settings key into a machine-wide breaking change across versions (proven live: a dev binary
+// wrote `muted_repos` and every released reader's gate bricked until the key was hand-removed).
+// The surveyed peers (VS Code, git, the agent CLIs) all tolerate unknown keys for exactly this
+// reason. Loud disclosure keeps the typo visible; tolerance keeps versions coexisting.
+// (The nested shapes keep `deny_unknown_fields`: their fields change rarely, and an inner typo —
+// `source` for `sources` — still deserves the hard error while it stays cheap.)
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Raw {
     backend: Option<String>,
     claude_model: Option<String>,
@@ -83,6 +89,10 @@ struct Raw {
     api_keys: Option<RawApiKeys>,
     #[serde(default)]
     taxonomies: BTreeMap<String, Vec<RawKind>>,
+    /// Keys this binary doesn't know — warned about by name at load ([`Settings::merge`]), then
+    /// ignored: the tolerance half of the bargain the struct comment states.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 /// One taxonomy entry as written in settings: the kind's label and its description — the same
@@ -135,20 +145,17 @@ impl Settings {
         let Some(text) = crate::read_optional(path).with_context(|| read_error(path))? else {
             return Ok(());
         };
-        let raw: Raw = match serde_json::from_str(&text) {
-            Ok(raw) => raw,
-            Err(e) => {
-                let mut err = anyhow::Error::new(e).context(parse_error(path));
-                // The pre-flatten schema wrapped the scalars in a `defaults` section; the unknown-key
-                // rejection alone would name the field without saying what to do about it.
-                if text.contains("\"defaults\"") {
-                    err = err.context(
-                        "the settings schema flattened: keys formerly under `defaults` now live at the top level (`model` is now `claude_model`; the rest keep their names) — run `arc config list` for the full key set",
-                    );
-                }
-                return Err(err);
-            }
-        };
+        let raw: Raw = serde_json::from_str(&text).with_context(|| parse_error(path))?;
+        // Unknown keys warn by name — loud enough that a typo can't hide, tolerant enough that a
+        // newer binary's key can't brick this one (the struct comment's bargain).
+        if !raw.unknown.is_empty() {
+            let keys: Vec<&str> = raw.unknown.keys().map(String::as_str).collect();
+            eprintln!(
+                "arclite: unrecognized setting key(s) in {}: {} — ignored",
+                path.display(),
+                keys.join(", ")
+            );
+        }
         self.active.push(path.to_path_buf());
         let dir = path
             .parent()
