@@ -860,10 +860,16 @@ impl UsageView {
         }
         // A ledger read failure here degrades the lens list to the two structural lenses — not
         // silently: the same read powers the page load below, whose `Result` puts the cause on
-        // the body, so fewer lenses never impersonate a smaller ledger.
+        // the body, so fewer lenses never impersonate a smaller ledger. Muted repos are left out
+        // of the cycle (the mute is exactly a default-lens exclusion; the all-repos page's notes
+        // disclose the filtered count) — except the launch cwd, which is an explicit selection by
+        // presence and stays.
+        let muted = crate::settings::Settings::load(Path::new(cwd))
+            .map(|s| s.muted_repos)
+            .unwrap_or_default();
         if let Ok(repos) = crate::commands::usage::ledger_repos() {
             for repo in repos {
-                if cwd_abs.as_ref() != Some(&repo) {
+                if cwd_abs.as_ref() != Some(&repo) && !muted.contains(&repo) {
                     lenses.push(Some(repo));
                 }
             }
@@ -1571,6 +1577,8 @@ struct RecentTail {
     rows: Vec<[String; RECENT_COLS]>,
     total: usize,
     unparsed: usize,
+    /// Runs the `muted_repos` lens excluded from this default view — disclosed beside the counts.
+    muted: usize,
 }
 
 /// Build the [`RecentTail`] from the log: the newest rows as `[age, command, repo, outcome, cost]`
@@ -1580,6 +1588,13 @@ struct RecentTail {
 /// later optimization.
 fn recent_completed(now: u64) -> Result<RecentTail, String> {
     let (records, unparsed) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
+    // The default-view mute lens, disclosed via the muted count. On unreadable settings the lens
+    // fails *open* (unfiltered — showing more, never hiding); the settings failure itself is the
+    // config view's and doctor's to surface.
+    let muted_list = crate::settings::Settings::load(std::path::Path::new("."))
+        .map(|s| s.muted_repos)
+        .unwrap_or_default();
+    let (records, muted) = crate::log::split_muted(records, &muted_list);
     let total = records.len();
     let rows = records
         .iter()
@@ -1612,6 +1627,7 @@ fn recent_completed(now: u64) -> Result<RecentTail, String> {
         rows,
         total,
         unparsed,
+        muted,
     })
 }
 
@@ -2473,6 +2489,9 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
             if tail.unparsed > 0 {
                 // With corrupt lines in the log, "newest parsed" may not be "newest run".
                 title.push_str(&format!(" · {}", crate::log::unparsed_note(tail.unparsed)));
+            }
+            if tail.muted > 0 {
+                title.push_str(&format!(" · {} muted", tail.muted));
             }
             let table = Table::new(
                 tail.rows.iter().map(|c| Row::new(c.clone())),
@@ -3598,6 +3617,7 @@ mod tests {
                 rows: Vec::new(),
                 total: 0,
                 unparsed: 0,
+                muted: 0,
             }),
         }
     }

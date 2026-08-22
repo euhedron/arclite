@@ -1,7 +1,6 @@
 {
   "order": [
     "release-verification",
-    "repo-mute",
     "device-awareness",
     "live-transcript-auditing",
     "gate-round-linkage",

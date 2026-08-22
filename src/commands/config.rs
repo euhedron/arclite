@@ -147,6 +147,22 @@ const SETTINGS: &[Setting] = &[
         },
         space: open_space,
     },
+    // Muted repos: exact recorded paths, comma-joined like disabled_rules; user-layer only
+    // (`set_value` elevates + the loader rejects a project layer) — see the Settings field doc.
+    Setting {
+        key: "muted_repos",
+        read: |s| (!s.muted_repos.is_empty()).then(|| s.muted_repos.join(",")),
+        parse: |v| {
+            Ok(serde_json::Value::Array(
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| serde_json::Value::String(p.to_owned()))
+                    .collect(),
+            ))
+        },
+        space: open_space,
+    },
     // The api_keys rows: user-layer only (`set_value` elevates + the loader rejects a project-layer
     // key) and masked — list/get/the TUI show presence, never the secret. An empty value unsets.
     Setting {
@@ -181,9 +197,18 @@ fn parse_secret(value: &str) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::Value::String(v.to_owned()))
 }
 
-/// Whether `key` may only live in the user layer — the secrets: a project's settings.json is
-/// tracked, and a tracked file must never hold one.
+/// Whether `key` may only live in the user layer: the secrets (a project's settings.json is
+/// tracked, and a tracked file must never hold one) and the operator's ledger lenses
+/// (`muted_repos`: a mute is the operator's view over the operator's ledger, never a repo's
+/// tracked claim about itself). Layer restriction and secrecy are distinct — see [`secret_key`].
 pub(crate) fn user_layer_only(key: &str) -> bool {
+    secret_key(key) || key == "muted_repos"
+}
+
+/// Whether `key` holds a *secret* — stdin-only entry, masked everywhere it displays. Every secret
+/// is user-layer-only, but not every user-layer-only key is a secret (`muted_repos` is a plain,
+/// showable list that merely must not live in a tracked file).
+pub(crate) fn secret_key(key: &str) -> bool {
     key.starts_with("api_keys.")
 }
 
@@ -211,7 +236,7 @@ pub fn run(args: &ConfigArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             // merely discouraged, because accepting it at all leaves the credential in the process
             // table and shell history (keep-secrets-out-of-process-arguments). Non-secret keys are
             // the opposite: value inline, stdin prompting would just be friction.
-            let value = match (value, user_layer_only(key)) {
+            let value = match (value, secret_key(key)) {
                 (Some(v), false) => v.clone(),
                 (Some(_), true) => {
                     anyhow::bail!(
@@ -400,7 +425,7 @@ pub(crate) fn set_value(
 fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Result<()> {
     let path = set_value(std::path::Path::new("."), key, value, user)?;
     // A secret's value is never echoed — not to the terminal, not into a --json consumer's log.
-    let shown = if user_layer_only(key) {
+    let shown = if secret_key(key) {
         if value.trim().is_empty() {
             crate::settings::UNSET
         } else {
