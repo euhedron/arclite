@@ -43,6 +43,12 @@ pub struct Settings {
     /// extends the set). The builtin-defaults pattern applied to the levers that steer judgment:
     /// what ships is just a configuration, and nothing driving a run hides in code.
     pub taxonomies: BTreeMap<String, Vec<(String, String)>>,
+    /// Repos muted from the ledger surfaces' *default* views (exact recorded paths — the ledger's
+    /// own lossless record strings). A mute is a view-level default, always disclosed where it
+    /// filters, and an explicit `--repo` selection overrides it; the records themselves are
+    /// permanent. **User layer only**: a mute is the operator's lens over the operator's ledger
+    /// (the mechanics-are-private doctrine), never a repo's tracked claim about itself.
+    pub muted_repos: Vec<String>,
     /// Saved provider API keys for the model listings (`api_keys.anthropic` / `api_keys.openai`) —
     /// **user layer only**: a project's settings.json is tracked, and a tracked file must never hold
     /// a secret (the loader rejects a project-layer key outright). The standard env vars
@@ -71,6 +77,8 @@ struct Raw {
     rulesets: BTreeMap<String, RawRuleset>,
     #[serde(default)]
     disabled_rules: Option<Vec<String>>,
+    #[serde(default)]
+    muted_repos: Option<Vec<String>>,
     #[serde(default)]
     api_keys: Option<RawApiKeys>,
     #[serde(default)]
@@ -203,6 +211,14 @@ impl Settings {
         // API keys load from the user layer only: a project's settings.json is tracked, and a tracked
         // file must never hold a secret — rejected loudly, not skipped, so a committed key is caught
         // the first time anything loads settings rather than lingering.
+        if let Some(muted) = raw.muted_repos {
+            anyhow::ensure!(
+                user_layer,
+                "muted_repos found in {} — a mute is the operator's lens over the operator's ledger and belongs in the user layer (~/.arc/settings.json), never a repo's tracked settings",
+                path.display()
+            );
+            self.muted_repos = muted;
+        }
         if let Some(keys) = raw.api_keys {
             anyhow::ensure!(
                 user_layer,
