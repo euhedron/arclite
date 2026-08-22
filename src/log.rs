@@ -167,7 +167,6 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
     record.get("error").is_some()
 }
 
-/// Whether a record's repo path contains `needle`, case-insensitively — the one statement of the
 /// Split records under the operator's `muted_repos` lens: `(kept, muted_count)` — exact match on
 /// the recorded repo path, the same lossless strings the setting stores. The one statement of the
 /// mute filter: every *default* view applies it and discloses the count; an explicit repo
