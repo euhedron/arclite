@@ -518,23 +518,9 @@ fn apply_mute_lens(records: Vec<Value>, filtered: bool) -> (Vec<Value>, Option<S
     if filtered {
         return (records, None);
     }
-    match crate::settings::Settings::load(std::path::Path::new(".")) {
-        Ok(s) => {
-            let (kept, dropped) = crate::log::split_muted(records, &s.muted_repos);
-            let note = (dropped > 0).then(|| {
-                format!(
-                    "{dropped} run(s) from muted repo(s) excluded (muted_repos; a repo lens or --repo bypasses)"
-                )
-            });
-            (kept, note)
-        }
-        Err(e) => (
-            records,
-            Some(format!(
-                "mute lens not applied (settings unreadable: {e:#})"
-            )),
-        ),
-    }
+    let (kept, muted, error) = crate::log::apply_mute(records);
+    let note = crate::log::mute_note(muted, error.as_deref(), "a repo lens or --repo");
+    (kept, note)
 }
 
 pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {

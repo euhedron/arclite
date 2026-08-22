@@ -693,12 +693,9 @@ impl App {
         self.route = Route::Log;
         let (runs, unparsed, muted) = match crate::log::records_newest_first() {
             Ok((records, unparsed)) => {
-                // The default-view mute lens (failing open on unreadable settings — showing more,
-                // never hiding; the config view surfaces the settings failure itself).
-                let muted_list = crate::settings::Settings::load(Path::new(&self.cwd))
-                    .map(|s| s.muted_repos)
-                    .unwrap_or_default();
-                let (kept, dropped) = crate::log::split_muted(records, &muted_list);
+                // The shared default-view mute lens (fails open on unreadable settings — showing
+                // more, never hiding; the config view surfaces the settings failure itself).
+                let (kept, dropped, _settings_error) = crate::log::apply_mute(records);
                 (Ok(kept), unparsed, dropped)
             }
             Err(e) => (Err(format!("{e:#}")), 0, 0),
@@ -1606,13 +1603,9 @@ struct RecentTail {
 /// later optimization.
 fn recent_completed(now: u64) -> Result<RecentTail, String> {
     let (records, unparsed) = crate::log::records_newest_first().map_err(|e| format!("{e:#}"))?;
-    // The default-view mute lens, disclosed via the muted count. On unreadable settings the lens
-    // fails *open* (unfiltered — showing more, never hiding); the settings failure itself is the
-    // config view's and doctor's to surface.
-    let muted_list = crate::settings::Settings::load(std::path::Path::new("."))
-        .map(|s| s.muted_repos)
-        .unwrap_or_default();
-    let (records, muted) = crate::log::split_muted(records, &muted_list);
+    // The shared default-view mute lens, disclosed via the muted count (fails open on unreadable
+    // settings; that failure is the config view's and doctor's to surface).
+    let (records, muted, _settings_error) = crate::log::apply_mute(records);
     let total = records.len();
     let rows = records
         .iter()
