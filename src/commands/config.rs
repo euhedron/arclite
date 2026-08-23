@@ -157,17 +157,17 @@ const SETTINGS: &[Setting] = &[
                 .split(',')
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
-                // An existing path normalizes to the ledger's own record string (so `.` or a
-                // relative spelling can't store a verbatim form that exact-matches nothing — a
-                // set that silently mutes nothing); an entry that can't normalize — no such
-                // path, or a canonical form outside UTF-8 — stays verbatim, since muting a
-                // *deleted* repo's history is the feature's own use case and the pasteable
-                // ledger string is then the only handle.
+                // Normalize through the records' own funnel — `resolve_root` →
+                // `repo_record_string`, the same two steps every run record's repo key takes —
+                // so any spelling (`.`, relative, symlinked) stores exactly the key a run
+                // launched there records; a different resolver would diverge on symlinks and
+                // store a form that exact-matches nothing. A value the resolver rejects stays
+                // verbatim: muting a *deleted* repo's history is the feature's own use case,
+                // and the pasteable ledger string is then the only handle.
                 .map(|p| {
-                    let normalized = std::fs::canonicalize(p)
-                        .ok()
-                        .and_then(|c| crate::log::try_repo_record_string(&c))
-                        .unwrap_or_else(|| p.to_owned());
+                    let normalized = super::resolve_root(std::path::Path::new(p))
+                        .map(|abs| crate::log::repo_record_string(&abs))
+                        .unwrap_or_else(|_| p.to_owned());
                     serde_json::Value::String(normalized)
                 })
                 .collect();
