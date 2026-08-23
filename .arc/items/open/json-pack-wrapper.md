@@ -1,5 +1,3 @@
-# json-pack-wrapper
-
 Accept a `{"rules": [...]}` wrapper object beside the bare list in the JSON rule-pack reader, ignoring unknown sibling keys. A pack file's metadata (name, version, provenance) stays the publisher's concern; arc reads the rules and nothing else.
 
 Why: the rulespace registry serves packs as wrapper objects (its session proposed this as their item 840, 2026-08-21), and sibling systems' canonical rulebooks tend toward the same shape — a bare top-level array is the less common wire form. Accepting both means a registry-published or sibling-owned pack is an arc source verbatim, no transformation step to write or to drift. The bare-list form stays valid; nothing existing changes meaning.
