@@ -980,12 +980,18 @@ fn git_state_for_path(snapshot: &GitSnapshot, path: &str) -> &'static str {
     }
 }
 
+/// The one shape of a per-file Git truth row — every branch (known state, unknown, no-path
+/// fallback) builds it here, so the row's keys can't drift between sites.
+fn git_row(path: &str, git_state: &str) -> serde_json::Value {
+    serde_json::json!({"path": path, "git_state": git_state})
+}
+
 fn unknown_git_rows(root: &Path, included: &[IncludedFile]) -> Vec<serde_json::Value> {
     included
         .iter()
         .map(|file| match git_relative_path(root, &file.path) {
-            Ok(path) => serde_json::json!({"path": path, "git_state": "unknown"}),
-            Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+            Ok(path) => git_row(&path, "unknown"),
+            Err(state) => git_row(&file.label, state),
         })
         .collect()
 }
@@ -1039,11 +1045,8 @@ fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
                 .is_ok_and(|path| path.components().any(|c| c == Component::ParentDir));
             if has_parent {
                 return match canonical.unwrap_or(Err("unknown")) {
-                    Ok(path) => serde_json::json!({
-                        "git_state": git_state_for_path(&snapshot, &path),
-                        "path": path,
-                    }),
-                    Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+                    Ok(path) => git_row(&path, git_state_for_path(&snapshot, &path)),
+                    Err(state) => git_row(&file.label, state),
                 };
             }
             match primary {
@@ -1059,10 +1062,9 @@ fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
                             .filter(|path| path_has_specific_state(&snapshot, path))
                             .unwrap_or(path)
                     };
-                    let state = git_state_for_path(&snapshot, &path);
-                    serde_json::json!({"path": path, "git_state": state})
+                    git_row(&path, git_state_for_path(&snapshot, &path))
                 }
-                Err(state) => serde_json::json!({"path": file.label, "git_state": state}),
+                Err(state) => git_row(&file.label, state),
             }
         })
         .collect();
