@@ -902,6 +902,17 @@ impl UsageView {
         view
     }
 
+    /// Put an action failure where the user is looking — the *active* tab's result slot. A message
+    /// written to a background tab's slot would make the keypress look dead and surface later,
+    /// detached from the action that caused it.
+    fn show_error(&mut self, message: String) {
+        if self.firing {
+            self.firing_text = Err(message);
+        } else {
+            self.spend = Err(message);
+        }
+    }
+
     /// (Re)load both pages for the current lens — shown state is recomputed whole, never patched.
     fn reload(&mut self) {
         let lens = self.lenses[self.lens].clone();
@@ -2132,9 +2143,8 @@ fn handle_usage_key(app: &mut App, code: KeyCode) {
                 // An unreadable settings base blocks the toggle — writing from an empty base
                 // could drop real mutes — and the refusal names both facts.
                 if let Some(err) = &view.muted_error {
-                    view.spend = Err(format!(
-                        "mute toggle unavailable — settings unreadable: {err}"
-                    ));
+                    let msg = format!("mute toggle unavailable — settings unreadable: {err}");
+                    view.show_error(msg);
                     return;
                 }
                 let mut muted = view.muted.clone();
@@ -2160,8 +2170,7 @@ fn handle_usage_key(app: &mut App, code: KeyCode) {
                         app.usage = Some(fresh);
                     }
                     Err(e) => {
-                        // A failed write surfaces on the page body's error slot, never silently.
-                        view.spend = Err(format!("mute toggle failed: {e:#}"));
+                        view.show_error(format!("mute toggle failed: {e:#}"));
                     }
                 }
             }
