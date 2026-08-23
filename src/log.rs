@@ -221,6 +221,7 @@ pub fn mute_note(muted: usize, settings_error: Option<&str>, bypass: &str) -> Op
     })
 }
 
+/// Whether a record's repo path contains `needle`, case-insensitively — the one statement of the
 /// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
 /// can't drift between the surfaces.
 pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
