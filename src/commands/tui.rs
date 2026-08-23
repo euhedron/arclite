@@ -851,6 +851,10 @@ struct UsageView {
     /// The `muted_repos` list at load — labels muted lenses and backs the `m` toggle. Reloaded
     /// after every toggle, so shown state is re-read from disk, never assumed from the write.
     muted: Vec<String>,
+    /// A settings-load failure, kept distinct from an empty list: it blocks the `m` toggle (a
+    /// write against an unreadable base could drop real mutes) and is named when `m` is pressed;
+    /// the page rollups' mute notes disclose the same failure ambiently.
+    muted_error: Option<String>,
     spend: Result<Rollup, String>,
     firing_text: Result<String, String>,
 }
@@ -873,9 +877,10 @@ impl UsageView {
         // cycle, labeled — selecting one is an explicit selection (which bypasses the mute), and
         // keeping them visible is what makes the `m` toggle able to unmute; only the all-repos
         // page's *data* excludes them, disclosed in its notes.
-        let muted = crate::settings::Settings::load(Path::new(cwd))
-            .map(|s| s.muted_repos)
-            .unwrap_or_default();
+        let (muted, muted_error) = match crate::settings::Settings::load(Path::new(cwd)) {
+            Ok(s) => (s.muted_repos, None),
+            Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+        };
         if let Ok(repos) = crate::commands::usage::ledger_repos() {
             for repo in repos {
                 if cwd_abs.as_ref() != Some(&repo) {
@@ -889,6 +894,7 @@ impl UsageView {
             firing: false,
             scroll: 0,
             muted,
+            muted_error,
             spend: Err(String::new()),
             firing_text: Err(String::new()),
         };
@@ -2123,6 +2129,14 @@ fn handle_usage_key(app: &mut App, code: KeyCode) {
         // notes, and data are re-read from disk. A no-op on the all-repos lens.
         KeyCode::Char('m') => {
             if let Some(repo) = view.lenses[view.lens].clone() {
+                // An unreadable settings base blocks the toggle — writing from an empty base
+                // could drop real mutes — and the refusal names both facts.
+                if let Some(err) = &view.muted_error {
+                    view.spend = Err(format!(
+                        "mute toggle unavailable — settings unreadable: {err}"
+                    ));
+                    return;
+                }
                 let mut muted = view.muted.clone();
                 match muted.iter().position(|m| *m == repo) {
                     Some(i) => {
