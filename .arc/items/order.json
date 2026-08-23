@@ -1,6 +1,5 @@
 {
   "order": [
-    "release-verification",
     "device-awareness",
     "live-transcript-auditing",
     "gate-round-linkage",
@@ -15,6 +14,7 @@
     "repo-search",
     "lexicon",
     "claude-docs-reference",
+    "release-verification",
     "direct-api-backend",
     "legacy-arc-review",
     "rulespace-registry"
