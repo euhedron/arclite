@@ -12,10 +12,10 @@
     "github-check-gate",
     "release-notes-view",
     "verbs-as-configurations",
-    "direct-api-backend",
     "repo-search",
     "lexicon",
     "claude-docs-reference",
+    "direct-api-backend",
     "legacy-arc-review",
     "rulespace-registry"
   ]
