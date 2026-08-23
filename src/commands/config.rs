@@ -159,13 +159,15 @@ const SETTINGS: &[Setting] = &[
                 .filter(|p| !p.is_empty())
                 // An existing path normalizes to the ledger's own record string (so `.` or a
                 // relative spelling can't store a verbatim form that exact-matches nothing — a
-                // set that silently mutes nothing); a non-existing entry stays verbatim, since
-                // muting a *deleted* repo's history is the feature's own use case and the
-                // pasteable ledger string is then the only handle.
+                // set that silently mutes nothing); an entry that can't normalize — no such
+                // path, or a canonical form outside UTF-8 — stays verbatim, since muting a
+                // *deleted* repo's history is the feature's own use case and the pasteable
+                // ledger string is then the only handle.
                 .map(|p| {
                     let normalized = std::fs::canonicalize(p)
-                        .map(|c| crate::log::repo_record_string(&c))
-                        .unwrap_or_else(|_| p.to_owned());
+                        .ok()
+                        .and_then(|c| crate::log::try_repo_record_string(&c))
+                        .unwrap_or_else(|| p.to_owned());
                     serde_json::Value::String(normalized)
                 })
                 .collect();

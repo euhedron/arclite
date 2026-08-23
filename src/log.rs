@@ -310,9 +310,14 @@ pub fn model_display(record: &serde_json::Value) -> String {
 /// enters through `resolve_root`, which rejects non-UTF-8 before any command runs, precisely so
 /// stored state can never address a different path than the one judged.
 pub fn repo_record_string(dir: &std::path::Path) -> String {
-    dir.to_str()
+    try_repo_record_string(dir)
         .expect("repo paths are validated UTF-8 at the CLI boundary (commands::resolve_root)")
-        .to_owned()
+}
+
+/// The same conversion for paths that never crossed the CLI boundary (a settings entry, say) —
+/// fallible where the boundary's UTF-8 invariant was never established.
+pub fn try_repo_record_string(dir: &std::path::Path) -> Option<String> {
+    dir.to_str().map(str::to_owned)
 }
 
 /// The last path segment of a repo path — the compact way `arc log` and the TUI show *which* repo a
