@@ -450,10 +450,15 @@ fn set(key: &str, value: &str, user: bool, global: &GlobalArgs) -> anyhow::Resul
     } else {
         // Echo the *stored* value, re-read from disk — a parse may normalize (muted_repos resolves
         // paths to the ledger's record strings), and confirming the input would misreport what was
-        // kept (reload canonical state after write).
-        reloaded = Settings::load(std::path::Path::new("."))
-            .ok()
-            .and_then(|s| (setting(key).expect("set_value validated the key").read)(&s));
+        // kept (reload canonical state after write). A failed reload is an error naming both facts
+        // — the write landed, the combined settings no longer load — never a clean-looking unset.
+        let settings = Settings::load(std::path::Path::new(".")).with_context(|| {
+            format!(
+                "set {key} was written ({}), but re-reading the layered settings failed",
+                path.display()
+            )
+        })?;
+        reloaded = (setting(key).expect("set_value validated the key").read)(&settings);
         reloaded.as_deref().unwrap_or(crate::settings::UNSET)
     };
     let human = format!("set {key} = {shown}  ({})", path.display());
