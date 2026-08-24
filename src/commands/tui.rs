@@ -2374,11 +2374,7 @@ fn agenda_warning(cwd: &Path) -> Option<String> {
     match crate::commands::items::load(cwd) {
         Err(e) => parts.push(format!("agenda unreadable — {e:#}")),
         Ok(agenda) => {
-            let drifted = !agenda.is_absent()
-                && (agenda.order.is_none()
-                    || !(agenda.unlisted.is_empty()
-                        && agenda.dangling.is_empty()
-                        && agenda.duplicated.is_empty()));
+            let drifted = !agenda.is_absent() && (agenda.order.is_none() || agenda.order_drifted());
             if drifted {
                 parts.push(format!("agenda — {} (see arc items)", agenda.integrity()));
             }
@@ -3236,12 +3232,10 @@ fn render_items(frame: &mut Frame, view: &ItemsView, area: Rect) {
             .enumerate()
             .map(|(i, id)| {
                 let n = view.offset + i;
-                let marker = if agenda.dangling.iter().any(|d| d == id) {
-                    "  (dangling)"
-                } else if agenda.unlisted.iter().any(|u| u == id) {
-                    "  (unlisted)"
-                } else {
-                    ""
+                let marker = match agenda.classify(id) {
+                    crate::commands::items::IdKind::Dangling => "  (dangling)",
+                    crate::commands::items::IdKind::Unlisted => "  (unlisted)",
+                    crate::commands::items::IdKind::Listed => "",
                 };
                 let line = Line::from(vec![
                     Span::from(format!("{:>3}. {id}", n + 1)),

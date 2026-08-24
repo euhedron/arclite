@@ -32,6 +32,18 @@ pub(crate) struct Agenda {
 pub(crate) const NO_AGENDA: &str =
     "no agenda: .arc/items/open is absent or empty, and there is no order file";
 
+/// How a presented id relates to the order — the one precedence (a dangling id before an unlisted
+/// one) the `arc items` listing and the TUI items view share, so the two can't drift on which
+/// marker an id earns. Each surface maps these to its own wording.
+pub(crate) enum IdKind {
+    /// The order names it, but no open item file backs it.
+    Dangling,
+    /// An open item the order omits.
+    Unlisted,
+    /// Listed and backed — an ordinary agenda entry.
+    Listed,
+}
+
 impl Agenda {
     /// Whether there is no agenda at all — no open items and no order file. (An empty order file
     /// is an agenda: apparatus deliberately present, shown as empty rather than as absence.)
@@ -39,17 +51,30 @@ impl Agenda {
         self.items.is_empty() && self.order.is_none()
     }
 
+    /// Whether an order file is present but drifts from the open set — some id unlisted, dangling,
+    /// or duplicated. The one determination behind the integrity line's "complete"-vs-drift split
+    /// and the TUI masthead's drift warning, so they can't disagree on what "drifted" means.
+    pub fn order_drifted(&self) -> bool {
+        self.order.is_some()
+            && !(self.unlisted.is_empty() && self.dangling.is_empty() && self.duplicated.is_empty())
+    }
+
+    /// Classify a presented id against the order — see [`IdKind`].
+    pub fn classify(&self, id: &str) -> IdKind {
+        if self.dangling.iter().any(|d| d == id) {
+            IdKind::Dangling
+        } else if self.unlisted.iter().any(|u| u == id) {
+            IdKind::Unlisted
+        } else {
+            IdKind::Listed
+        }
+    }
+
     /// The one-line integrity verdict every surface shows — sources lines, `arc items`, the TUI.
     pub fn integrity(&self) -> String {
         match &self.order {
             None => "no order file".to_owned(),
-            Some(_)
-                if self.unlisted.is_empty()
-                    && self.dangling.is_empty()
-                    && self.duplicated.is_empty() =>
-            {
-                "order: complete".to_owned()
-            }
+            Some(_) if !self.order_drifted() => "order: complete".to_owned(),
             Some(_) => {
                 let mut parts = Vec::new();
                 if !self.unlisted.is_empty() {
@@ -163,12 +188,10 @@ pub fn run(args: &ItemsArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         agenda.integrity()
     )];
     for (i, id) in agenda.presented_ids().iter().enumerate() {
-        let marker = if agenda.dangling.iter().any(|d| d == id) {
-            "  (dangling — no item file)"
-        } else if agenda.unlisted.iter().any(|u| u == id) {
-            "  (unlisted — not in order.json)"
-        } else {
-            ""
+        let marker = match agenda.classify(id) {
+            IdKind::Dangling => "  (dangling — no item file)",
+            IdKind::Unlisted => "  (unlisted — not in order.json)",
+            IdKind::Listed => "",
         };
         lines.push(format!("{:>3}. {id}{marker}", i + 1));
     }
