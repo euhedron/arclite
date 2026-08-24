@@ -252,7 +252,10 @@ fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
     // not at the file's end, which would file the note under whatever section happens to be last.
     // No heading at all → add the section at the end.
     let mut lines: Vec<String> = lines.into_iter().map(str::to_owned).collect();
-    if let Some(h) = lines.iter().position(|l| l.trim_end() == "## Resolution") {
+    if let Some(h) = lines
+        .iter()
+        .position(|l| l.trim_end() == super::promote::RESOLUTION_HEADING)
+    {
         let mut at = lines[h + 1..]
             .iter()
             .position(|l| l.starts_with("## "))
@@ -264,7 +267,7 @@ fn mark_resolved(body: &str, reason: &str, run_id: &str) -> String {
         lines.insert(at, note);
     } else {
         lines.push(String::new());
-        lines.push("## Resolution".to_owned());
+        lines.push(super::promote::RESOLUTION_HEADING.to_owned());
         lines.push(note);
     }
     format!("{}\n", lines.join("\n").trim_end())

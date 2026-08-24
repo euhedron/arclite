@@ -268,6 +268,11 @@ fn write_entry(
 pub(crate) const STATUS_OPEN: &str = "status: open";
 pub(crate) const STATUS_RESOLVED: &str = "status: resolved";
 
+/// The Resolution section heading — the structural contract promote's template writes and retire's
+/// note-insert locates. One statement, like the status lines above, so renaming it can't silently
+/// turn retire's locator into a no-op that appends a duplicate section.
+pub(crate) const RESOLUTION_HEADING: &str = "## Resolution";
+
 /// The runnable spelling of a synthesis verb — `arc run <verb>` (the run group, [`crate::cli::NAME_RUN`]),
 /// never `arc audit`, which doesn't exist. One builder for every surface that names the invocation
 /// (promote's head summary and entry provenance, synth's aggregate-context headers), so none can drift.
@@ -306,7 +311,7 @@ fn entry_md(
          ## Evidence\nPromoted from `{invocation}` run `{run_id}`{against} — see `arc log {run_id}` for the full run and its note.\n\n\
          ## Why It Matters\n\n\
          ## Next Action\n\n\
-         ## Resolution\n"
+         {RESOLUTION_HEADING}\n"
     )
 }
 
