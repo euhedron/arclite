@@ -2,6 +2,7 @@
   "order": [
     "device-awareness",
     "live-transcript-auditing",
+    "dedicated-prompts",
     "gate-round-linkage",
     "repo-drift-metrics",
     "context-window-utilization",
