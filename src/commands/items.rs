@@ -52,8 +52,10 @@ impl Agenda {
     }
 
     /// Whether an order file is present but drifts from the open set — some id unlisted, dangling,
-    /// or duplicated. The one determination behind the integrity line's "complete"-vs-drift split
-    /// and the TUI masthead's drift warning, so they can't disagree on what "drifted" means.
+    /// or duplicated. The one statement of order-present drift, shared by the integrity line's
+    /// "complete"-vs-drift split and the TUI masthead warning (which additionally flags an agenda
+    /// that has items but no order file at all), so those surfaces can't disagree on what order
+    /// drift means.
     pub fn order_drifted(&self) -> bool {
         self.order.is_some()
             && !(self.unlisted.is_empty() && self.dangling.is_empty() && self.duplicated.is_empty())
