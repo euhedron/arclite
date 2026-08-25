@@ -67,13 +67,15 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // The dry-run's reservation set — earlier previews in this batch occupy their predicted names,
     // matching the real run's atomic claims (see promote's twin).
     let mut reserved = std::collections::HashSet::new();
+    // Use-time reads, not shape re-judgment: the move is named by `id` and the resolution note is
+    // written from `reason`, so a record missing either can't be acted on — and the whole batch is
+    // validated BEFORE its first ledger move, so the bail's "nothing was retired" is true rather
+    // than a misreport after earlier verdicts in the same run already moved their entries.
+    let mut to_retire = Vec::new();
     for (i, v) in verdicts.iter().enumerate() {
         if v.get("verdict").and_then(Value::as_str) != Some("resolved") {
             continue; // only resolved findings retire; reproduces/indeterminate stay open
         }
-        // Use-time reads, not shape re-judgment: the move is named by `id` and the resolution note
-        // is written from `reason`, so a record missing either can't be acted on — fail closed
-        // before any ledger move rather than let it masquerade as "nothing actionable".
         let Some(id) = v
             .get("id")
             .and_then(Value::as_str)
@@ -89,6 +91,9 @@ pub fn run(args: &RetireArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 "resolved verdict `{id}` carries no `reason` to write into its resolution note — nothing was retired"
             );
         };
+        to_retire.push((id, reason));
+    }
+    for (id, reason) in to_retire {
         // The id rode through the model — validate it as an untrusted path segment before joining it to
         // the ledger dir, reusing the canonical single-safe-segment check (shared with run-id validation).
         if crate::commands::log::ensure_safe_run_id(id).is_err() {
