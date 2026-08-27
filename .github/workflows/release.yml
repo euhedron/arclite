@@ -167,7 +167,10 @@ jobs:
   # recursion guard), and workflow_dispatch is the documented exception that does run. Without
   # this, the verifier only runs when dispatched by hand.
   verify:
-    needs: [create-release, publish-release]
+    # Also needs the tap bump: the verifier's brew job asserts the tap serves THIS release, so
+    # dispatching before the bump lands (or after it fails) would verify a channel known-stale.
+    # A skipped-without-token tap exits 0, so token-less releases still verify the other channels.
+    needs: [create-release, publish-release, tap]
     if: needs.create-release.outputs.already_published != 'true'
     # The workflow's top-level grant is contents-only, which zeroes every other permission — and
     # creating a workflow_dispatch event needs `actions: write`. Granted here, on the one job that
