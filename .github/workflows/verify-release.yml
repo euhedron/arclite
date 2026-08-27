@@ -162,6 +162,13 @@ jobs:
           fi
           brew install euhedron/arc/arc
           arc --version
+          # The channel must serve THIS release — an install that runs but reports another version
+          # is the tap lagging, not a verified channel (a check that can't confirm must fail).
+          installed="$(arc --version | awk '{print $2}')"
+          if [ "v$installed" != "$TAG" ]; then
+            echo "brew serves $installed, expected $TAG — the tap has not caught up" >&2
+            exit 1
+          fi
           arc doctor
 
   # `arc update --apply` from the previous release's binary — the path an existing user's machine
