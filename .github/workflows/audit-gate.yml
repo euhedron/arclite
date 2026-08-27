@@ -18,12 +18,18 @@ concurrency:
 
 jobs:
   audit:
+    # Same-repo PRs only: a fork's run has no secret access, so it would fail on auth instead of
+    # producing a verdict — skipped is honest where no judgment happened (and a skipped job
+    # satisfies a required check; fork policy is decided when the required flip happens).
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install arc (pinned release; install.sh verifies its SHA256SUMS)
+        # The installer is fetched from the same tag it installs — pinning the binary but taking
+        # the verifying script from mutable main would leave the verifier itself unpinned.
         run: |
-          curl -fsSL https://raw.githubusercontent.com/euhedron/arclite/main/install.sh | sh -s v0.1.14
+          curl -fsSL https://raw.githubusercontent.com/euhedron/arclite/v0.1.14/install.sh | sh -s v0.1.14
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install the backend CLI (pinned to the boundary-audited version)
         run: npm install -g @anthropic-ai/claude-code@2.1.216
