@@ -37,6 +37,27 @@ const HEAD_SCAN_LINES: usize = 5;
 /// A head line longer than this is not metadata; the scan stops rather than buffering content.
 const HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 
+/// The discovery indexes — an enum, so a source added later must declare its own accumulation
+/// arm in [`observe`] at compile time instead of falling into another source's catch-all.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    Claude,
+    Codex,
+    Ledger,
+}
+
+impl Source {
+    /// The lowercase name every display uses (matching the serialized form).
+    fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Ledger => "ledger",
+        }
+    }
+}
+
 /// One repository's discovered activity across the three indexes.
 #[derive(Serialize)]
 pub struct RepoActivity {
@@ -49,7 +70,7 @@ pub struct RepoActivity {
     /// Most recent activity across the sources (unix secs); `None` when only counts are known.
     pub last_activity: Option<u64>,
     /// Which index produced [`Self::last_activity`].
-    pub last_source: Option<&'static str>,
+    pub last_source: Option<Source>,
     /// Whether the path no longer exists on disk — the stores remember ephemeral worktrees and
     /// deleted checkouts long after they're gone (the first real run surfaced ~150 of them), so
     /// the default view folds gone paths into a count and `--all` shows them. Discovery still
@@ -62,7 +83,7 @@ impl RepoActivity {
     pub fn recency(&self, now: u64) -> String {
         match self.last_activity {
             Some(ts) if now.saturating_sub(ts) <= ACTIVE_WINDOW_SECS => {
-                let source = self.last_source.unwrap_or("?");
+                let source = self.last_source.map_or("?", Source::label);
                 format!("{ACTIVE_LABEL} ({source})")
             }
             Some(ts) => crate::commands::log::age(now.saturating_sub(ts)),
@@ -151,13 +172,13 @@ pub fn discover(include_all: bool) -> Discovery {
     }
 }
 
-/// Fold one source's observation into the map.
+/// Fold one source's observation into the map: `count` accumulates into the counter the source
+/// enumerates (sessions for the CLI stores, runs for the ledger).
 fn observe(
     map: &mut BTreeMap<String, RepoActivity>,
     repo: String,
-    source: &'static str,
-    sessions: usize,
-    runs: usize,
+    source: Source,
+    count: usize,
     activity: Option<u64>,
 ) {
     let entry = map.entry(repo.clone()).or_insert_with(|| RepoActivity {
@@ -170,9 +191,9 @@ fn observe(
         gone: false,
     });
     match source {
-        "claude" => entry.claude_sessions += sessions,
-        "codex" => entry.codex_sessions += sessions,
-        _ => entry.ledger_runs += runs,
+        Source::Claude => entry.claude_sessions += count,
+        Source::Codex => entry.codex_sessions += count,
+        Source::Ledger => entry.ledger_runs += count,
     }
     if activity > entry.last_activity {
         entry.last_activity = activity;
@@ -283,7 +304,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
                 decode_project_dir(&entry.file_name().to_string_lossy())
             }),
         };
-        observe(map, repo, "claude", sessions, 0, activity);
+        observe(map, repo, Source::Claude, sessions, activity);
     }
     if decoded > 0 {
         notes.push(format!(
@@ -338,7 +359,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                 continue;
             }
             match head_cwd(&p) {
-                Some(repo) => observe(map, repo, "codex", 1, 0, mtime_secs(&p)),
+                Some(repo) => observe(map, repo, Source::Codex, 1, mtime_secs(&p)),
                 None => unresolved += 1,
             }
         }
@@ -370,7 +391,7 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
                     continue;
                 }
                 let ts = r.get("ts").and_then(serde_json::Value::as_u64);
-                observe(map, repo, "ledger", 0, 1, ts);
+                observe(map, repo, Source::Ledger, 1, ts);
             }
         }
         Err(e) => notes.push(format!("ledger unreadable: {e:#}")),
