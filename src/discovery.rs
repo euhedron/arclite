@@ -93,8 +93,23 @@ pub fn discover(include_all: bool) -> Discovery {
     claude_store(&mut map, &mut notes);
     codex_store(&mut map, &mut notes);
     ledger(&mut map, &mut notes);
+    // Absent and unreadable are different truths here too: a path that can't be *checked* is kept
+    // in the view (marking it gone would fold real data out on a failed stat — a suppression must
+    // fail toward showing), disclosed in the notes.
+    let mut uncheckable = 0usize;
     for r in map.values_mut() {
-        r.gone = !Path::new(&r.repo).is_dir();
+        r.gone = match crate::try_is_dir(Path::new(&r.repo)) {
+            Ok(is_dir) => !is_dir,
+            Err(_) => {
+                uncheckable += 1;
+                false
+            }
+        };
+    }
+    if uncheckable > 0 {
+        notes.push(format!(
+            "{uncheckable} repo path(s) could not be checked for existence — kept in the view"
+        ));
     }
 
     // The one mute lens: a mute list is just repo paths, and every default cross-repo surface —
@@ -252,12 +267,23 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         if sessions == 0 {
             continue; // an empty project dir names no activity to map
         }
-        let (mtime, newest_path) = newest.expect("sessions > 0 implies a newest file");
-        let repo = head_cwd(&newest_path).unwrap_or_else(|| {
-            decoded += 1;
-            decode_project_dir(&entry.file_name().to_string_lossy())
-        });
-        observe(map, repo, "claude", sessions, 0, Some(mtime));
+        // `newest` can be absent even with sessions counted — a file raced away between listing
+        // and stat, or an unreadable mtime — so the sessions still map (activity unknown, the
+        // repo name from the decode fallback) rather than panicking on an assumed invariant.
+        let (activity, repo) = match newest {
+            Some((mtime, path)) => (
+                Some(mtime),
+                head_cwd(&path).unwrap_or_else(|| {
+                    decoded += 1;
+                    decode_project_dir(&entry.file_name().to_string_lossy())
+                }),
+            ),
+            None => (None, {
+                decoded += 1;
+                decode_project_dir(&entry.file_name().to_string_lossy())
+            }),
+        };
+        observe(map, repo, "claude", sessions, 0, activity);
     }
     if decoded > 0 {
         notes.push(format!(
