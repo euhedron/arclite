@@ -104,6 +104,10 @@ pub enum Command {
     /// List the tracked items — the open agenda in its intended order, integrity disclosed — or
     /// show one item in full with `--id`.
     Items(ItemsArgs),
+    /// List the repositories this device knows by discovery — the agent CLIs' session stores and
+    /// arc's own ledger — with per-repo session counts and activity recency (--all includes
+    /// suppressed entries).
+    Repos(ReposArgs),
     /// List the models each backend's provider API reports available (needs an API key: the
     /// provider's standard env var, or a saved user-layer `api_keys.*` setting).
     Models(ModelsArgs),
@@ -164,6 +168,15 @@ pub enum RunVerb {
     Aggregate(SynthArgs),
     #[command(name = NAME_ALIGN, about = VERB_ALIGN)]
     Align(SynthArgs),
+}
+
+/// Arguments for `arc repos` — the device's discovered repo map (see `commands::repos`).
+#[derive(Debug, Args)]
+pub struct ReposArgs {
+    /// Include what the default view folds away: repos the `muted_repos` lens hides, and
+    /// discovered paths that no longer exist on disk.
+    #[arg(long)]
+    pub all: bool,
 }
 
 /// Arguments for `arc items` — the agenda's read surface (see `commands::items`).

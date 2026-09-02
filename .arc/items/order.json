@@ -1,6 +1,6 @@
 {
   "order": [
-    "device-awareness",
+    "modular-specification",
     "live-transcript-auditing",
     "dedicated-prompts",
     "github-check-gate",
@@ -13,7 +13,6 @@
     "json-pack-wrapper",
     "tui-init",
     "public-run-record",
-    "modular-specification",
     "release-notes-view",
     "verbs-as-configurations",
     "repo-search",

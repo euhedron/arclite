@@ -219,7 +219,7 @@ fn parse_secret(value: &str) -> anyhow::Result<serde_json::Value> {
 /// (`muted_repos`: a mute is the operator's view over the operator's ledger, never a repo's
 /// tracked claim about itself). Layer restriction and secrecy are distinct — see [`secret_key`].
 pub(crate) fn user_layer_only(key: &str) -> bool {
-    secret_key(key) || key == "muted_repos"
+    secret_key(key) || crate::settings::USER_LAYER_ONLY_IGNORED.contains(&key)
 }
 
 /// Whether `key` holds a *secret* — stdin-only entry, masked everywhere it displays. Every secret

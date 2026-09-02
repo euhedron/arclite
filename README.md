@@ -58,6 +58,7 @@ arc log [<id>]
 arc usage
 arc rules
 arc items [--id <id>]
+arc repos
 arc models
 arc feedback "found a rough edge" --issue
 arc feedback "queue this thought for the next session" --inbox
@@ -124,6 +125,8 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 Not a plan or a commitment; it evolves as signals warrant. What has **landed** is narrated below. What is **open** is tracked as the agenda in [`.arc/items/`](.arc/items) — one Markdown item per file, `order.json` the intended order (see its [README](.arc/items/README.md)) — audited by `arc run align` and gated on push; pointed to from here, never mirrored, so the two can't fork. (A landed item's leftover edges are noted inline below until they warrant items of their own.)
 
 **Landed, with open edges:**
+
+- [x] **Device awareness** — `arc repos` and the TUI status seat's device block: the repositories on this machine and the agent activity around them, by discovery, not declaration — the agent CLIs' own session stores (Claude Code's per-project directories; codex's rollout files, whose repo is read from a session head's `cwd` — names and metadata only, no transcript content) plus arc's own ledger, folded into per-repo session counts, run counts, and activity recency (an mtime heuristic labeled as recency, never an asserted live connection). One `muted_repos` lens mutes a repo from every default cross-repo view — ledger surfaces and this map alike (a mute list is just repo paths); discovered paths gone from disk fold into a disclosed count; `--all` bypasses both. Every store degradation (absent vs. unreadable, lossy name decodes, unreadable heads) is a disclosed note, never a silent gap. Open: the map as the transcript locator for live-transcript auditing (its consuming item); richer per-repo detail as the cockpit grows.
 
 - [x] **Multi-run** — `--runs N` runs a command N times concurrently and unions the `results` (only byte-identical items collapse). The substance-merge that edge called for is now the `aggregate` verb (under **Open**). Open: sequential pass-forward (each run sees prior findings); fanning one union across *different* commands.
 - [x] **Run logging + rollup** — mechanism under **Logging** above (each run stamps arc's release `version`), now with **ledger analytics**: `arc usage` is the analytics home — the spend rollup and the **per-rule firing rollup** (`--rules`) as two lenses over one dataset, `--repo` filtering either. Every run records its active rules as **(id, content-hash) pairs**, so firing attributes to the rule *version* that was in play — the current version's record split from historical ones, with runs predating the field disclosed as exposure-**unknown**, never zero (and never back-parsed from display prose) — and its measured **scope** (files whose contents entered, with summed lines/chars as entered; the rules block's and the ledgers' shares beside `prompt_chars`), queryable structured data, never re-parsed from the sources prose. Firing is curation signal, not a verdict: the display surfaces the distribution and its outliers — the fired tail with per-version breakdowns, and the never-fired tail with exposure counts. Open: team aggregation; trends over time (audit pass-rate, cost curves).
