@@ -7,6 +7,7 @@ pub mod items;
 pub mod log;
 pub mod models;
 pub mod promote;
+pub mod repos;
 pub mod retire;
 pub mod rules;
 pub mod status;

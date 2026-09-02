@@ -43,11 +43,13 @@ pub struct Settings {
     /// extends the set). The builtin-defaults pattern applied to the levers that steer judgment:
     /// what ships is just a configuration, and nothing driving a run hides in code.
     pub taxonomies: BTreeMap<String, Vec<(String, String)>>,
-    /// Repos muted from the ledger surfaces' *default* views (exact recorded paths — the ledger's
-    /// own lossless record strings). A mute is a view-level default, always disclosed where it
-    /// filters, and an explicit `--repo` selection overrides it; the records themselves are
-    /// permanent. **User layer only**: a mute is the operator's lens over the operator's ledger
-    /// (the mechanics-are-private doctrine), never a repo's tracked claim about itself.
+    /// Repos muted from the *default* cross-repo views — the ledger surfaces (log, usage, the TUI
+    /// lenses) and the discovery map (`arc repos`, the TUI device rows) alike: one list, one
+    /// gesture, because a mute list is just repo paths and every surface filters its own entries
+    /// against it by exact match. A mute is a view-level default, always disclosed where it
+    /// filters, and an explicit selection (`--repo`, `--all`) overrides it; the records themselves
+    /// are permanent. **User layer only** (a repo must not steer the operator's lens over their
+    /// own machine); a project-layer occurrence is ignored with a warning, never an error.
     pub muted_repos: Vec<String>,
     /// Saved provider API keys for the model listings (`api_keys.anthropic` / `api_keys.openai`) —
     /// **user layer only**: a project's settings.json is tracked, and a tracked file must never hold
@@ -118,6 +120,13 @@ struct RawRuleset {
     sources: Vec<String>,
 }
 
+/// The keys that belong to the user layer's *vocabulary* only — a repo's tracked settings must
+/// not steer the operator's machine-wide lenses. `arc config set` elevates them to the user file,
+/// and the loader treats a project-layer occurrence as unrecognized *for that layer* (same
+/// warning, same tolerance as any unknown key — see `merge`). The secrets (`api_keys`) are
+/// deliberately not listed: a tracked secret hard-errors at load instead.
+pub const USER_LAYER_ONLY_IGNORED: &[&str] = &["muted_repos"];
+
 impl Settings {
     /// The user-layer settings file, `~/.arc/settings.json` (`None` if the home dir is unknown).
     pub fn user_path() -> Option<PathBuf> {
@@ -147,13 +156,20 @@ impl Settings {
         };
         let raw: Raw = serde_json::from_str(&text).with_context(|| parse_error(path))?;
         // Unknown keys warn by name — loud enough that a typo can't hide, tolerant enough that a
-        // newer binary's key can't brick this one (the struct comment's bargain).
-        if !raw.unknown.is_empty() {
-            let keys: Vec<&str> = raw.unknown.keys().map(String::as_str).collect();
+        // newer binary's key can't brick this one (the struct comment's bargain). A key's
+        // vocabulary is *per layer*: the user-layer-only keys are not settings of a project
+        // layer at all, so an occurrence there is unrecognized for that layer — same warning,
+        // same tolerance, one mechanism (`arc config set` writes them to the user file, so only
+        // a hand edit lands here).
+        let mut unrecognized: Vec<&str> = raw.unknown.keys().map(String::as_str).collect();
+        if !user_layer && raw.muted_repos.is_some() {
+            unrecognized.push("muted_repos");
+        }
+        if !unrecognized.is_empty() {
             eprintln!(
                 "arclite: unrecognized setting key(s) in {}: {} — ignored",
                 path.display(),
-                keys.join(", ")
+                unrecognized.join(", ")
             );
         }
         self.active.push(path.to_path_buf());
@@ -218,12 +234,12 @@ impl Settings {
         // API keys load from the user layer only: a project's settings.json is tracked, and a tracked
         // file must never hold a secret — rejected loudly, not skipped, so a committed key is caught
         // the first time anything loads settings rather than lingering.
-        if let Some(muted) = raw.muted_repos {
-            anyhow::ensure!(
-                user_layer,
-                "muted_repos found in {} — a mute is the operator's lens over the operator's ledger and belongs in the user layer (~/.arc/settings.json), never a repo's tracked settings",
-                path.display()
-            );
+        // User layer only ([`USER_LAYER_ONLY_IGNORED`], mirrored here as the typed-field check) —
+        // a repo's tracked settings must not steer the operator's lens over their own machine; a
+        // project-layer occurrence joined the unrecognized warning above.
+        if let Some(muted) = raw.muted_repos
+            && user_layer
+        {
             self.muted_repos = muted;
         }
         if let Some(keys) = raw.api_keys {

@@ -7,6 +7,7 @@ use clap::Parser;
 mod ai;
 mod cli;
 mod commands;
+mod discovery;
 mod http;
 mod log;
 mod output;
@@ -365,6 +366,7 @@ pub fn run() -> ExitCode {
             commands::feedback::run(args, &cli.global).map(|()| ExitCode::SUCCESS)
         }
         Command::Items(args) => commands::items::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        Command::Repos(args) => commands::repos::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
         // it (an explicit option silently dropped is worse than a silent default).
         Command::Completions(_) if cli.global.json => Err(anyhow::anyhow!(

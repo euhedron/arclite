@@ -318,6 +318,11 @@ impl Palette {
 struct App {
     route: Route,
     status: Snapshot,
+    /// The device map (discovery), read once at launch — walking the session stores every tick
+    /// would dwarf the registry read for state that changes on session, not tick, cadence. Ages
+    /// stay fresh regardless (rendered against each tick's `now`); counts refresh next launch,
+    /// and `arc repos` is the always-fresh read.
+    device: crate::discovery::Discovery,
     palette: Option<Palette>,
     /// The in-flight launch (dry-run → gate), or `None`. When present it overlays everything.
     launch: Option<Launch>,
@@ -390,6 +395,7 @@ impl App {
         Self {
             route: Route::Home,
             status: Snapshot::read(),
+            device: crate::discovery::discover(false),
             palette: None,
             launch: None,
             launch_generation: 0,
@@ -1598,6 +1604,9 @@ impl Snapshot {
 /// How many recently-completed runs the status tail shows.
 const RECENT_RUNS: usize = 5;
 
+/// How many device-map repos the status view shows (the full map is `arc repos`).
+const DEVICE_ROWS: usize = 5;
+
 /// Columns in the recently-completed tail: age, command, repo, outcome, cost.
 const RECENT_COLS: usize = 5;
 
@@ -2292,7 +2301,7 @@ fn render(frame: &mut Frame, app: &App) {
             app.cwd_note.as_deref(),
             app.agenda_note.as_deref(),
         ),
-        Route::Status => render_status(frame, &app.status, body),
+        Route::Status => render_status(frame, &app.status, &app.device, body),
         Route::Config => render_config(
             frame,
             app.config
@@ -2478,16 +2487,30 @@ const RECENT_COLUMN_WIDTHS: [Constraint; RECENT_COLS] = [
 
 /// The live run-registry view: a header and a table of in-flight runs (or a message). The footer is
 /// global now, so this owns only the section body.
-fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
+fn render_status(
+    frame: &mut Frame,
+    snap: &Snapshot,
+    device: &crate::discovery::Discovery,
+    area: Rect,
+) {
     let recent_h = match &snap.recent {
         Ok(tail) if tail.rows.is_empty() => 0,
         Ok(tail) => tail.rows.len() as u16 + LINE + BORDER,
         Err(_) => LINE + BORDER,
     };
-    let [header, active_area, recent_area] = Layout::vertical([
+    let device_h = if device.repos.is_empty() {
+        0
+    } else {
+        device.repos.len().min(DEVICE_ROWS) as u16
+            + u16::from(device.repos.len() > DEVICE_ROWS)
+            + LINE
+            + BORDER
+    };
+    let [header, active_area, recent_area, device_area] = Layout::vertical([
         Constraint::Length(LINE),
         Constraint::Min(0),
         Constraint::Length(recent_h),
+        Constraint::Length(device_h),
     ])
     .areas(area);
 
@@ -2574,6 +2597,38 @@ fn render_status(frame: &mut Frame, snap: &Snapshot, area: Rect) {
                 recent_area,
             );
         }
+    }
+
+    // The device map's seat in the cockpit: the most recently active repos, rows shared with
+    // `arc repos` (one formatter, no drift). Counts are the launch-time read; ages render fresh
+    // against this tick's `now`.
+    if !device.repos.is_empty() {
+        let mut dev_lines: Vec<Line> = device
+            .repos
+            .iter()
+            .take(DEVICE_ROWS)
+            .map(|r| Line::from(crate::commands::repos::row(r, snap.now)))
+            .collect();
+        if device.repos.len() > DEVICE_ROWS {
+            dev_lines.push(
+                Line::from(format!(
+                    "… {} more · arc repos",
+                    device.repos.len() - DEVICE_ROWS
+                ))
+                .dim(),
+            );
+        }
+        let mut title = format!("device · {} repos", device.repos.len());
+        if device.muted > 0 {
+            title.push_str(&format!(" · {} muted", device.muted));
+        }
+        if device.gone > 0 {
+            title.push_str(&format!(" · {} gone", device.gone));
+        }
+        frame.render_widget(
+            Paragraph::new(dev_lines).block(Block::bordered().title(title)),
+            device_area,
+        );
     }
 }
 
@@ -3693,6 +3748,13 @@ mod tests {
         App {
             route,
             status,
+            // Empty, deliberately — a test App must not walk the machine's real session stores.
+            device: crate::discovery::Discovery {
+                repos: Vec::new(),
+                muted: 0,
+                gone: 0,
+                notes: Vec::new(),
+            },
             palette: None,
             launch: None,
             launch_generation: 0,
