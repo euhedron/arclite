@@ -218,6 +218,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         return;
     };
     let mut decoded = 0usize;
+    let mut unreadable = 0usize;
     for entry in entries.flatten() {
         let project = entry.path();
         if !project.is_dir() {
@@ -225,18 +226,27 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         }
         let mut sessions = 0usize;
         let mut newest: Option<(u64, std::path::PathBuf)> = None;
-        if let Ok(files) = std::fs::read_dir(&project) {
-            for f in files.flatten() {
-                let p = f.path();
-                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                sessions += 1;
-                if let Some(m) = mtime_secs(&p)
-                    && newest.as_ref().is_none_or(|(n, _)| m > *n)
-                {
-                    newest = Some((m, p));
-                }
+        // A project dir that exists but can't be read is counted and disclosed — skipping it
+        // silently would collapse unreadable into absent, undercounting with no signal. (The
+        // per-entry `flatten` below stays best-effort by the module's contract: a single
+        // unreadable dirent degrades one count, not the store's honesty.)
+        let files = match std::fs::read_dir(&project) {
+            Ok(files) => files,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        for f in files.flatten() {
+            let p = f.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            sessions += 1;
+            if let Some(m) = mtime_secs(&p)
+                && newest.as_ref().is_none_or(|(n, _)| m > *n)
+            {
+                newest = Some((m, p));
             }
         }
         if sessions == 0 {
@@ -253,6 +263,11 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         notes.push(format!(
             "claude sessions: {decoded} project(s) resolved by name decoding (lossy — a dash in a \
              real path component reads as a separator)"
+        ));
+    }
+    if unreadable > 0 {
+        notes.push(format!(
+            "claude sessions: {unreadable} project dir(s) unreadable — skipped, the map undercounts"
         ));
     }
 }
@@ -274,10 +289,16 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         return;
     }
     let mut unresolved = 0usize;
+    let mut unreadable = 0usize;
     let mut stack = vec![dir];
     while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
+        // An unreadable subdirectory is counted and disclosed, never conflated with empty.
+        let entries = match std::fs::read_dir(&d) {
+            Ok(entries) => entries,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
         };
         for entry in entries.flatten() {
             let p = entry.path();
@@ -300,6 +321,12 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         notes.push(format!(
             "codex sessions: {unresolved} session file(s) without a readable repo in the head — \
              counted nowhere rather than guessed"
+        ));
+    }
+    if unreadable > 0 {
+        notes.push(format!(
+            "codex sessions: {unreadable} subdirectory(ies) unreadable — skipped, the map \
+             undercounts"
         ));
     }
 }
