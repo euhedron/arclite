@@ -420,7 +420,10 @@ pub(crate) fn set_value(
             .expect("the settings path ends in its file name"),
         std::process::id()
     ));
-    let body = format!("{}\n", serde_json::to_string_pretty(&root)?);
+    let body = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&root).expect("a serde_json::Value re-serializes")
+    );
     if let Err(e) = std::fs::write(&staged, &body).and_then(|()| std::fs::rename(&staged, &path)) {
         // Cleanup of the staging file is best-effort, but its failure is part of the error, not
         // hidden: a leftover .new would otherwise sit undisclosed beside the (intact) settings.
