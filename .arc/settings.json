@@ -1,6 +1,14 @@
 {
   "max_budget_usd": 10.0,
   "ruleset": "self",
+  "taxonomies": {
+    "align": [
+      {
+        "kind": "status-vocabulary",
+        "description": "an item pronounces on settledness instead of describing — 'settled', 'finalized', 'canon', or the inverse hedges ('deliberately open', 'expected to evolve', 'not dictated here'); the doctrine is specificity-per-confidence: describe the shape at the specificity current understanding supports, and leave flux unstated — it is the ambient condition of everything here, so restating it in either direction adds status where only description belongs"
+      }
+    ]
+  },
   "rulesets": {
     "behavioral": {
       "sources": [

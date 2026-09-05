@@ -228,7 +228,10 @@ impl Command {
                 unreachable!("Command::Run is a palette drill-in, handled before apply")
             }
             Command::Home => app.route = Route::Home,
-            Command::Status => app.route = Route::Status,
+            Command::Status => {
+                app.route = Route::Status;
+                app.refresh_device();
+            }
             Command::Config => app.open_config(),
             Command::Rules => app.open_rules(),
             Command::Items => app.open_items(),
@@ -318,11 +321,12 @@ impl Palette {
 struct App {
     route: Route,
     status: Snapshot,
-    /// The device map (discovery), read once at launch — walking the session stores every tick
-    /// would dwarf the registry read for state that changes on session, not tick, cadence. Ages
-    /// stay fresh regardless (rendered against each tick's `now`); counts refresh next launch,
-    /// and `arc repos` is the always-fresh read.
+    /// The device map (discovery), read at launch, on each status-view entry, and on the open
+    /// view's slow cadence ([`DEVICE_REFRESH_SECS`]) — never per raw tick, where walking the
+    /// session stores would dwarf the registry read. `arc repos` is the CLI read.
     device: crate::discovery::Discovery,
+    /// When [`Self::device`] was last read (unix secs) — the slow-refresh clock.
+    device_refreshed: u64,
     palette: Option<Palette>,
     /// The in-flight launch (dry-run → gate), or `None`. When present it overlays everything.
     launch: Option<Launch>,
@@ -381,6 +385,13 @@ struct App {
 }
 
 impl App {
+    /// Re-read the device map and stamp the refresh clock — the one path the status view's entry
+    /// and its open-view slow cadence share.
+    fn refresh_device(&mut self) {
+        self.device = crate::discovery::discover(false);
+        self.device_refreshed = crate::log::now_secs();
+    }
+
     fn new(tx: mpsc::Sender<Msg>, cwd: String) -> Self {
         let cwd_note = cwd_warning(Path::new(&cwd));
         let agenda_note = agenda_warning(Path::new(&cwd));
@@ -396,6 +407,7 @@ impl App {
             route: Route::Home,
             status: Snapshot::read(),
             device: crate::discovery::discover(false),
+            device_refreshed: crate::log::now_secs(),
             palette: None,
             launch: None,
             launch_generation: 0,
@@ -1607,6 +1619,11 @@ const RECENT_RUNS: usize = 5;
 /// How many device-map repos the status view shows (the full map is `arc repos`).
 const DEVICE_ROWS: usize = 5;
 
+/// How often an *open* status view re-reads the device map: session-cadence data walked at a
+/// matching slow cadence (a few hundred stats), never per tick — while recency ages stay
+/// per-tick fresh regardless, rendered against each tick's clock.
+const DEVICE_REFRESH_SECS: u64 = 30;
+
 /// Columns in the recently-completed tail: age, command, repo, outcome, cost.
 const RECENT_COLS: usize = 5;
 
@@ -1831,7 +1848,17 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, interval: Duration) -> an
 /// The one place `App` state changes. Ticks refresh live state; key presses route through [`handle_key`].
 fn update(app: &mut App, msg: Msg) {
     match msg {
-        Msg::Tick => app.status = Snapshot::read(),
+        Msg::Tick => {
+            app.status = Snapshot::read();
+            // An open status view re-reads the map on the slow cadence — one path
+            // ([`App::refresh_device`]) shared with view entry, so the two can't drift.
+            if matches!(app.route, Route::Status)
+                && crate::log::now_secs().saturating_sub(app.device_refreshed)
+                    >= DEVICE_REFRESH_SECS
+            {
+                app.refresh_device();
+            }
+        }
         Msg::InputFailed(e) => {
             app.input_error = Some(e);
             app.should_quit = true;
@@ -2617,6 +2644,11 @@ fn render_status(
                 ))
                 .dim(),
             );
+        }
+        // The map's degradation disclosures render with the map — counts without their caveats
+        // would under-disclose (the CLI prints these same notes).
+        for note in &device.notes {
+            dev_lines.push(Line::from(note.clone()).dim());
         }
         let mut title = format!("device · {} repos", device.repos.len());
         if device.muted > 0 {
@@ -3755,6 +3787,7 @@ mod tests {
                 gone: 0,
                 notes: Vec::new(),
             },
+            device_refreshed: 0,
             palette: None,
             launch: None,
             launch_generation: 0,
