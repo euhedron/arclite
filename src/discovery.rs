@@ -386,12 +386,18 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
                 notes.push(format!("ledger: {}", crate::log::unparsed_note(unparsed)));
             }
             for r in &records {
-                let repo = crate::log::field(r, "repo");
-                if repo.is_empty() {
+                // The structured field, read directly — the display helper substitutes a "?"
+                // sentinel for an absent repo, which would map a repo-less record under a
+                // phantom key instead of skipping it.
+                let Some(repo) = r
+                    .get("repo")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.is_empty())
+                else {
                     continue;
-                }
+                };
                 let ts = r.get("ts").and_then(serde_json::Value::as_u64);
-                observe(map, repo, Source::Ledger, 1, ts);
+                observe(map, repo.to_owned(), Source::Ledger, 1, ts);
             }
         }
         Err(e) => notes.push(format!("ledger unreadable: {e:#}")),
