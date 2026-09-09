@@ -12,6 +12,8 @@
     "gate-configuration",
     "json-pack-wrapper",
     "tui-init",
+    "tui-usage-navigation",
+    "visual-audit",
     "public-run-record",
     "release-notes-view",
     "verbs-as-configurations",
