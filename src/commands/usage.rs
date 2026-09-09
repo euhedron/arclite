@@ -207,10 +207,17 @@ pub(crate) fn current_lens(repo: &std::path::Path) -> CurrencyLens {
 /// own load errors.
 pub(crate) fn ledger_repos() -> anyhow::Result<Vec<String>> {
     let (records, _) = crate::log::records()?;
+    // The structured field, read directly — the `field` display helper substitutes a "?" sentinel
+    // for an absent repo, which would ride out of here as an exact-match lens key and a path
+    // (the phantom-key hazard discovery's ledger read guards the same way).
     let set: std::collections::BTreeSet<String> = records
         .iter()
-        .map(|r| field(r, "repo"))
-        .filter(|s| !s.is_empty())
+        .filter_map(|r| {
+            r.get("repo")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        })
         .collect();
     Ok(set.into_iter().collect())
 }
