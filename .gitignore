@@ -26,5 +26,11 @@ Thumbs.db
 # Claude Code
 .claude
 
+# Codex
+.codex
+
 # Arc Local
 .arc.local
+
+# TUI screenshot regenerations (assets/arc-tui.tape is the source; these are its output)
+/tui-shots

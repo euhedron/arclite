@@ -8,6 +8,8 @@
 
 arclite is an **agent-first, cross-platform CLI for AI-powered cross-repo code intelligence and auditing** — model judgment grounded, constrained, and made observable through deterministic repository inspection. It gathers facts **deterministically**, and applies **AI** at the judgment step (via an agent CLI — Claude Code or Codex, selectable per run). Every use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending *sensibly*.
 
+![The arc TUI walking its surfaces](assets/arc-tui.gif)
+
 Open source (MIT), built by [Euhedron](https://euhedron.com) — shipped as **Arc**, from this repo (`euhedron/arclite`). This repo is also arclite's own proving ground: every push is gated by its own audit, and `.arc/findings/` is the live ledger of what those audits caught — the commit history *is* the product demo. And the proving ground is wider than this repo: arc audits a growing set of Euhedron initiatives (most not yet public, some carrying competing audit systems of their own) in the name of generating cross-repo signal.
 
 ## Getting started
