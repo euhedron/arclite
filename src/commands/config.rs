@@ -297,6 +297,10 @@ pub(crate) struct ResolvedSetting {
 pub(crate) struct ResolvedSettings {
     pub values: Vec<ResolvedSetting>,
     pub layers: Vec<String>,
+    /// Load-time degradations (unrecognized keys and kin). The CLI already hears these on stderr
+    /// at load; the TUI — which suppresses that channel while holding the terminal — renders them
+    /// from here in the config view, settings' own surface.
+    pub warnings: Vec<String>,
 }
 
 /// Load and project `repo`'s settings: every settable key's resolved value (after user-then-project
@@ -313,12 +317,19 @@ pub(crate) fn resolved(repo: &std::path::Path) -> anyhow::Result<ResolvedSetting
             })
             .collect(),
         layers: s.active_display(),
+        warnings: s.warnings,
     })
 }
 
 /// Show every default's resolved value (after user-then-project layering) and the active layers.
 fn list(global: &GlobalArgs) -> anyhow::Result<()> {
-    let ResolvedSettings { values, layers } = resolved(std::path::Path::new("."))?;
+    // `warnings` deliberately unused here: the CLI already heard them on stderr when `resolved`'s
+    // load ran — repeating them in the listing would double-report one fact.
+    let ResolvedSettings {
+        values,
+        layers,
+        warnings: _,
+    } = resolved(std::path::Path::new("."))?;
     let mut lines: Vec<String> = values
         .iter()
         .map(|v| {

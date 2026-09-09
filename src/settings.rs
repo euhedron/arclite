@@ -59,6 +59,11 @@ pub struct Settings {
     pub api_key_openai: Option<String>,
     /// The settings files actually loaded, in layer order (user then project).
     pub active: Vec<PathBuf>,
+    /// Load-time degradations carried as data (unrecognized keys, layer-inapplicable keys) — the
+    /// loader never prints them itself while a TUI holds the terminal (see
+    /// [`SUPPRESS_STDERR_WARNINGS`]); each surface discloses through its own channel (stderr for
+    /// CLI commands, the config view's rows in the TUI).
+    pub warnings: Vec<String>,
     rulesets: BTreeMap<String, Vec<PathBuf>>,
 }
 
@@ -120,6 +125,13 @@ struct RawRuleset {
     sources: Vec<String>,
 }
 
+/// While a TUI holds the terminal exclusively (inline raw mode), a stderr write from shared code
+/// would corrupt the held viewport — the TUI sets this for its lifetime and [`Settings::load`]
+/// carries its warnings as data instead of printing (disclosed in the config view). Every other
+/// context leaves it unset and keeps the CLI's stderr behavior.
+pub static SUPPRESS_STDERR_WARNINGS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// The keys that belong to the user layer's *vocabulary* only — a repo's tracked settings must
 /// not steer the operator's machine-wide lenses. `arc config set` elevates them to the user file,
 /// and the loader treats a project-layer occurrence as unrecognized *for that layer* (same
@@ -146,6 +158,14 @@ impl Settings {
             settings.merge(&path, true)?;
         }
         settings.merge(&Self::project_path(repo), false)?;
+        // Warnings print here — once per load, at the boundary — unless a TUI holds the terminal
+        // exclusively, where a stderr write would corrupt the raw-mode viewport; the TUI reads
+        // [`Self::warnings`] and discloses them in the config view instead.
+        if !SUPPRESS_STDERR_WARNINGS.load(std::sync::atomic::Ordering::Relaxed) {
+            for w in &settings.warnings {
+                eprintln!("arclite: {w}");
+            }
+        }
         Ok(settings)
     }
 
@@ -166,11 +186,13 @@ impl Settings {
             unrecognized.push("muted_repos");
         }
         if !unrecognized.is_empty() {
-            eprintln!(
-                "arclite: unrecognized setting key(s) in {}: {} — ignored",
+            // Carried as data, not printed here — the loader can be reached from inside a TUI
+            // holding the terminal; `load` owns the stderr decision (see its doc).
+            self.warnings.push(format!(
+                "unrecognized setting key(s) in {}: {} — ignored",
                 path.display(),
                 unrecognized.join(", ")
-            );
+            ));
         }
         self.active.push(path.to_path_buf());
         let dir = path
