@@ -1,0 +1,9 @@
+{
+  "slug": "arclite",
+  "name": "arc",
+  "tagline": "Agent-first code auditing that finds what tests and linters miss.",
+  "stage": "available",
+  "public": true,
+  "interfaces": ["cli"],
+  "links": {"github": "https://github.com/euhedron/arclite"}
+}
