@@ -372,6 +372,19 @@ pub fn new_id() -> String {
     )
 }
 
+/// The reader half of [`new_id`]'s scheme: the `<secs>-<pid>-<nanos>` segments parsed back for
+/// chronological ordering, `None` for a name not of that shape. Writer and reader live side by
+/// side deliberately — a scheme change edits both or neither, so no far-off consumer can drift
+/// into reparsing a format that no longer exists.
+pub fn id_sort_key(id: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = id.splitn(3, '-');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
 /// The arclite logs directory, `~/.arc/logs` — the single source the run log and the result store
 /// both build on (`None` only if the home directory can't be determined).
 fn logs_dir() -> Option<PathBuf> {

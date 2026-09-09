@@ -212,23 +212,13 @@ pub(crate) fn inbox_notes(repo: &Path) -> anyhow::Result<Vec<(String, String)>> 
     // shorter segment can't out-sort a longer one the way raw string order would. Non-conforming
     // names order after the conforming ones, by name; the order is imposed deterministically so
     // directory-iteration order can't leak through.
-    notes.sort_by(|a, b| match (id_sort_key(&a.0), id_sort_key(&b.0)) {
-        (Some(ka), Some(kb)) => kb.cmp(&ka),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.0.cmp(&b.0),
-    });
-    Ok(notes)
-}
-
-/// An id's `<secs>-<pid>-<nanos>` segments parsed for ordering; `None` for a name not of that
-/// shape (see the sort above for how those order).
-fn id_sort_key(id: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = id.splitn(3, '-');
-    let key = (
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
-        parts.next()?.parse().ok()?,
+    notes.sort_by(
+        |a, b| match (crate::log::id_sort_key(&a.0), crate::log::id_sort_key(&b.0)) {
+            (Some(ka), Some(kb)) => kb.cmp(&ka),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.0.cmp(&b.0),
+        },
     );
-    Some(key)
+    Ok(notes)
 }
