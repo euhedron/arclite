@@ -2,6 +2,8 @@
 # keystrokes (VHS: https://github.com/charmbracelet/vhs; `brew install vhs`). Run from the repo
 # root: `vhs assets/arc-tui.tape`. Regenerates the README's GIF in place and one PNG per surface
 # into `tui-shots/` (gitignored — the tape is the source; the shots are its output).
+# The hidden setup builds and runs the checkout's own binary, so the shots document this code,
+# never whatever `arc` happens to sit on PATH; the footer's arrival gates the first frame.
 # Window height: the 24-row inline viewport plus scrollback headroom.
 
 Output assets/arc-tui.gif
@@ -13,9 +15,10 @@ Set Padding 16
 Set TypingSpeed 30ms
 
 Hide
-Type "clear && arc tui"
+Type "mkdir -p tui-shots && cargo build -q && clear && ./target/debug/arc tui"
 Enter
-Sleep 4s
+Wait /commands/
+Sleep 1s
 Show
 
 Screenshot tui-shots/home.png
