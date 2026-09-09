@@ -133,25 +133,20 @@ pub fn discover(include_all: bool) -> Discovery {
         ));
     }
 
-    // The one mute lens: a mute list is just repo paths, and every default cross-repo surface —
-    // ledger views and this map alike — filters its own entries against the same `muted_repos` by
-    // exact match (a muted repo absent from the ledger simply mutes nothing there). Fails open:
-    // unreadable settings mute nothing, disclosed.
+    // The one mute lens, from its one home: criteria via `log::mute_criteria` (fail-open on
+    // unreadable settings, disclosed) and matching via `log::split_muted_by` — this surface adds
+    // only its own bypass (a muted repo absent from the ledger simply mutes nothing there).
+    let (mute_list, settings_error) = crate::log::mute_criteria();
+    if let Some(e) = settings_error {
+        notes.push(format!("settings unreadable — nothing muted: {e}"));
+    }
+    let mut repos: Vec<RepoActivity> = map.into_values().collect();
     let mut muted = 0usize;
-    let mut repos: Vec<RepoActivity> = match crate::settings::Settings::load(Path::new(".")) {
-        Ok(s) if !include_all && !s.muted_repos.is_empty() => {
-            let (kept, dropped): (Vec<_>, Vec<_>) = map
-                .into_values()
-                .partition(|r| !s.muted_repos.contains(&r.repo));
-            muted = dropped.len();
-            kept
-        }
-        Ok(_) => map.into_values().collect(),
-        Err(e) => {
-            notes.push(format!("settings unreadable — nothing muted: {e:#}"));
-            map.into_values().collect()
-        }
-    };
+    if !include_all {
+        let (kept, dropped) = crate::log::split_muted_by(repos, &mute_list, |r| r.repo.clone());
+        repos = kept;
+        muted = dropped;
+    }
     let gone = if include_all {
         repos.iter().filter(|r| r.gone).count()
     } else {

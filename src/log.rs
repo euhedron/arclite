@@ -167,44 +167,60 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
     record.get("error").is_some()
 }
 
-/// Split records under the operator's `muted_repos` lens: `(kept, muted_count)` — exact match on
-/// the recorded repo path, the same lossless strings the setting stores. The one statement of the
-/// mute filter: every *default* view applies it and discloses the count; an explicit repo
-/// selection bypasses it (a mute is a default lens, never a lock, and the records are permanent).
-pub fn split_muted(
-    records: Vec<serde_json::Value>,
+/// The mute lens's criteria: the `muted_repos` list, an unreadable settings load failing *open*
+/// (nothing muted — showing more, never hiding) with the error carried for the surface to
+/// disclose. The single home for how every default cross-repo surface — the ledger views and the
+/// discovery map alike — obtains the lens; the matching pairs with [`split_muted_by`].
+pub fn mute_criteria() -> (Vec<String>, Option<String>) {
+    match crate::settings::Settings::load(Path::new(".")) {
+        Ok(s) => (s.muted_repos, None),
+        Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+    }
+}
+
+/// Split any repo-keyed items under the operator's mute lens: `(kept, muted_count)` — exact match
+/// on the recorded repo path, the same lossless strings the setting stores, generic over what
+/// carries the string so the ledger's records and the discovery map share one statement of the
+/// matching. Every *default* view applies it and discloses the count; an explicit selection
+/// bypasses it (a mute is a default lens, never a lock).
+pub fn split_muted_by<T>(
+    items: Vec<T>,
     muted: &[String],
-) -> (Vec<serde_json::Value>, usize) {
+    repo_of: impl Fn(&T) -> String,
+) -> (Vec<T>, usize) {
     if muted.is_empty() {
-        return (records, 0);
+        return (items, 0);
     }
     let mut kept = Vec::new();
     let mut dropped = 0usize;
-    for r in records {
-        if muted.iter().any(|m| field(&r, "repo") == *m) {
+    for item in items {
+        if muted.contains(&repo_of(&item)) {
             dropped += 1;
         } else {
-            kept.push(r);
+            kept.push(item);
         }
     }
     (kept, dropped)
 }
 
-/// The default-view mute lens whole: load `muted_repos` and [`split_muted`]. Returns
-/// `(kept, muted_count, settings_error)` — on unreadable settings the lens fails *open*
-/// (unfiltered: showing more, never hiding) with the error carried for the surface to disclose.
-/// One loader for every default view (usage rollups, `arc log`, the TUI log view and status
-/// tail), so the load/split/fail-open behavior can't drift between them.
+/// [`split_muted_by`] over ledger records — the record's `repo` field is the key.
+pub fn split_muted(
+    records: Vec<serde_json::Value>,
+    muted: &[String],
+) -> (Vec<serde_json::Value>, usize) {
+    split_muted_by(records, muted, |r| field(r, "repo"))
+}
+
+/// The default-view mute lens whole: [`mute_criteria`] + [`split_muted`]. Returns
+/// `(kept, muted_count, settings_error)`. One composition for every default ledger view (usage
+/// rollups, `arc log`, the TUI log view and status tail), so the load/split/fail-open behavior
+/// can't drift between them.
 pub fn apply_mute(
     records: Vec<serde_json::Value>,
 ) -> (Vec<serde_json::Value>, usize, Option<String>) {
-    match crate::settings::Settings::load(Path::new(".")) {
-        Ok(s) => {
-            let (kept, dropped) = split_muted(records, &s.muted_repos);
-            (kept, dropped, None)
-        }
-        Err(e) => (records, 0, Some(format!("{e:#}"))),
-    }
+    let (muted, settings_error) = mute_criteria();
+    let (kept, dropped) = split_muted(records, &muted);
+    (kept, dropped, settings_error)
 }
 
 /// The mute lens's sentence-form disclosures, single-sourced: the excluded count (with `bypass`
