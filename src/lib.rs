@@ -367,22 +367,25 @@ pub fn run() -> ExitCode {
         }
         Command::Items(args) => commands::items::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Repos(args) => commands::repos::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
-        // `completions` emits a shell script, not JSON — reject `--json` rather than accept and ignore
-        // it (an explicit option silently dropped is worse than a silent default).
-        Command::Completions(_) if cli.global.json => Err(anyhow::anyhow!(
-            "`--json` has no meaning for `arc completions` (it emits a shell completion script)"
-        )),
         Command::Completions(args) => {
-            // The binary name is single-sourced in `cli::binary_name`; the command itself (which
-            // `generate` needs by &mut) is built here.
-            let mut command = <Cli as clap::CommandFactory>::command();
-            clap_complete::generate(
-                args.shell,
-                &mut command,
-                crate::cli::binary_name(),
-                &mut std::io::stdout(),
-            );
-            Ok(ExitCode::SUCCESS)
+            // A shell script, not JSON — rejected through the one policy (output::reject_json;
+            // an explicit option silently dropped is worse than a silent default).
+            output::reject_json(
+                cli.global.json,
+                "`arc completions` (it emits a shell completion script)",
+            )
+            .map(|()| {
+                // The binary name is single-sourced in `cli::binary_name`; the command itself
+                // (which `generate` needs by &mut) is built here.
+                let mut command = <Cli as clap::CommandFactory>::command();
+                clap_complete::generate(
+                    args.shell,
+                    &mut command,
+                    crate::cli::binary_name(),
+                    &mut std::io::stdout(),
+                );
+                ExitCode::SUCCESS
+            })
         }
         Command::Run(args) => {
             // The verb registry owns the enum→verb mapping (verbs::resolve, beside verbs::ALL);

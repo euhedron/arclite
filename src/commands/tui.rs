@@ -1688,12 +1688,9 @@ fn recent_completed(now: u64) -> Result<RecentTail, String> {
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
 /// (and on panic, via the panic hook `ratatui::try_init_with_options` installs).
 pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    // The TUI is interactive, not a JSON-emitting command, so reject `--json` rather than accept and
-    // silently ignore it (an explicit option dropped is worse than a silent default).
-    anyhow::ensure!(
-        !global.json,
-        "`--json` has no meaning for `arc tui` (it's an interactive view)"
-    );
+    // Interactive, not a JSON-emitting command — rejected through the one policy
+    // (`output::reject_json`; an explicit option dropped is worse than a silent default).
+    crate::output::reject_json(global.json, "`arc tui` (it's an interactive view)")?;
     // A TUI needs an interactive terminal — fail cleanly rather than entering raw mode against a pipe
     // (which would hang or corrupt non-interactive output).
     anyhow::ensure!(
