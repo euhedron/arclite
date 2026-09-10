@@ -246,9 +246,7 @@ pub(crate) fn stored_ledger_run(
         );
     };
     let record = stored_run(&stored);
-    let repo = record
-        .get("repo")
-        .and_then(Value::as_str)
+    let repo = crate::log::record_repo(&record)
         .context("the stored run record has no `repo`, so its ledger can't be located")?
         .to_owned();
     anyhow::ensure!(
