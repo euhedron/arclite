@@ -111,7 +111,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 
 - **Agent-first, human-accessible** — usable by both agents and people.
 - **Leverage, don't replace** existing, ever-evolving agent tools (e.g. the Claude Code CLI).
-- **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; don't re-encode invocations as a parallel config language that only mirrors argv and rots against it.
+- **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; never re-encode an invocation as a parallel config that mirrors its argv and rots against it. The boundary is duplication, not configuration: a setting the command itself reads as a composition's single home — rulesets today, the gate's step set when configured — is the standard pattern; what's rejected is a second statement of the same invocation left to drift.
 - **Maximally transparent, observable, and honest.**
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
 - **AI as scoped, advisory judgment** — model reasoning is pointed at deliberately controlled grounds — the rules, a declared taxonomy — and returns findings to factor in, not verdicts to obey: a contradiction, a duplication, a disordering, a gap. Where the reliably-agreeable line sits is not declared in advance; it emerges and stays visible in the taxonomy and rules themselves, sharpened through exercise whenever a finding misses (there is no canon to judge against — a finding names its grounds). What is guaranteed is control: nothing steering the judgment hides outside the configurable, auditable levers.
