@@ -167,6 +167,16 @@ pub fn is_errored(record: &serde_json::Value) -> bool {
     record.get("error").is_some()
 }
 
+/// A record's repo as the structured field, absent-or-empty folded to `None` — the one judgment of
+/// "this record has a repo" for every consumer keying, grouping, or locating by it. Never read the
+/// [`field`] display helper for this: its "?" sentinel would ride out as a phantom repo key.
+pub fn record_repo(record: &serde_json::Value) -> Option<&str> {
+    record
+        .get("repo")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
 /// The mute lens's criteria: the `muted_repos` list, an unreadable settings load failing *open*
 /// (nothing muted — showing more, never hiding) with the error carried for the surface to
 /// disclose. The single home for how every default cross-repo surface — the ledger views and the
