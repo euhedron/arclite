@@ -1194,6 +1194,9 @@ enum ConfigView {
         values: Vec<ConfigRow>,
         /// The active settings-file layers (user then project), empty if none.
         layers: Vec<String>,
+        /// Load-time degradations (unrecognized keys and kin) — rendered here because the TUI
+        /// suppresses the loader's stderr channel while it holds the terminal.
+        warnings: Vec<String>,
         /// The cursor over the settings rows.
         selected: usize,
         /// An in-progress edit of the selected setting; `None` while browsing. Saving validates and
@@ -1252,6 +1255,7 @@ fn load_config_view(cwd: &str, selected: usize) -> ConfigView {
                 })
                 .collect(),
             layers: r.layers,
+            warnings: r.warnings,
             editing: None,
             error: None,
         },
@@ -1688,12 +1692,9 @@ fn recent_completed(now: u64) -> Result<RecentTail, String> {
 /// The `tui` command. Owns the terminal (inline viewport) for its duration and restores it on exit
 /// (and on panic, via the panic hook `ratatui::try_init_with_options` installs).
 pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
-    // The TUI is interactive, not a JSON-emitting command, so reject `--json` rather than accept and
-    // silently ignore it (an explicit option dropped is worse than a silent default).
-    anyhow::ensure!(
-        !global.json,
-        "`--json` has no meaning for `arc tui` (it's an interactive view)"
-    );
+    // Interactive, not a JSON-emitting command — rejected through the one policy
+    // (`output::reject_json`; an explicit option dropped is worse than a silent default).
+    crate::output::reject_json(global.json, "`arc tui` (it's an interactive view)")?;
     // A TUI needs an interactive terminal — fail cleanly rather than entering raw mode against a pipe
     // (which would hang or corrupt non-interactive output).
     anyhow::ensure!(
@@ -1705,6 +1706,10 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         "--interval must be a positive number of seconds"
     );
     let interval = Duration::from_secs_f64(args.interval);
+
+    // While the terminal is held, shared code must not write stderr into the raw-mode viewport —
+    // the settings loader carries its warnings as data instead (the config view discloses them).
+    crate::settings::SUPPRESS_STDERR_WARNINGS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Inline viewport: the live region renders in the normal buffer; scrollback above is preserved.
     let mut terminal = ratatui::try_init_with_options(TerminalOptions {
@@ -1737,6 +1742,8 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         cleanup_failures.push(format!("flush: {e}"));
     }
     ratatui::restore();
+    // The terminal is released — stderr is safe again for whatever loads settings after the TUI.
+    crate::settings::SUPPRESS_STDERR_WARNINGS.store(false, std::sync::atomic::Ordering::Relaxed);
     if !cleanup_failures.is_empty() {
         // The module-wide print ban guards the TUI's ownership of the terminal; restore() just
         // ended it, so stderr is the shell's again and the warning belongs there.
@@ -2690,6 +2697,7 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
         ConfigView::Loaded {
             values,
             layers,
+            warnings,
             selected,
             editing,
             error,
@@ -2723,10 +2731,13 @@ fn render_config(frame: &mut Frame, config: &ConfigView, area: Rect) {
                 .block(Block::bordered());
             frame.render_widget(table, body);
 
-            // A rejected edit's error outranks the routine layers fact until the next action — and
-            // renders in the attention color, not dimmed: a degraded edit must not pass unnoticed.
+            // A rejected edit's error outranks load warnings, which outrank the routine layers
+            // fact — both in the attention color, not dimmed: a degraded edit or a warned key
+            // must not pass unnoticed. (The warnings render here because the TUI suppresses the
+            // loader's stderr while holding the terminal — this view is their disclosure surface.)
             let info = match error {
                 Some(e) => Line::from(e.clone()).yellow(),
+                None if !warnings.is_empty() => Line::from(warnings.join(" · ")).yellow(),
                 None => Line::from(format!(
                     "layers: {}",
                     crate::join_or(layers, crate::settings::NO_LAYERS)

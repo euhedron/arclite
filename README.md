@@ -8,6 +8,8 @@
 
 arclite is an **agent-first, cross-platform CLI for AI-powered cross-repo code intelligence and auditing** — model judgment grounded, constrained, and made observable through deterministic repository inspection. It gathers facts **deterministically**, and applies **AI** at the judgment step (via an agent CLI — Claude Code or Codex, selectable per run). Every use is cost-transparent, configurable, and observable (see [Principles](#principles)). The aim: unlock analysis/auditing that doesn't already exist, while spending *sensibly*.
 
+![The arc TUI walking its surfaces](assets/arc-tui.gif)
+
 Open source (MIT), built by [Euhedron](https://euhedron.com) — shipped as **Arc**, from this repo (`euhedron/arclite`). This repo is also arclite's own proving ground: every push is gated by its own audit, and `.arc/findings/` is the live ledger of what those audits caught — the commit history *is* the product demo. And the proving ground is wider than this repo: arc audits a growing set of Euhedron initiatives (most not yet public, some carrying competing audit systems of their own) in the name of generating cross-repo signal.
 
 ## Getting started
@@ -109,7 +111,7 @@ The philosophy that defines arclite. (The *code's* own engineering standards —
 
 - **Agent-first, human-accessible** — usable by both agents and people.
 - **Leverage, don't replace** existing, ever-evolving agent tools (e.g. the Claude Code CLI).
-- **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; don't re-encode invocations as a parallel config language that only mirrors argv and rots against it.
+- **The CLI is the composition surface** — hooks, CI, and agents compose `arc` commands directly; never re-encode an invocation as a parallel config that mirrors its argv and rots against it. The boundary is duplication, not configuration: a setting the command itself reads as a composition's single home — rulesets today, the gate's step set when configured — is the standard pattern; what's rejected is a second statement of the same invocation left to drift.
 - **Maximally transparent, observable, and honest.**
 - **Deterministic until synthesis** — gather/compute deterministically; reserve AI for the judgment step.
 - **AI as scoped, advisory judgment** — model reasoning is pointed at deliberately controlled grounds — the rules, a declared taxonomy — and returns findings to factor in, not verdicts to obey: a contradiction, a duplication, a disordering, a gap. Where the reliably-agreeable line sits is not declared in advance; it emerges and stays visible in the taxonomy and rules themselves, sharpened through exercise whenever a finding misses (there is no canon to judge against — a finding names its grounds). What is guaranteed is control: nothing steering the judgment hides outside the configurable, auditable levers.

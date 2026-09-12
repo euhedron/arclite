@@ -133,25 +133,20 @@ pub fn discover(include_all: bool) -> Discovery {
         ));
     }
 
-    // The one mute lens: a mute list is just repo paths, and every default cross-repo surface —
-    // ledger views and this map alike — filters its own entries against the same `muted_repos` by
-    // exact match (a muted repo absent from the ledger simply mutes nothing there). Fails open:
-    // unreadable settings mute nothing, disclosed.
+    // The one mute lens, from its one home: criteria via `log::mute_criteria` (fail-open on
+    // unreadable settings, disclosed) and matching via `log::split_muted_by` — this surface adds
+    // only its own bypass (a muted repo absent from the ledger simply mutes nothing there).
+    let (mute_list, settings_error) = crate::log::mute_criteria();
+    if let Some(e) = settings_error {
+        notes.push(format!("settings unreadable — nothing muted: {e}"));
+    }
+    let mut repos: Vec<RepoActivity> = map.into_values().collect();
     let mut muted = 0usize;
-    let mut repos: Vec<RepoActivity> = match crate::settings::Settings::load(Path::new(".")) {
-        Ok(s) if !include_all && !s.muted_repos.is_empty() => {
-            let (kept, dropped): (Vec<_>, Vec<_>) = map
-                .into_values()
-                .partition(|r| !s.muted_repos.contains(&r.repo));
-            muted = dropped.len();
-            kept
-        }
-        Ok(_) => map.into_values().collect(),
-        Err(e) => {
-            notes.push(format!("settings unreadable — nothing muted: {e:#}"));
-            map.into_values().collect()
-        }
-    };
+    if !include_all {
+        let (kept, dropped) = crate::log::split_muted_by(repos, &mute_list, |r| r.repo.clone());
+        repos = kept;
+        muted = dropped;
+    }
     let gone = if include_all {
         repos.iter().filter(|r| r.gone).count()
     } else {
@@ -217,6 +212,21 @@ fn store_dir(notes: &mut Vec<String>, label: &str, dir: &Path) -> Option<std::fs
     }
 }
 
+/// A listing's deliverable entries, the dirents the iteration itself failed to yield counted into
+/// `lost` — a failed dirent is one more store degradation to disclose, never a silent skip.
+fn deliverable(
+    entries: std::fs::ReadDir,
+    lost: &mut usize,
+) -> impl Iterator<Item = std::fs::DirEntry> + '_ {
+    entries.filter_map(move |e| match e {
+        Ok(e) => Some(e),
+        Err(_) => {
+            *lost += 1;
+            None
+        }
+    })
+}
+
 /// Scan a session file's head for its `cwd` — metadata only, bounded by [`HEAD_SCAN_LINES`].
 fn head_cwd(path: &Path) -> Option<String> {
     use std::io::Read;
@@ -255,7 +265,9 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
     };
     let mut decoded = 0usize;
     let mut unreadable = 0usize;
-    for entry in entries.flatten() {
+    let mut lost = 0usize;
+    let mut lost_files = 0usize;
+    for entry in deliverable(entries, &mut lost) {
         let project = entry.path();
         if !project.is_dir() {
             continue;
@@ -263,9 +275,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         let mut sessions = 0usize;
         let mut newest: Option<(u64, std::path::PathBuf)> = None;
         // A project dir that exists but can't be read is counted and disclosed — skipping it
-        // silently would collapse unreadable into absent, undercounting with no signal. (The
-        // per-entry `flatten` below stays best-effort by the module's contract: a single
-        // unreadable dirent degrades one count, not the store's honesty.)
+        // silently would collapse unreadable into absent, undercounting with no signal.
         let files = match std::fs::read_dir(&project) {
             Ok(files) => files,
             Err(_) => {
@@ -273,7 +283,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
                 continue;
             }
         };
-        for f in files.flatten() {
+        for f in deliverable(files, &mut lost_files) {
             let p = f.path();
             if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
@@ -317,6 +327,12 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
             "claude sessions: {unreadable} project dir(s) unreadable — skipped, the map undercounts"
         ));
     }
+    let lost = lost + lost_files;
+    if lost > 0 {
+        notes.push(format!(
+            "claude sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
+        ));
+    }
 }
 
 /// The lossy inverse of Claude Code's project-dir encoding (`/` → `-`).
@@ -337,6 +353,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     }
     let mut unresolved = 0usize;
     let mut unreadable = 0usize;
+    let mut lost = 0usize;
     let mut stack = vec![dir];
     while let Some(d) = stack.pop() {
         // An unreadable subdirectory is counted and disclosed, never conflated with empty.
@@ -347,7 +364,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                 continue;
             }
         };
-        for entry in entries.flatten() {
+        for entry in deliverable(entries, &mut lost) {
             let p = entry.path();
             if p.is_dir() {
                 stack.push(p);
@@ -376,6 +393,11 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
              undercounts"
         ));
     }
+    if lost > 0 {
+        notes.push(format!(
+            "codex sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
+        ));
+    }
 }
 
 /// arc's own ledger: run counts and last-run recency per recorded repo.
@@ -386,14 +408,7 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
                 notes.push(format!("ledger: {}", crate::log::unparsed_note(unparsed)));
             }
             for r in &records {
-                // The structured field, read directly — the display helper substitutes a "?"
-                // sentinel for an absent repo, which would map a repo-less record under a
-                // phantom key instead of skipping it.
-                let Some(repo) = r
-                    .get("repo")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|s| !s.is_empty())
-                else {
+                let Some(repo) = crate::log::record_repo(r) else {
                     continue;
                 };
                 let ts = r.get("ts").and_then(serde_json::Value::as_u64);

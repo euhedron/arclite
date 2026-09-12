@@ -209,8 +209,7 @@ pub(crate) fn ledger_repos() -> anyhow::Result<Vec<String>> {
     let (records, _) = crate::log::records()?;
     let set: std::collections::BTreeSet<String> = records
         .iter()
-        .map(|r| field(r, "repo"))
-        .filter(|s| !s.is_empty())
+        .filter_map(|r| crate::log::record_repo(r).map(str::to_owned))
         .collect();
     Ok(set.into_iter().collect())
 }
