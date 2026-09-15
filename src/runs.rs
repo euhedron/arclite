@@ -39,6 +39,25 @@ impl ActiveRun {
     pub fn age_display(&self, now: u64) -> String {
         format!("{}s", now.saturating_sub(self.started_at))
     }
+
+    /// The seven shared display cells of an in-flight run — command, repo (basename, matching the
+    /// compact `log` row), the requested-by-definition model, age, and the three live counters — in
+    /// column order. The one home for how an active run's fields read, so `arc status` (a flat line)
+    /// and the TUI status table can't drift on them the way they had (a full path against a
+    /// basename). Each surface owns its layout around these cells; `arc status` also carries pid and
+    /// index, which the table's fixed columns omit.
+    pub fn display_cells(&self, now: u64) -> [String; 7] {
+        [
+            self.command.clone(),
+            crate::log::repo_basename(&self.repo).to_owned(),
+            // In flight = requested by definition: no response has named the ran model yet.
+            format!("{}{}", self.model, crate::log::MODEL_REQUESTED_SUFFIX),
+            self.age_display(now),
+            self.turns.to_string(),
+            self.tool_calls.to_string(),
+            self.output_chars.to_string(),
+        ]
+    }
 }
 
 /// The registry directory, `~/.arc/runs/` (`None` if the home directory is unknown).
