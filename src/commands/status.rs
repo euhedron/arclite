@@ -16,20 +16,13 @@ pub fn run(_args: &StatusArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     } else {
         lines.push(format!("{} active run(s):", active.len()));
         for r in &active {
-            // An in-flight run's model is the *requested* id by definition — no response has named
-            // one yet — and the line says so rather than presenting it as confirmed.
+            // The shared cells (command, repo, requested model, age, and the three counters) come
+            // from `ActiveRun::display_cells`, so this line and the TUI status table can't drift;
+            // the CLI wraps them in its own labels and appends pid/index, which the table omits.
+            let [command, repo, model, age, turns, tools, chars] = r.display_cells(now);
             lines.push(format!(
-                "  {} · {} · {}{} · {} · {} turns · {} tools · {} chars · pid {} #{}",
-                r.command,
-                r.repo,
-                r.model,
-                crate::log::MODEL_REQUESTED_SUFFIX,
-                r.age_display(now),
-                r.turns,
-                r.tool_calls,
-                r.output_chars,
-                r.pid,
-                r.index
+                "  {command} · {repo} · {model} · {age} · {turns} turns · {tools} tools · {chars} chars · pid {} #{}",
+                r.pid, r.index
             ));
         }
     }

@@ -2578,18 +2578,12 @@ fn render_status(
             active_area,
         );
     } else {
-        let rows = snap.active.iter().map(|r| {
-            Row::new([
-                r.command.clone(),
-                crate::log::repo_basename(&r.repo).to_owned(),
-                // In flight = requested by definition; no response has named the ran model yet.
-                format!("{}{}", r.model, crate::log::MODEL_REQUESTED_SUFFIX),
-                r.age_display(snap.now),
-                r.turns.to_string(),
-                r.tool_calls.to_string(),
-                r.output_chars.to_string(),
-            ])
-        });
+        // The row cells are `ActiveRun::display_cells`, shared with `arc status` so the cockpit and
+        // the CLI can't drift on how an in-flight run reads.
+        let rows = snap
+            .active
+            .iter()
+            .map(|r| Row::new(r.display_cells(snap.now)));
         let table = Table::new(rows, STATUS_COLUMN_WIDTHS)
             .header(
                 Row::new(["command", "repo", "model", "age", "turns", "tools", "chars"])
