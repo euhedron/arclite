@@ -278,12 +278,21 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
     };
     let mut decoded = 0usize;
     let mut unreadable = 0usize;
+    let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut lost_files = 0usize;
     for entry in deliverable(entries, &mut lost) {
         let project = entry.path();
-        if !project.is_dir() {
-            continue;
+        // A bare `.is_dir()` would map a stat failure to "not a directory" and skip it silently;
+        // `try_is_dir` keeps the present-but-unstattable case distinct and disclosed (a stray
+        // non-directory entry is a legitimate skip; an unstattable one undercounts the map).
+        match crate::try_is_dir(&project) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(_) => {
+                uncheckable += 1;
+                continue;
+            }
         }
         let mut sessions = 0usize;
         let mut newest: Option<(u64, std::path::PathBuf)> = None;
@@ -346,6 +355,12 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
             "claude sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
         ));
     }
+    if uncheckable > 0 {
+        notes.push(format!(
+            "claude sessions: {uncheckable} entry(ies) couldn't be checked — skipped, the map \
+             undercounts"
+        ));
+    }
 }
 
 /// The lossy inverse of Claude Code's project-dir encoding (`/` → `-`).
@@ -367,6 +382,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     }
     let mut unresolved = 0usize;
     let mut unreadable = 0usize;
+    let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut stack = vec![dir];
     while let Some(d) = stack.pop() {
@@ -380,9 +396,19 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         };
         for entry in deliverable(entries, &mut lost) {
             let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-                continue;
+            // `try_is_dir`, not a bare `.is_dir()`: a stat failure must not silently demote an
+            // unreadable subdirectory to "a file" (which the rollout check would then skip
+            // undisclosed) — the same distinction the `read_dir` arm above draws.
+            match crate::try_is_dir(&p) {
+                Ok(true) => {
+                    stack.push(p);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    uncheckable += 1;
+                    continue;
+                }
             }
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -412,6 +438,12 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     if lost > 0 {
         notes.push(format!(
             "codex sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
+        ));
+    }
+    if uncheckable > 0 {
+        notes.push(format!(
+            "codex sessions: {uncheckable} entry(ies) couldn't be checked — skipped, the map \
+             undercounts"
         ));
     }
 }
