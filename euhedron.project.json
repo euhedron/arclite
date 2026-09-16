@@ -1,4 +1,5 @@
 {
+  "$schema": "https://euhedron.com/schema/euhedron.project.json",
   "slug": "arclite",
   "name": "arc",
   "tagline": "Agent-first code auditing that finds what tests and linters miss.",
@@ -6,10 +7,12 @@
   "public": true,
   "interfaces": ["cli", "tui"],
   "stack": ["Rust"],
-  "use_cases": [
+  "use_cases": ["code auditing"],
+  "features": [
     "Audit any repository against curated, composable rules — on demand or as a pre-push gate.",
     "Catch cross-repo drift and anti-patterns that tests and linters can't express.",
     "Gate pushes on AI-judged findings with transparent, per-run token cost."
   ],
+  "screenshots": ["https://raw.githubusercontent.com/euhedron/arclite/main/assets/arc-tui.gif"],
   "links": {"github": "https://github.com/euhedron/arclite"}
 }
