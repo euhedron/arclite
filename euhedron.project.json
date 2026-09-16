@@ -4,6 +4,12 @@
   "tagline": "Agent-first code auditing that finds what tests and linters miss.",
   "stage": "available",
   "public": true,
-  "interfaces": ["cli"],
+  "interfaces": ["cli", "tui"],
+  "stack": ["Rust"],
+  "use_cases": [
+    "Audit any repository against curated, composable rules — on demand or as a pre-push gate.",
+    "Catch cross-repo drift and anti-patterns that tests and linters can't express.",
+    "Gate pushes on AI-judged findings with transparent, per-run token cost."
+  ],
   "links": {"github": "https://github.com/euhedron/arclite"}
 }
