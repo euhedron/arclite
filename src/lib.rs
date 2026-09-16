@@ -207,6 +207,10 @@ pub(crate) fn git_stderr_says_not_a_repo(stderr: &str) -> bool {
 /// can't rot across the user/project loaders, `config`, and `init`.
 pub(crate) const SETTINGS_FILE: &str = "settings.json";
 
+/// The git pre-push hook's filename — one name shared by the writer (`init` scaffolds it) and the
+/// reader (`doctor` probes it), so a rename can't silently desync gate detection from the scaffold.
+pub(crate) const PRE_PUSH_HOOK: &str = "pre-push";
+
 /// Read an optional env var: set and nonempty → `Some`, unset or empty → `None`, set-but-not-unicode
 /// → a hard error naming the var and `consequence` (what silently ignoring the set value would do) —
 /// a value the user set is never silently dropped. One idiom home, shared by every optional env read.
