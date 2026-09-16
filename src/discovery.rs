@@ -239,6 +239,17 @@ fn deliverable(
     })
 }
 
+/// One store's count→disclosure note (`{label}: {n} {what} — skipped, the map undercounts`) — the
+/// single wording home for the per-store degradation counts, so the phrasing can't rot per store
+/// the way copy-pasted notes would; a zero count says nothing.
+fn skipped_note(notes: &mut Vec<String>, label: &str, n: usize, what: &str) {
+    if n > 0 {
+        notes.push(format!(
+            "{label}: {n} {what} — skipped, the map undercounts"
+        ));
+    }
+}
+
 /// Scan a session file's head for its `cwd` — metadata only, bounded by [`HEAD_SCAN_LINES`].
 fn head_cwd(path: &Path) -> Option<String> {
     use std::io::Read;
@@ -344,23 +355,24 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
              real path component reads as a separator)"
         ));
     }
-    if unreadable > 0 {
-        notes.push(format!(
-            "claude sessions: {unreadable} project dir(s) unreadable — skipped, the map undercounts"
-        ));
-    }
-    let lost = lost + lost_files;
-    if lost > 0 {
-        notes.push(format!(
-            "claude sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
-        ));
-    }
-    if uncheckable > 0 {
-        notes.push(format!(
-            "claude sessions: {uncheckable} entry(ies) couldn't be checked — skipped, the map \
-             undercounts"
-        ));
-    }
+    skipped_note(
+        notes,
+        "claude sessions",
+        unreadable,
+        "project dir(s) unreadable",
+    );
+    skipped_note(
+        notes,
+        "claude sessions",
+        lost + lost_files,
+        "directory entry(ies) unlistable",
+    );
+    skipped_note(
+        notes,
+        "claude sessions",
+        uncheckable,
+        "entry(ies) couldn't be checked",
+    );
 }
 
 /// The lossy inverse of Claude Code's project-dir encoding (`/` → `-`).
@@ -429,23 +441,24 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
              counted nowhere rather than guessed"
         ));
     }
-    if unreadable > 0 {
-        notes.push(format!(
-            "codex sessions: {unreadable} subdirectory(ies) unreadable — skipped, the map \
-             undercounts"
-        ));
-    }
-    if lost > 0 {
-        notes.push(format!(
-            "codex sessions: {lost} directory entry(ies) unlistable — skipped, the map undercounts"
-        ));
-    }
-    if uncheckable > 0 {
-        notes.push(format!(
-            "codex sessions: {uncheckable} entry(ies) couldn't be checked — skipped, the map \
-             undercounts"
-        ));
-    }
+    skipped_note(
+        notes,
+        "codex sessions",
+        unreadable,
+        "subdirectory(ies) unreadable",
+    );
+    skipped_note(
+        notes,
+        "codex sessions",
+        lost,
+        "directory entry(ies) unlistable",
+    );
+    skipped_note(
+        notes,
+        "codex sessions",
+        uncheckable,
+        "entry(ies) couldn't be checked",
+    );
 }
 
 /// arc's own ledger: run counts and last-run recency per recorded repo.
