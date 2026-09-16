@@ -13,6 +13,7 @@
     "json-pack-wrapper",
     "tui-init",
     "tui-usage-navigation",
+    "tui-feedback-navigation",
     "visual-audit",
     "public-run-record",
     "release-notes-view",
