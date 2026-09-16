@@ -226,7 +226,7 @@ pub(crate) fn user_layer_only(key: &str) -> bool {
 /// is user-layer-only, but not every user-layer-only key is a secret (`muted_repos` is a plain,
 /// showable list that merely must not live in a tracked file).
 pub(crate) fn secret_key(key: &str) -> bool {
-    key.starts_with("api_keys.")
+    key.starts_with(crate::ai::API_KEYS_PREFIX)
 }
 
 /// Look up a settable key, or error listing the known set — so `get` and `set` validate one way.

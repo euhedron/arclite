@@ -268,7 +268,7 @@ fn gate_status() -> Gate {
     // The binary name to detect is single-sourced in `cli::binary_name` (derived from clap's
     // `#[command(name)]`), so a rename can't stale this detection.
     let bin = crate::cli::binary_name();
-    let pre_push = match crate::read_optional(&hooks_dir.join("pre-push")) {
+    let pre_push = match crate::read_optional(&hooks_dir.join(crate::PRE_PUSH_HOOK)) {
         Ok(Some(body)) if hook_invokes(&body, &bin) => HookStatus::InvokesArc,
         Ok(Some(_)) => HookStatus::NoArc,
         Ok(None) => HookStatus::Absent,

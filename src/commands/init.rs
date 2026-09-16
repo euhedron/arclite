@@ -87,7 +87,7 @@ pub fn run(args: &InitArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         let hooks = arc.join(HOOKS_SUBDIR);
         std::fs::create_dir_all(&hooks)
             .with_context(|| format!("cannot create {}", hooks.display()))?;
-        let hook = hooks.join("pre-push");
+        let hook = hooks.join(crate::PRE_PUSH_HOOK);
         if write_if_absent(&hook, &starter_hook(), &mut created, &mut skipped)? {
             make_executable(&hook)?;
         }

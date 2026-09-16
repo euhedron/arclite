@@ -827,12 +827,26 @@ pub struct ModelListing {
     pub undated: usize,
 }
 
+/// One literal of the `api_keys.` settings namespace: the per-provider key constants below and
+/// config's secret-detection prefix ([`API_KEYS_PREFIX`]) all expand from this, so "these keys are
+/// secrets" can't drift from the key names it must match. (`concat!` at compile time, the idiom
+/// `BUILD_IDENT` already uses.)
+macro_rules! api_key_setting {
+    ($leaf:literal) => {
+        concat!("api_keys.", $leaf)
+    };
+}
+
+/// The `api_keys.` namespace prefix `config::secret_key` matches on — the bare namespace, from the
+/// same macro as the keys, so a new `api_keys.*` provider is a secret by construction.
+pub(crate) const API_KEYS_PREFIX: &str = api_key_setting!("");
+
 /// Each provider's key env var and saved-setting key — one home per name, shared by the listing
 /// fetch, the doctor status, the no-key hint, and the `config` settings table, so none can drift.
 const ANTHROPIC_KEY_ENV: &str = "ANTHROPIC_API_KEY";
-pub(crate) const ANTHROPIC_KEY_SETTING: &str = "api_keys.anthropic";
+pub(crate) const ANTHROPIC_KEY_SETTING: &str = api_key_setting!("anthropic");
 const OPENAI_KEY_ENV: &str = "OPENAI_API_KEY";
-pub(crate) const OPENAI_KEY_SETTING: &str = "api_keys.openai";
+pub(crate) const OPENAI_KEY_SETTING: &str = api_key_setting!("openai");
 
 /// Resolve a provider API key: the standard env var wins (a session override), else the saved
 /// user-layer setting. `Some((key, source))` discloses where it came from; `None` = no key — the
