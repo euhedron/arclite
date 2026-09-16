@@ -1712,10 +1712,18 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     crate::settings::SUPPRESS_STDERR_WARNINGS.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Inline viewport: the live region renders in the normal buffer; scrollback above is preserved.
-    let mut terminal = ratatui::try_init_with_options(TerminalOptions {
+    let mut terminal = match ratatui::try_init_with_options(TerminalOptions {
         viewport: Viewport::Inline(VIEWPORT_HEIGHT),
-    })
-    .context("failed to initialize the terminal")?;
+    }) {
+        Ok(terminal) => terminal,
+        Err(e) => {
+            // The terminal was never taken: release the suppression before erroring, so the flag
+            // can't outlive the hold it exists for (restore-exclusive-resource-on-every-exit).
+            crate::settings::SUPPRESS_STDERR_WARNINGS
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            return Err(e).context("failed to initialize the terminal");
+        }
+    };
     let result = event_loop(&mut terminal, interval);
     // Clean up the inline region on exit. `ratatui::restore()` only resets terminal modes — for an
     // inline viewport it clears nothing, so without this the last (mostly-blank) frame is stranded in
