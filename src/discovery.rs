@@ -37,6 +37,18 @@ const HEAD_SCAN_LINES: usize = 5;
 /// A head line longer than this is not metadata; the scan stops rather than buffering content.
 const HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 
+/// The external session stores' observed layout (2026-08-23; no layout contract — see the module
+/// doc), named here so a store's move or rename is one edit rather than a literal hunt across the
+/// readers, and so the shared session-file extension has a single home. Each store's own reader
+/// documents how it uses these.
+const CLAUDE_STORE_DIR: &str = ".claude";
+const CLAUDE_PROJECTS_SUBDIR: &str = "projects";
+const CODEX_STORE_DIR: &str = ".codex";
+const CODEX_SESSIONS_SUBDIR: &str = "sessions";
+const CODEX_ROLLOUT_PREFIX: &str = "rollout-";
+/// The session-file extension both stores use (Claude's per-project files and codex's rollouts).
+const SESSION_FILE_EXT: &str = "jsonl";
+
 /// The discovery indexes — an enum, so a source added later must declare its own accumulation
 /// arm in [`observe`] at compile time instead of falling into another source's catch-all.
 #[derive(Clone, Copy, Serialize)]
@@ -257,7 +269,8 @@ fn head_cwd(path: &Path) -> Option<String> {
 
 /// Claude Code's per-project store: one directory per project, sessions as `.jsonl` files.
 fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
-    let Some(dir) = dirs::home_dir().map(|h| h.join(".claude").join("projects")) else {
+    let Some(dir) = dirs::home_dir().map(|h| h.join(CLAUDE_STORE_DIR).join(CLAUDE_PROJECTS_SUBDIR))
+    else {
         return;
     };
     let Some(entries) = store_dir(notes, "claude sessions", &dir) else {
@@ -285,7 +298,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         };
         for f in deliverable(files, &mut lost_files) {
             let p = f.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            if p.extension().and_then(|e| e.to_str()) != Some(SESSION_FILE_EXT) {
                 continue;
             }
             sessions += 1;
@@ -345,7 +358,8 @@ fn decode_project_dir(name: &str) -> String {
 
 /// codex's session store: `rollout-*.jsonl`, loose and under dated subdirectories.
 fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
-    let Some(dir) = dirs::home_dir().map(|h| h.join(".codex").join("sessions")) else {
+    let Some(dir) = dirs::home_dir().map(|h| h.join(CODEX_STORE_DIR).join(CODEX_SESSIONS_SUBDIR))
+    else {
         return;
     };
     if store_dir(notes, "codex sessions", &dir).is_none() {
@@ -372,7 +386,9 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
             }
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) {
+            let is_rollout = name.starts_with(CODEX_ROLLOUT_PREFIX)
+                && p.extension().and_then(|e| e.to_str()) == Some(SESSION_FILE_EXT);
+            if !is_rollout {
                 continue;
             }
             match head_cwd(&p) {
