@@ -6,6 +6,7 @@
   "stage": "available",
   "public": true,
   "interfaces": ["cli", "tui"],
+  "icon": "https://raw.githubusercontent.com/euhedron/arclite/main/assets/arc-icon.png",
   "stack": ["Rust"],
   "use_cases": ["code auditing"],
   "features": [
