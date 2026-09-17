@@ -213,12 +213,15 @@ pub fn split_muted_by<T>(
     (kept, dropped)
 }
 
-/// [`split_muted_by`] over ledger records — the record's `repo` field is the key.
+/// [`split_muted_by`] over ledger records — the record's repo (via [`record_repo`], never the
+/// `field` display sentinel) is the key; a repo-less record keys to "" and so matches no muted path.
 pub fn split_muted(
     records: Vec<serde_json::Value>,
     muted: &[String],
 ) -> (Vec<serde_json::Value>, usize) {
-    split_muted_by(records, muted, |r| field(r, "repo"))
+    split_muted_by(records, muted, |r| {
+        record_repo(r).map(str::to_owned).unwrap_or_default()
+    })
 }
 
 /// The default-view mute lens whole: [`mute_criteria`] + [`split_muted`]. Returns
@@ -251,7 +254,7 @@ pub fn mute_note(muted: usize, settings_error: Option<&str>, bypass: &str) -> Op
 /// `--repo` filter, shared by `arc log` and both `arc usage` lenses so how repo matching works
 /// can't drift between the surfaces.
 pub fn repo_matches(record: &serde_json::Value, needle: &str) -> bool {
-    repo_contains(&field(record, "repo"), needle)
+    record_repo(record).is_some_and(|repo| repo_contains(repo, needle))
 }
 
 /// The documented repo-substring semantics — case-insensitive contains — as a plain string
@@ -274,7 +277,7 @@ impl RepoFilter {
     pub fn matches(&self, record: &serde_json::Value) -> bool {
         match self {
             RepoFilter::Contains(needle) => repo_matches(record, needle),
-            RepoFilter::Exact(path) => field(record, "repo") == *path,
+            RepoFilter::Exact(path) => record_repo(record) == Some(path.as_str()),
         }
     }
 
