@@ -494,7 +494,7 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
     let items = &agenda.items;
     let order = &agenda.order;
     let (unlisted, dangling, duplicated) = (&agenda.unlisted, &agenda.dangling, &agenda.duplicated);
-    if items.is_empty() && order.is_none() {
+    if agenda.is_absent() {
         sources.push("items: none (.arc/items/open absent or empty)".to_owned());
         return Ok(String::new());
     }
@@ -515,7 +515,7 @@ fn gather_agenda(root: &Path, sources: &mut Vec<String>) -> anyhow::Result<Strin
             for (i, id) in list.iter().enumerate() {
                 block.push_str(&format!("{}. {id}\n", i + 1));
             }
-            if !(unlisted.is_empty() && dangling.is_empty() && duplicated.is_empty()) {
+            if agenda.order_drifted() {
                 block.push_str(&format!(
                     "Order integrity: unlisted [{}] · dangling [{}] · duplicated [{}]\n",
                     unlisted.join(", "),
