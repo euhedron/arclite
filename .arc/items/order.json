@@ -15,6 +15,7 @@
     "gate-change-scope",
     "json-pack-wrapper",
     "tui-init",
+    "tui-launch-manifest",
     "tui-usage-navigation",
     "tui-feedback-navigation",
     "tui-status-navigation",
