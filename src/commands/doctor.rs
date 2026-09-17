@@ -23,6 +23,9 @@ pub(crate) struct Report {
 struct ItemsHealth {
     open: Option<usize>,
     resolved: Option<usize>,
+    /// Whether there is no agenda at all — the structured [`crate::commands::items::Agenda::is_absent`]
+    /// verdict, carried so the renderer branches on it rather than string-matching `integrity` prose.
+    absent: Option<bool>,
     integrity: Option<String>,
     inbox_pending: Option<usize>,
     error: Option<String>,
@@ -404,15 +407,16 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
 fn items_health() -> ItemsHealth {
     let cwd = std::path::Path::new(".");
     let mut errors = Vec::new();
-    let (open, resolved, integrity) = match crate::commands::items::load(cwd) {
+    let (open, resolved, absent, integrity) = match crate::commands::items::load(cwd) {
         Ok(agenda) => (
             Some(agenda.items.len()),
             Some(agenda.resolved),
+            Some(agenda.is_absent()),
             Some(agenda.integrity()),
         ),
         Err(e) => {
             errors.push(format!("agenda unreadable: {e:#}"));
-            (None, None, None)
+            (None, None, None, None)
         }
     };
     let inbox_pending = match crate::commands::feedback::inbox_notes(cwd) {
@@ -425,6 +429,7 @@ fn items_health() -> ItemsHealth {
     ItemsHealth {
         open,
         resolved,
+        absent,
         integrity,
         inbox_pending,
         error: if errors.is_empty() {
@@ -560,10 +565,7 @@ pub(crate) fn human(report: &Report) -> String {
     let items_line = {
         let mut parts: Vec<String> = Vec::new();
         if let Some(open) = report.items.open {
-            if open == 0
-                && report.items.resolved == Some(0)
-                && report.items.integrity.as_deref() == Some("no order file")
-            {
+            if report.items.absent == Some(true) {
                 parts.push("none (.arc/items absent)".to_owned());
             } else {
                 parts.push(format!(
