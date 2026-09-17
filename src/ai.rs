@@ -1542,11 +1542,13 @@ fn codex_command(
         .arg(codex_network_rule())
         .arg("-c")
         .arg("web_search=\"disabled\"")
-        .arg("-c")
-        .arg("allow_managed_hooks_only=true")
         // This is a synthesis call, not an autonomous coding session. Disable ordinary extension,
         // persistence, delegation, and local-command surfaces explicitly; the permission profile
-        // remains defense in depth for any provider/managed local tool that still exists.
+        // remains defense in depth for any provider/managed local tool that still exists. Hooks are
+        // disabled wholesale below; requirements.toml's admin namespace (allow_managed_hooks_only
+        // and kin — the config reference's requirements section, 2026-09-16) is not settable
+        // through `-c` (codex 0.144.4 rejects it under --strict-config), so managed behavior stays
+        // inherited-and-disclosed, never half-claimed here.
         .args(["--disable", "apps"])
         .args(["--disable", "goals"])
         .args(["--disable", "hooks"])
