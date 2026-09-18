@@ -38,6 +38,13 @@ pub(crate) struct Rollup {
     pub(crate) by_command: Vec<CommandTotal>,
     /// Disclosure lines (codex/missing/unparsed), preformatted so the CLI and TUI share their wording.
     pub(crate) notes: Vec<String>,
+    /// Runs the `muted_repos` lens excluded from these totals (all-repos lens only; 0 under an
+    /// explicit filter, which bypasses the lens) — carried structurally so the TUI's compact facts
+    /// line discloses the mute rather than dropping the prose-only note.
+    pub(crate) muted: usize,
+    /// The mute lens couldn't be applied — settings unreadable, so nothing was muted (fails open,
+    /// disclosed): distinct from `muted == 0` meaning nothing matched.
+    pub(crate) mute_unreadable: bool,
     pub(crate) tokens_only: usize,
     pub(crate) no_usage: usize,
     /// Runs whose spend is *unknown* (the backend returned no usage; recorded zeros are
@@ -251,7 +258,8 @@ pub(crate) fn rules_rollup(
     current: CurrencyLens,
 ) -> anyhow::Result<(RulesRollup, String)> {
     let (records, unparsed) = crate::log::records()?;
-    let (records, mute_note) = apply_mute_lens(records, filter.is_some());
+    let (records, muted, mute_error) = apply_mute_lens(records, filter.is_some());
+    let mute_note = crate::log::mute_note(muted, mute_error.as_deref(), MUTE_BYPASS);
     let now = crate::log::now_secs();
     #[derive(Default)]
     struct Agg {
@@ -513,18 +521,21 @@ pub(crate) fn rules_rollup(
 /// filter is in play, returning the kept records plus the disclosure note — a filtered count, or
 /// the unreadable-settings state (the lens fails open: showing more, never hiding silently). One
 /// wrapper, so the two rollups can't drift in guard, split, or wording.
-fn apply_mute_lens(records: Vec<Value>, filtered: bool) -> (Vec<Value>, Option<String>) {
+fn apply_mute_lens(records: Vec<Value>, filtered: bool) -> (Vec<Value>, usize, Option<String>) {
     if filtered {
-        return (records, None);
+        return (records, 0, None);
     }
     let (kept, muted, error) = crate::log::apply_mute(records);
-    let note = crate::log::mute_note(muted, error.as_deref(), "a repo lens or --repo");
-    (kept, note)
+    (kept, muted, error)
 }
+
+/// The mute lens's own-surface override, named once so both rollups word the disclosure identically.
+const MUTE_BYPASS: &str = "a repo lens or --repo";
 
 pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<(Rollup, String)> {
     let (all_records, unparsed) = crate::log::records()?;
-    let (all_records, mute_note) = apply_mute_lens(all_records, filter.is_some());
+    let (all_records, muted, mute_error) = apply_mute_lens(all_records, filter.is_some());
+    let mute_note = crate::log::mute_note(muted, mute_error.as_deref(), MUTE_BYPASS);
     let records: Vec<&Value> = all_records
         .iter()
         .filter(|r| filter.is_none_or(|f| f.matches(r)))
@@ -736,6 +747,8 @@ pub(crate) fn rollup(filter: Option<&crate::log::RepoFilter>) -> anyhow::Result<
         windows,
         by_command,
         notes,
+        muted,
+        mute_unreadable: mute_error.is_some(),
         tokens_only,
         no_usage,
         spend_unknown,

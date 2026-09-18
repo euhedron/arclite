@@ -3265,20 +3265,28 @@ fn render_usage(frame: &mut Frame, view: &UsageView, area: Rect) {
     );
 
     // Non-zero disclosure counts only, straight from the rollup's numeric fields — no derived
-    // ratios, no restated prose, zeros silent.
-    let facts: Vec<String> = [
-        (rollup.tokens_only, "tokens-only"),
-        (rollup.spend_unknown, "unknown-spend"),
-        (rollup.cost_missing, "cost-lost"),
-        (rollup.no_usage, "no-usage"),
-        (rollup.malformed_fields, "malformed-fields"),
-        (rollup.no_timestamp, "untimed"),
-        (rollup.unparsed, "unparsed-lines"),
-    ]
-    .iter()
-    .filter(|(n, _)| *n > 0)
-    .map(|(n, label)| format!("{label} {n}"))
-    .collect();
+    // ratios, no restated prose, zeros silent. The mute lens leads: excluded runs are dropped from
+    // these totals, so the exclusion is disclosed here as it is on every other mute surface (never
+    // a silently-filtered spend page).
+    let mut facts: Vec<String> = Vec::new();
+    if rollup.mute_unreadable {
+        facts.push("mute-unreadable".to_owned());
+    }
+    facts.extend(
+        [
+            (rollup.muted, "muted"),
+            (rollup.tokens_only, "tokens-only"),
+            (rollup.spend_unknown, "unknown-spend"),
+            (rollup.cost_missing, "cost-lost"),
+            (rollup.no_usage, "no-usage"),
+            (rollup.malformed_fields, "malformed-fields"),
+            (rollup.no_timestamp, "untimed"),
+            (rollup.unparsed, "unparsed-lines"),
+        ]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{label} {n}")),
+    );
     if !facts.is_empty() {
         frame.render_widget(Line::from(facts.join(" · ")).dim(), notes_area);
     }
