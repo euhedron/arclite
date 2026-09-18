@@ -6,6 +6,12 @@ rust-version = "1.88"
 description = "Agent-first, cross-platform CLI for AI-powered cross-repo code intelligence and auditing."
 license = "MIT"
 repository = "https://github.com/euhedron/arclite"
+homepage = "https://euhedron.com/portfolio/arclite"
+keywords = ["audit", "cli", "linter", "ai", "code-review"]
+categories = ["command-line-utilities", "development-tools"]
+# The publish guard stays on until a deliberate release cut arms `cargo publish` (see the release
+# item): metadata and discoverability fields are staged here so the cut is only the version bump
+# and this flip, never a scramble for a crates.io listing.
 publish = false
 
 [[bin]]
