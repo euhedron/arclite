@@ -1,6 +1,6 @@
 [package]
 name = "arclite"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 rust-version = "1.88"
 description = "Agent-first, cross-platform CLI for AI-powered cross-repo code intelligence and auditing."
@@ -9,10 +9,21 @@ repository = "https://github.com/euhedron/arclite"
 homepage = "https://euhedron.com/portfolio/arclite"
 keywords = ["audit", "cli", "linter", "ai", "code-review"]
 categories = ["command-line-utilities", "development-tools"]
-# The publish guard stays on until a deliberate release cut arms `cargo publish` (see the release
-# item): metadata and discoverability fields are staged here so the cut is only the version bump
-# and this flip, never a scramble for a crates.io listing.
-publish = false
+# The published crate ships only what a consumer needs to build and read: source, the README's
+# assets, and `.arc/rules/` (build.rs embeds it as the built-in `default` ruleset). arc's own dev
+# substrate — the agenda, findings ledger, inbox, meta/behavioral rulesets, hooks — and CI wiring
+# are this repo's proving ground, not the crate's payload.
+exclude = [
+    ".arc/items/",
+    ".arc/findings/",
+    ".arc/inbox/",
+    ".arc/meta-rules/",
+    ".arc/behavioral-rules/",
+    ".arc/hooks/",
+    ".arc/settings.json",
+    ".github/",
+    "tui-shots/",
+]
 
 [[bin]]
 name = "arc"
