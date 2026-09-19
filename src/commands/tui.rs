@@ -1709,21 +1709,15 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 
     // While the terminal is held, shared code must not write stderr into the raw-mode viewport —
     // the settings loader carries its warnings as data instead (the config view discloses them).
-    crate::settings::SUPPRESS_STDERR_WARNINGS.store(true, std::sync::atomic::Ordering::Relaxed);
+    // The guard releases the suppression on every exit of this scope — ordinary return, the `?`
+    // below, or an unwinding panic (restore-exclusive-resource-on-every-exit).
+    let _suppress = crate::settings::SuppressStderrWarnings::hold();
 
     // Inline viewport: the live region renders in the normal buffer; scrollback above is preserved.
-    let mut terminal = match ratatui::try_init_with_options(TerminalOptions {
+    let mut terminal = ratatui::try_init_with_options(TerminalOptions {
         viewport: Viewport::Inline(VIEWPORT_HEIGHT),
-    }) {
-        Ok(terminal) => terminal,
-        Err(e) => {
-            // The terminal was never taken: release the suppression before erroring, so the flag
-            // can't outlive the hold it exists for (restore-exclusive-resource-on-every-exit).
-            crate::settings::SUPPRESS_STDERR_WARNINGS
-                .store(false, std::sync::atomic::Ordering::Relaxed);
-            return Err(e).context("failed to initialize the terminal");
-        }
-    };
+    })
+    .context("failed to initialize the terminal")?;
     let result = event_loop(&mut terminal, interval);
     // Clean up the inline region on exit. `ratatui::restore()` only resets terminal modes — for an
     // inline viewport it clears nothing, so without this the last (mostly-blank) frame is stranded in
@@ -1750,8 +1744,8 @@ pub fn run(args: &TuiArgs, global: &GlobalArgs) -> anyhow::Result<()> {
         cleanup_failures.push(format!("flush: {e}"));
     }
     ratatui::restore();
-    // The terminal is released — stderr is safe again for whatever loads settings after the TUI.
-    crate::settings::SUPPRESS_STDERR_WARNINGS.store(false, std::sync::atomic::Ordering::Relaxed);
+    // `_suppress` releases the stderr suppression on drop at the end of this scope; the terminal is
+    // now restored, so shared code loading settings after the TUI prints normally again.
     if !cleanup_failures.is_empty() {
         // The module-wide print ban guards the TUI's ownership of the terminal; restore() just
         // ended it, so stderr is the shell's again and the warning belongs there.

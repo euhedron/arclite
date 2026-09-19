@@ -126,11 +126,34 @@ struct RawRuleset {
 }
 
 /// While a TUI holds the terminal exclusively (inline raw mode), a stderr write from shared code
-/// would corrupt the held viewport — the TUI sets this for its lifetime and [`Settings::load`]
-/// carries its warnings as data instead of printing (disclosed in the config view). Every other
-/// context leaves it unset and keeps the CLI's stderr behavior.
-pub static SUPPRESS_STDERR_WARNINGS: std::sync::atomic::AtomicBool =
+/// would corrupt the held viewport — the TUI holds this for its lifetime (via
+/// [`SuppressStderrWarnings`]) and [`Settings::load`] carries its warnings as data instead of
+/// printing (disclosed in the config view). Every other context leaves it unset and keeps the
+/// CLI's stderr behavior.
+static SUPPRESS_STDERR_WARNINGS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Holds the stderr-warning suppression for as long as it lives, restoring on drop — so the flag
+/// is released on *every* exit of the scope that holds the terminal: an ordinary return, a `?`
+/// early-return, or an unwinding panic (which a manual reset at the end of the block would skip,
+/// leaving warnings suppressed for any caller that catches the unwind). The only way to set the
+/// flag, so it can never be raised without a matching release.
+#[must_use = "dropping this immediately releases the suppression"]
+pub struct SuppressStderrWarnings;
+
+impl SuppressStderrWarnings {
+    /// Suppress shared-code stderr warnings until the returned guard is dropped.
+    pub fn hold() -> Self {
+        SUPPRESS_STDERR_WARNINGS.store(true, std::sync::atomic::Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for SuppressStderrWarnings {
+    fn drop(&mut self) {
+        SUPPRESS_STDERR_WARNINGS.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 /// The keys that belong to the user layer's *vocabulary* only — a repo's tracked settings must
 /// not steer the operator's machine-wide lenses. `arc config set` elevates them to the user file,
