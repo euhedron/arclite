@@ -909,10 +909,20 @@ fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
     })
 }
 
+/// The six git-state tokens — the shared contract between the classifiers that produce them and the
+/// `semantics` block below that documents each for the model. Named so a producer can't silently
+/// drift from its documented meaning, the way the codebase names its other shared tokens.
+const GIT_STATE_INDEX_CLEAN: &str = "index_tracked_clean";
+const GIT_STATE_INDEX_DIRTY: &str = "index_tracked_dirty";
+const GIT_STATE_UNTRACKED: &str = "untracked";
+const GIT_STATE_IGNORED: &str = "ignored_untracked";
+const GIT_STATE_UNKNOWN: &str = "unknown";
+const GIT_STATE_OUTSIDE: &str = "outside_target";
+
 /// Translate a successfully-read path into Git's target-relative spelling. A lexical escape is
 /// outside scope; a non-UTF-8 spelling is unknown because the JSON channel cannot name it exactly.
 fn git_relative_path(root: &Path, path: &Path) -> Result<String, &'static str> {
-    let relative = path.strip_prefix(root).map_err(|_| "outside_target")?;
+    let relative = path.strip_prefix(root).map_err(|_| GIT_STATE_OUTSIDE)?;
     let mut normalized = PathBuf::new();
     for component in relative.components() {
         match component {
@@ -920,19 +930,19 @@ fn git_relative_path(root: &Path, path: &Path) -> Result<String, &'static str> {
             Component::CurDir => {}
             Component::ParentDir if normalized.pop() => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err("outside_target");
+                return Err(GIT_STATE_OUTSIDE);
             }
         }
     }
     if normalized.as_os_str().is_empty() {
-        return Err("outside_target");
+        return Err(GIT_STATE_OUTSIDE);
     }
     normalized
         .to_str()
         // Git prints `/` separators even on Windows; on Unix this is a no-op and leaves literal
         // backslashes untouched.
         .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"))
-        .ok_or("unknown")
+        .ok_or(GIT_STATE_UNKNOWN)
 }
 
 /// `ls-files --directory` collapses an untracked/ignored directory to `dir/`; a context file below
@@ -965,18 +975,18 @@ fn path_has_specific_state(snapshot: &GitSnapshot, path: &str) -> bool {
 fn git_state_for_path(snapshot: &GitSnapshot, path: &str) -> &'static str {
     if snapshot.tracked.paths.contains(path) {
         if snapshot.dirty.paths.contains(path) {
-            "index_tracked_dirty"
+            GIT_STATE_INDEX_DIRTY
         } else {
-            "index_tracked_clean"
+            GIT_STATE_INDEX_CLEAN
         }
     } else if path_or_collapsed_parent_is_listed(&snapshot.ignored.paths, path) {
-        "ignored_untracked"
+        GIT_STATE_IGNORED
     } else if path_or_collapsed_parent_is_listed(&snapshot.untracked.paths, path) {
-        "untracked"
+        GIT_STATE_UNTRACKED
     } else {
         // A submodule/nested-worktree descendant and an entry omitted from a partial query both land
         // here. Absence is not evidence of ordinary untracked state.
-        "unknown"
+        GIT_STATE_UNKNOWN
     }
 }
 
@@ -990,7 +1000,7 @@ fn unknown_git_rows(root: &Path, included: &[IncludedFile]) -> Vec<serde_json::V
     included
         .iter()
         .map(|file| match git_relative_path(root, &file.path) {
-            Ok(path) => git_row(&path, "unknown"),
+            Ok(path) => git_row(&path, GIT_STATE_UNKNOWN),
             Err(state) => git_row(&file.label, state),
         })
         .collect()
@@ -1044,7 +1054,7 @@ fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
                 .strip_prefix(root)
                 .is_ok_and(|path| path.components().any(|c| c == Component::ParentDir));
             if has_parent {
-                return match canonical.unwrap_or(Err("unknown")) {
+                return match canonical.unwrap_or(Err(GIT_STATE_UNKNOWN)) {
                     Ok(path) => git_row(&path, git_state_for_path(&snapshot, &path)),
                     Err(state) => git_row(&file.label, state),
                 };
@@ -1086,12 +1096,12 @@ fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
         "ignored_untracked_present": snapshot.ignored.paths,
         "undecodable_path_records_omitted": omitted,
         "semantics": {
-            "index_tracked_clean": "present in Git's index with no staged or unstaged change reported; this alone does not prove the displayed bytes exist in HEAD",
-            "index_tracked_dirty": "present in Git's index and changed; the displayed bytes are not proven committed",
-            "untracked": "reported present and untracked by Git",
-            "ignored_untracked": "reported present, untracked, and ignored by Git",
-            "unknown": "Git state was not established; do not infer it",
-            "outside_target": "outside this Git snapshot's target scope",
+            GIT_STATE_INDEX_CLEAN: "present in Git's index with no staged or unstaged change reported; this alone does not prove the displayed bytes exist in HEAD",
+            GIT_STATE_INDEX_DIRTY: "present in Git's index and changed; the displayed bytes are not proven committed",
+            GIT_STATE_UNTRACKED: "reported present and untracked by Git",
+            GIT_STATE_IGNORED: "reported present, untracked, and ignored by Git",
+            GIT_STATE_UNKNOWN: "Git state was not established; do not infer it",
+            GIT_STATE_OUTSIDE: "outside this Git snapshot's target scope",
         },
         "claim_rule": GIT_REFERENCE_RULE,
         "content_disclosure": "The snapshot adds path/index metadata only; it does not add the contents of listed untracked or ignored paths.",
