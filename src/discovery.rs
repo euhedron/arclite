@@ -1,18 +1,27 @@
 //! Device discovery — the repositories on this machine and the agent activity around them, known
 //! by discovery rather than declaration, read from indexes that already exist: the agent CLIs' own
-//! session stores and arc's run ledger. Read-only enumeration of names and file metadata — no
-//! transcript content is read at this layer (a session file contributes the `cwd` in its head and
-//! its mtime, nothing else).
+//! session stores and arc's run ledger. Each session file contributes its head record's metadata
+//! (`cwd`, and codex's `source` kind) and its mtime — a head read suffices because both stores
+//! put the session metadata first (see [`HEAD_SCAN_LINES`]).
 //!
 //! The session stores are external surfaces with no layout contract (observed on this machine
-//! 2026-08-23; every read here fails soft per store, disclosed in the result's notes, so a store
-//! that moves or changes shape degrades the map rather than erroring the command):
+//! 2026-08-23, source kinds 2026-09-25; every read here fails soft per store, disclosed in the
+//! result's notes, so a store that moves or changes shape degrades the map rather than erroring
+//! the command):
 //! - Claude Code: `~/.claude/projects/<encoded-path>/` — one directory per project with session
 //!   `.jsonl` files inside. The directory name encodes the repo path lossily (`/` → `-`), so the
 //!   path is taken from a session head's `cwd` where readable, with the name decode as a
 //!   disclosed fallback.
 //! - codex: `~/.codex/sessions/**/rollout-*.jsonl` — loose files and dated subdirectories both
-//!   observed; the repo lives inside the record (a head line's `cwd`), not in the filename.
+//!   observed; the repo lives inside the record (a head line's `cwd`), not in the filename. This
+//!   is the codex CLI's own session store (`codex-rs/rollout` in the open source, whose meta line
+//!   carries `cwd` and `source`; verified 2026-09-25). The meta's `source` separates headless
+//!   `exec` runs — arc's own codex synthesis lands there — from interactive sessions, so the map
+//!   counts them apart instead of reporting arc's own residue as agent sessions. `~/.codex/sqlite/`
+//!   also exists but is deliberately not read: its thread catalog (`codex-dev.db`) is written by
+//!   the ChatGPT desktop app, not the CLI (schema closed-source; `lsof` + binary-strings check,
+//!   2026-09-25), and the CLI's own state DBs there were months stale on this machine while
+//!   rollouts stayed current.
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
@@ -29,9 +38,11 @@ pub const ACTIVE_WINDOW_SECS: u64 = 120;
 /// How activity inside [`ACTIVE_WINDOW_SECS`] is labeled — one wording for the CLI and the TUI.
 pub const ACTIVE_LABEL: &str = "active now";
 
-/// How many head lines of a session file are scanned for its `cwd` before giving up: the field
-/// sits in the first record(s) in both observed stores, and a deeper scan would start reading
-/// transcript body — exactly what this layer must not do.
+/// How many head lines of a session file are scanned for its metadata before giving up: codex
+/// writes the session meta as the rollout's first record by design (`codex-rs/rollout`, verified
+/// 2026-09-25), and Claude Code's store carries `cwd` within the first records (observed); the
+/// allowance covers format variants, and past it there is no metadata left to find — scanning
+/// deeper would only cost.
 const HEAD_SCAN_LINES: usize = 5;
 
 /// A head line longer than this is not metadata; the scan stops rather than buffering content.
@@ -46,11 +57,12 @@ const CLAUDE_PROJECTS_SUBDIR: &str = "projects";
 const CODEX_STORE_DIR: &str = ".codex";
 const CODEX_SESSIONS_SUBDIR: &str = "sessions";
 const CODEX_ROLLOUT_PREFIX: &str = "rollout-";
+/// The session-meta `source` value codex records for a headless `codex exec` run.
+const CODEX_EXEC_SOURCE: &str = "exec";
 /// The session-file extension both stores use (Claude's per-project files and codex's rollouts).
 const SESSION_FILE_EXT: &str = "jsonl";
 
-/// The discovery indexes — an enum, so a source added later must declare its own accumulation
-/// arm in [`observe`] at compile time instead of falling into another source's catch-all.
+/// The discovery indexes — what a repo's `last_source` names.
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
@@ -78,6 +90,9 @@ pub struct RepoActivity {
     pub repo: String,
     pub claude_sessions: usize,
     pub codex_sessions: usize,
+    /// codex rollouts whose head meta says `source: "exec"` — headless `codex exec` runs (arc's
+    /// own codex synthesis among them), counted apart so the sessions column stays sessions.
+    pub codex_exec_runs: usize,
     pub ledger_runs: usize,
     /// Most recent activity across the sources (unix secs); `None` when only counts are known.
     pub last_activity: Option<u64>,
@@ -179,12 +194,35 @@ pub fn discover(include_all: bool) -> Discovery {
     }
 }
 
-/// Fold one source's observation into the map: `count` accumulates into the counter the source
-/// enumerates (sessions for the CLI stores, runs for the ledger).
+/// The counter one observation accumulates into — an enum, so a count added later must declare
+/// its own accumulation arm in [`observe`] at compile time instead of falling into another's
+/// catch-all. Distinct from [`Source`] because one index can count more than one thing (the
+/// codex store: sessions and exec runs).
+#[derive(Clone, Copy)]
+enum Counter {
+    ClaudeSessions,
+    CodexSessions,
+    CodexExecRuns,
+    LedgerRuns,
+}
+
+impl Counter {
+    /// The index the observation came from — what `last_source` reports.
+    fn source(self) -> Source {
+        match self {
+            Self::ClaudeSessions => Source::Claude,
+            Self::CodexSessions | Self::CodexExecRuns => Source::Codex,
+            Self::LedgerRuns => Source::Ledger,
+        }
+    }
+}
+
+/// Fold one observation into the map: `count` accumulates into `counter`, and the newest
+/// activity across all observations wins the recency cell.
 fn observe(
     map: &mut BTreeMap<String, RepoActivity>,
     repo: String,
-    source: Source,
+    counter: Counter,
     count: usize,
     activity: Option<u64>,
 ) {
@@ -192,19 +230,21 @@ fn observe(
         repo,
         claude_sessions: 0,
         codex_sessions: 0,
+        codex_exec_runs: 0,
         ledger_runs: 0,
         last_activity: None,
         last_source: None,
         gone: false,
     });
-    match source {
-        Source::Claude => entry.claude_sessions += count,
-        Source::Codex => entry.codex_sessions += count,
-        Source::Ledger => entry.ledger_runs += count,
+    match counter {
+        Counter::ClaudeSessions => entry.claude_sessions += count,
+        Counter::CodexSessions => entry.codex_sessions += count,
+        Counter::CodexExecRuns => entry.codex_exec_runs += count,
+        Counter::LedgerRuns => entry.ledger_runs += count,
     }
     if activity > entry.last_activity {
         entry.last_activity = activity;
-        entry.last_source = Some(source);
+        entry.last_source = Some(counter.source());
     }
 }
 
@@ -250,8 +290,10 @@ fn skipped_note(notes: &mut Vec<String>, label: &str, n: usize, what: &str) {
     }
 }
 
-/// Scan a session file's head for its `cwd` — metadata only, bounded by [`HEAD_SCAN_LINES`].
-fn head_cwd(path: &Path) -> Option<String> {
+/// Read a session file's head metadata: the `cwd`, plus the `source` kind where the same record
+/// carries one (codex's session meta does; Claude Code's store and old codex formats don't).
+/// Bounded by [`HEAD_SCAN_LINES`].
+fn head_meta(path: &Path) -> Option<(String, Option<serde_json::Value>)> {
     use std::io::Read;
     let file = std::fs::File::open(path).ok()?;
     let mut reader = std::io::BufReader::new(file.take(HEAD_SCAN_MAX_BYTES));
@@ -262,16 +304,16 @@ fn head_cwd(path: &Path) -> Option<String> {
             return None;
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-            // The field sits at the top level (Claude Code) or under the head record's payload
+            // The fields sit at the top level (Claude Code) or under the head record's payload
             // (codex's session-meta shape) — both observed; scan both, assert neither.
             if let Some(cwd) = v.get("cwd").and_then(serde_json::Value::as_str) {
-                return Some(cwd.to_owned());
+                return Some((cwd.to_owned(), v.get("source").cloned()));
             }
             if let Some(cwd) = v
                 .pointer("/payload/cwd")
                 .and_then(serde_json::Value::as_str)
             {
-                return Some(cwd.to_owned());
+                return Some((cwd.to_owned(), v.pointer("/payload/source").cloned()));
             }
         }
     }
@@ -337,7 +379,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         let (activity, repo) = match newest {
             Some((mtime, path)) => (
                 Some(mtime),
-                head_cwd(&path).unwrap_or_else(|| {
+                head_meta(&path).map(|(cwd, _)| cwd).unwrap_or_else(|| {
                     decoded += 1;
                     decode_project_dir(&entry.file_name().to_string_lossy())
                 }),
@@ -347,7 +389,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
                 decode_project_dir(&entry.file_name().to_string_lossy())
             }),
         };
-        observe(map, repo, Source::Claude, sessions, activity);
+        observe(map, repo, Counter::ClaudeSessions, sessions, activity);
     }
     if decoded > 0 {
         notes.push(format!(
@@ -393,6 +435,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         return;
     }
     let mut unresolved = 0usize;
+    let mut unlabeled = 0usize;
     let mut unreadable = 0usize;
     let mut uncheckable = 0usize;
     let mut lost = 0usize;
@@ -429,8 +472,25 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
             if !is_rollout {
                 continue;
             }
-            match head_cwd(&p) {
-                Some(repo) => observe(map, repo, Source::Codex, 1, mtime_secs(&p)),
+            match head_meta(&p) {
+                Some((repo, source)) => {
+                    // Classified by codex's own kind label: `exec` is a headless `codex exec`
+                    // run (arc's own synthesis lands there); any other present value — `cli`,
+                    // `vscode`, or a structured subagent record — is a session/thread. A file
+                    // predating the label can't be told apart, so it counts as a session,
+                    // disclosed below rather than silently bucketed.
+                    let counter = match &source {
+                        Some(serde_json::Value::String(s)) if s == CODEX_EXEC_SOURCE => {
+                            Counter::CodexExecRuns
+                        }
+                        Some(_) => Counter::CodexSessions,
+                        None => {
+                            unlabeled += 1;
+                            Counter::CodexSessions
+                        }
+                    };
+                    observe(map, repo, counter, 1, mtime_secs(&p));
+                }
                 None => unresolved += 1,
             }
         }
@@ -439,6 +499,11 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         notes.push(format!(
             "codex sessions: {unresolved} session file(s) without a readable repo in the head — \
              counted nowhere rather than guessed"
+        ));
+    }
+    if unlabeled > 0 {
+        notes.push(format!(
+            "codex sessions: {unlabeled} file(s) predate the source label — counted as sessions"
         ));
     }
     skipped_note(
@@ -473,7 +538,7 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
                     continue;
                 };
                 let ts = r.get("ts").and_then(serde_json::Value::as_u64);
-                observe(map, repo.to_owned(), Source::Ledger, 1, ts);
+                observe(map, repo.to_owned(), Counter::LedgerRuns, 1, ts);
             }
         }
         Err(e) => notes.push(format!("ledger unreadable: {e:#}")),
