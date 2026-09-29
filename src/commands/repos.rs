@@ -8,8 +8,15 @@ use crate::output::emit;
 /// One row's cells — shared with the TUI status block so the two surfaces can't drift on how a
 /// discovered repo reads.
 pub(crate) fn row(r: &crate::discovery::RepoActivity, now: u64) -> String {
+    // Headless `codex exec` runs (arc's own synthesis among them) print beside the sessions
+    // count, never inside it — sessions stay sessions.
+    let exec = if r.codex_exec_runs > 0 {
+        format!(" (+{} exec)", r.codex_exec_runs)
+    } else {
+        String::new()
+    };
     format!(
-        "{} · claude {} · codex {} · runs {} · {}",
+        "{} · claude {} · codex {}{exec} · runs {} · {}",
         crate::display_path(&r.repo),
         r.claude_sessions,
         r.codex_sessions,

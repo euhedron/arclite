@@ -181,7 +181,9 @@ fn git_repo_root() -> anyhow::Result<Option<String>> {
                 "the repository root path isn't valid UTF-8 — arclite can't probe it losslessly"
             )
         })?;
-        return Ok(Some(root.trim().to_owned()));
+        // Strip only git's line terminator, never `trim()`: a real root can legitimately carry a
+        // leading or trailing space, and this string is reused as a filesystem/config lookup key.
+        return Ok(Some(root.trim_end_matches(['\n', '\r']).to_owned()));
     }
     // Exit 128 collapses "not a repo" and genuine faults, so the stderr text discriminates —
     // matched by the single-sourced [`crate::git_stderr_says_not_a_repo`] (LC_ALL=C above pins the
