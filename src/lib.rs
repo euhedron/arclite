@@ -177,9 +177,19 @@ pub(crate) fn git_config_get(dir: &std::path::Path, key: &str) -> anyhow::Result
         .output()
         .map_err(|e| anyhow::anyhow!("could not run git to read {key}: {e}"))?;
     match output.status.code() {
-        Some(0) => Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        )),
+        Some(0) => {
+            // The value is reused as a filesystem/config lookup key (doctor resolves
+            // `core.hooksPath` through it), so it must survive faithfully: strip only git's
+            // trailing line terminator — never `trim()`, which would eat a legitimately
+            // space-bounded value — and refuse a non-UTF-8 value rather than lossily decoding
+            // a key that would then address a different location.
+            let raw = String::from_utf8(output.stdout).map_err(|_| {
+                anyhow::anyhow!(
+                    "git config {key} holds a non-UTF-8 value — cannot read it faithfully"
+                )
+            })?;
+            Ok(Some(raw.trim_end_matches(['\n', '\r']).to_owned()))
+        }
         Some(1) => Ok(None),
         _ => anyhow::bail!(
             "git config --get {key} failed: {}",
