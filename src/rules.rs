@@ -118,7 +118,6 @@ fn rules_from_json(path: &Path) -> anyhow::Result<Option<Vec<Rule>>> {
             .unwrap_or_default();
         let body = e
             .get("statement")
-            .or_else(|| e.get("body"))
             .and_then(|v| v.as_str())
             .map(str::trim)
             .unwrap_or_default();
