@@ -1,5 +1,6 @@
 {
   "order": [
+    "build-verb",
     "modular-specification",
     "live-transcript-auditing",
     "dedicated-prompts",
