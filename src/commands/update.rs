@@ -43,11 +43,17 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     // A package manager that owns this binary also owns its upgrades: self-replacing a Homebrew
     // keg forks the file from brew's records (the next `brew upgrade` clobbers it, and `brew list`
     // reports a version the binary no longer is). The check still reports on every channel;
-    // --apply defers to the owning manager with the exact command instead of racing it.
-    let brew = std::env::current_exe()
-        .ok()
-        .is_some_and(|exe| homebrew_managed(&exe));
+    // --apply defers to the owning manager with the exact command instead of racing it — and an
+    // *undetermined* ownership refuses --apply rather than reading as unmanaged: can't-tell must
+    // not green-light overwriting a possibly brew-owned binary.
+    let ownership = homebrew_ownership();
+    let brew = matches!(ownership, Ok(true));
     if args.apply {
+        if let Err(e) = &ownership {
+            anyhow::bail!(
+                "cannot determine whether this arc is Homebrew-managed ({e}) — resolve the executable's ownership before --apply (a self-replaced keg would be clobbered by the next brew upgrade)"
+            );
+        }
         anyhow::ensure!(
             !brew,
             "this arc is Homebrew-managed — update it with `{BREW_UPGRADE}` (a self-replaced keg would be clobbered by the next brew upgrade)"
@@ -76,11 +82,19 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
             version_string(latest),
         )
     };
+    let human = match &ownership {
+        Ok(_) => human,
+        Err(e) => format!(
+            "{human}\nHomebrew ownership undetermined ({e}) — if this install is Homebrew's, update it with `{BREW_UPGRADE}`."
+        ),
+    };
     let payload = serde_json::json!({
         "current": version_string(current),
         "latest": version_string(latest),
         "update_available": available,
-        "homebrew_managed": brew,
+        // Tri-state: true/false where the executable's location resolved, null where ownership
+        // could not be determined (disclosed in the human line above).
+        "homebrew_managed": ownership.as_ref().ok(),
     });
     emit(&payload, &human, global.json)
 }
@@ -89,18 +103,20 @@ pub fn run(args: &UpdateArgs, global: &GlobalArgs) -> anyhow::Result<()> {
 /// not the user's shorthand would.
 const BREW_UPGRADE: &str = "brew upgrade euhedron/arc/arc";
 
-/// Whether `exe` is a Homebrew-owned install: resolved through the `$(brew --prefix)/bin` symlink,
-/// a keg path contains `/Cellar/` (the macOS prefixes) or `/.linuxbrew/` (Linuxbrew). Path-shape
-/// detection, not a `brew` invocation — the binary's own location is the fact, and it holds even
-/// where `brew` isn't on `PATH`.
-fn homebrew_managed(exe: &Path) -> bool {
+/// Whether this arc is a Homebrew-owned install: the running executable resolved through the
+/// `$(brew --prefix)/bin` symlink, a keg path contains `/Cellar/` (the macOS prefixes) or
+/// `/.linuxbrew/` (Linuxbrew). Path-shape detection, not a `brew` invocation — the binary's own
+/// location is the fact, and it holds even where `brew` isn't on `PATH`. `Err` when that location
+/// couldn't be established (`current_exe` or the symlink resolution failed): ownership is then
+/// undetermined, and the caller picks the fail direction — never "unmanaged" by default.
+fn homebrew_ownership() -> std::io::Result<bool> {
     /// The keg-path fragments that betray a Homebrew-owned binary: every macOS prefix keeps kegs
     /// under `Cellar`, and Linuxbrew lives under `.linuxbrew` — stable Homebrew layout, named so
     /// the detection reads as the two layouts it covers.
     const KEG_PATH_FRAGMENTS: [&str; 2] = ["/Cellar/", "/.linuxbrew/"];
-    let canonical = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    let canonical = std::env::current_exe()?.canonicalize()?;
     let path = canonical.to_string_lossy();
-    KEG_PATH_FRAGMENTS.iter().any(|f| path.contains(f))
+    Ok(KEG_PATH_FRAGMENTS.iter().any(|f| path.contains(f)))
 }
 
 /// Download the target release's binary and install it over the running one. With no newer release,

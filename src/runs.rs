@@ -167,9 +167,12 @@ pub struct Registry {
 /// Whether process `pid` is alive, probed with the platform's own tool — resolved by explicit
 /// system path (like [`crate::http::curl_program`]), not a PATH lookup a shadowing binary could
 /// answer: this probe's verdict green-lights marker deletion, so it must come from the platform's
-/// tool. Unix: `kill -0`, judged by exit code alone — no output parsing, so locales can't skew it;
-/// a nonzero exit means no such process *or* a recycled pid now owned by another user, and either
-/// way it is not this user's in-flight arc run. Windows: `System32\tasklist.exe` filtered to the
+/// tool. Unix: `ps -p`, judged by exit code alone — no output parsing, so locales can't skew it —
+/// a pure existence probe with no permission dimension (`kill -0` was rejected here: its one
+/// nonzero exit conflates "no such process" with "exists, but another user's" (EPERM), and the
+/// second must not prune — a run launched under different privileges is still live). Exit 0 can
+/// also mean a recycled pid; kept anyway, per the fail direction below. Windows:
+/// `System32\tasklist.exe` filtered to the
 /// pid in its machine-readable CSV mode (`/FO CSV`), matched on the pid as the quoted second field
 /// split on the `","` delimiter itself — raw commas *inside* the quoted image name don't shift the
 /// columns, and `"` can't appear in a Windows image name to forge one (the no-match notice isn't
@@ -179,14 +182,14 @@ pub struct Registry {
 fn process_alive(pid: u32) -> Option<bool> {
     #[cfg(unix)]
     {
-        // Both canonical homes: macOS and usr-merged Linux ship /bin/kill; older split-/usr
-        // layouts put procps kill in /usr/bin.
-        let kill = crate::http::system_binary(
-            &[PathBuf::from("/bin/kill"), PathBuf::from("/usr/bin/kill")],
-            "kill",
+        // Both canonical homes: macOS and split-/usr Linux ship /bin/ps; usr-merged layouts
+        // resolve it at /usr/bin/ps.
+        let ps = crate::http::system_binary(
+            &[PathBuf::from("/bin/ps"), PathBuf::from("/usr/bin/ps")],
+            "ps",
         );
-        let status = std::process::Command::new(kill)
-            .args(["-0", &pid.to_string()])
+        let status = std::process::Command::new(ps)
+            .args(["-p", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
