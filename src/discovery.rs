@@ -103,6 +103,10 @@ pub struct RepoActivity {
     /// the default view folds gone paths into a count and `--all` shows them. Discovery still
     /// reports them: the history is real even when the directory isn't.
     pub gone: bool,
+    /// Whether this row's path came from the lossy project-dir name decode rather than a session
+    /// head's `cwd` — disclosed per row because the decoded form is also the key the existence
+    /// check and mute matching run against, so a dash-ambiguous decode can misaddress both.
+    pub name_decoded: bool,
 }
 
 impl RepoActivity {
@@ -227,6 +231,7 @@ fn observe(
     counter: Counter,
     count: usize,
     activity: Option<u64>,
+    name_decoded: bool,
 ) {
     let entry = map.entry(repo.clone()).or_insert_with(|| RepoActivity {
         repo,
@@ -237,7 +242,9 @@ fn observe(
         last_activity: None,
         last_source: None,
         gone: false,
+        name_decoded: false,
     });
+    entry.name_decoded |= name_decoded;
     match counter {
         Counter::ClaudeSessions => entry.claude_sessions += count,
         Counter::CodexSessions => entry.codex_sessions += count,
@@ -378,20 +385,35 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         // `newest` can be absent even with sessions counted — a file raced away between listing
         // and stat, or an unreadable mtime — so the sessions still map (activity unknown, the
         // repo name from the decode fallback) rather than panicking on an assumed invariant.
-        let (activity, repo) = match newest {
-            Some((mtime, path)) => (
-                Some(mtime),
-                head_meta(&path).map(|(cwd, _)| cwd).unwrap_or_else(|| {
+        let (activity, repo, name_decoded) = match newest {
+            Some((mtime, path)) => match head_meta(&path).map(|(cwd, _)| cwd) {
+                Some(cwd) => (Some(mtime), cwd, false),
+                None => {
+                    decoded += 1;
+                    (
+                        Some(mtime),
+                        decode_project_dir(&entry.file_name().to_string_lossy()),
+                        true,
+                    )
+                }
+            },
+            None => (
+                None,
+                {
                     decoded += 1;
                     decode_project_dir(&entry.file_name().to_string_lossy())
-                }),
+                },
+                true,
             ),
-            None => (None, {
-                decoded += 1;
-                decode_project_dir(&entry.file_name().to_string_lossy())
-            }),
         };
-        observe(map, repo, Counter::ClaudeSessions, sessions, activity);
+        observe(
+            map,
+            repo,
+            Counter::ClaudeSessions,
+            sessions,
+            activity,
+            name_decoded,
+        );
     }
     if decoded > 0 {
         notes.push(format!(
@@ -491,7 +513,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                             Counter::CodexSessions
                         }
                     };
-                    observe(map, repo, counter, 1, mtime_secs(&p));
+                    observe(map, repo, counter, 1, mtime_secs(&p), false);
                 }
                 None => unresolved += 1,
             }
@@ -542,7 +564,7 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
                     continue;
                 };
                 let ts = r.get("ts").and_then(serde_json::Value::as_u64);
-                observe(map, repo.to_owned(), Counter::LedgerRuns, 1, ts);
+                observe(map, repo.to_owned(), Counter::LedgerRuns, 1, ts, false);
             }
         }
         Err(e) => notes.push(format!("ledger unreadable: {e:#}")),

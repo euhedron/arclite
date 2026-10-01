@@ -110,13 +110,16 @@ const BREW_UPGRADE: &str = "brew upgrade euhedron/arc/arc";
 /// couldn't be established (`current_exe` or the symlink resolution failed): ownership is then
 /// undetermined, and the caller picks the fail direction — never "unmanaged" by default.
 fn homebrew_ownership() -> std::io::Result<bool> {
-    /// The keg-path fragments that betray a Homebrew-owned binary: every macOS prefix keeps kegs
+    /// The path components that betray a Homebrew-owned binary: every macOS prefix keeps kegs
     /// under `Cellar`, and Linuxbrew lives under `.linuxbrew` — stable Homebrew layout, named so
     /// the detection reads as the two layouts it covers.
-    const KEG_PATH_FRAGMENTS: [&str; 2] = ["/Cellar/", "/.linuxbrew/"];
+    const KEG_PATH_COMPONENTS: [&str; 2] = ["Cellar", ".linuxbrew"];
     let canonical = std::env::current_exe()?.canonicalize()?;
-    let path = canonical.to_string_lossy();
-    Ok(KEG_PATH_FRAGMENTS.iter().any(|f| path.contains(f)))
+    // Compared component-wise on the canonical path itself — no lossy string conversion, which
+    // could mangle a non-UTF-8 path into a misclassification.
+    Ok(canonical.components().any(|c| {
+        matches!(c, std::path::Component::Normal(n) if KEG_PATH_COMPONENTS.iter().any(|k| n == *k))
+    }))
 }
 
 /// Download the target release's binary and install it over the running one. With no newer release,
