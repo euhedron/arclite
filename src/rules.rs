@@ -127,7 +127,19 @@ fn rules_from_json(path: &Path) -> anyhow::Result<Option<Vec<Rule>>> {
                 path.display()
             );
         }
-        if e.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+        // The pack's own switch: absent means enabled; present, it must be a real boolean — a
+        // malformed value (a string "false", a number) errors rather than silently reading as
+        // enabled.
+        let enabled = match e.get("enabled") {
+            None => true,
+            Some(v) => v.as_bool().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rule pack {} entry {i}: `enabled` must be a boolean",
+                    path.display()
+                )
+            })?,
+        };
+        if !enabled {
             continue;
         }
         rules.push(Rule {

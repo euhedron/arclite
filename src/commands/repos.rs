@@ -15,8 +15,15 @@ pub(crate) fn row(r: &crate::discovery::RepoActivity, now: u64) -> String {
     } else {
         String::new()
     };
+    // A path that came from the lossy name decode says so on its own row — the decoded form is
+    // also what existence and mute matching ran against.
+    let decoded = if r.name_decoded {
+        " (name-decoded)"
+    } else {
+        ""
+    };
     format!(
-        "{} · claude {} · codex {}{exec} · runs {} · {}",
+        "{}{decoded} · claude {} · codex {}{exec} · runs {} · {}",
         crate::display_path(&r.repo),
         r.claude_sessions,
         r.codex_sessions,

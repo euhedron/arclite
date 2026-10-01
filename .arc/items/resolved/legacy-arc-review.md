@@ -1,0 +1,4 @@
+Needs one input only the operator can supply: the legacy arc codebase's location — arclite's predecessor is not on this machine and not under the reachable GitHub accounts, and nothing else depends on it. Once located, two deliverables: (1) sweep it for anything still valuable not yet carried forward, adopted on merit only — the load-bearing lessons already crossed at arclite's founding — producing a triage where each surviving idea becomes an item or an inbox note or is explicitly declined; (2) the formal retirement of the legacy repo that the README's reclaim-the-arc-name residue asks for.
+
+---
+Resolution (2026-10-01): dropped by operator ruling — the legacy codebase is permanently unreachable ("no way we are getting access"), so the sweep cannot happen; its load-bearing lessons were already carried at arclite's founding, and the README's reclaim-the-arc-name residue drops the retirement clause with this item.

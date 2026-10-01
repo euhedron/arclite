@@ -32,7 +32,6 @@
     "release-verification",
     "direct-api-backend",
     "github-app",
-    "legacy-arc-review",
     "rulespace-registry"
   ]
 }
