@@ -107,11 +107,13 @@ pub struct RepoActivity {
 
 impl RepoActivity {
     /// The recency cell: [`ACTIVE_LABEL`] inside the window, else the shared coarse age, else `?`.
+    /// The window itself prints with the label (`≤{ACTIVE_WINDOW_SECS}s`) so the threshold behind
+    /// the classification is disclosed in the output, never a silent constant.
     pub fn recency(&self, now: u64) -> String {
         match self.last_activity {
             Some(ts) if now.saturating_sub(ts) <= ACTIVE_WINDOW_SECS => {
                 let source = self.last_source.map_or("?", Source::label);
-                format!("{ACTIVE_LABEL} ({source})")
+                format!("{ACTIVE_LABEL} ≤{ACTIVE_WINDOW_SECS}s ({source})")
             }
             Some(ts) => crate::commands::log::age(now.saturating_sub(ts)),
             None => "?".to_owned(),
@@ -497,8 +499,10 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     }
     if unresolved > 0 {
         notes.push(format!(
-            "codex sessions: {unresolved} session file(s) without a readable repo in the head — \
-             counted nowhere rather than guessed"
+            "codex sessions: {unresolved} session file(s) without a readable repo in the head \
+             (scan bounded to the first {HEAD_SCAN_LINES} line(s), {} KiB) — counted nowhere \
+             rather than guessed",
+            HEAD_SCAN_MAX_BYTES / 1024
         ));
     }
     if unlabeled > 0 {
