@@ -180,6 +180,9 @@ pub struct SynthOptions<'a> {
     /// Codex reasoning effort, resolved + surfaced because it shapes cost; `None` for backends that
     /// don't use it (so it's never a hidden billed default).
     pub reasoning_effort: Option<&'a str>,
+    /// Whether the backend has the knob at all — `None` + applicable means the backend CLI's own
+    /// default is in effect, which the report states instead of omitting the line.
+    pub reasoning_applicable: bool,
     /// Whether `--ranked` ordered the results (it shapes the prompt, so it's reported + recorded).
     pub ranked: bool,
     /// Whether `--kinds` classified the results (likewise prompt/schema-shaping, so reported + recorded).
@@ -1505,6 +1508,9 @@ struct RunReport<'a> {
     max_budget_usd: Option<f64>,
     /// Codex reasoning effort in effect, surfaced because it shapes cost; `None` for backends without it.
     reasoning_effort: Option<&'a str>,
+    /// Whether the backend has the knob — distinguishes "no such knob" from "backend default in
+    /// effect", so the second prints instead of silently omitting a cost-shaping delegation.
+    reasoning_applicable: bool,
     /// Whether the results were ordered by significance (`--ranked`).
     ranked: bool,
     /// Whether each result was labeled with a `kind` (`--kinds`).
@@ -1535,10 +1541,13 @@ impl RunReport<'_> {
         // The cap's worst-case exposure is over the runs *attempted* (each can spend up to it before
         // failing), so size it by the requested count, not the surviving one.
         let budget = crate::log::budget_display(self.max_budget_usd, self.runs_requested);
-        // Reasoning effort is cost-shaping, so surface it next to the backend that uses it.
-        let reasoning = match self.reasoning_effort {
-            Some(effort) => format!("  reasoning={effort}"),
-            None => String::new(),
+        // Reasoning effort is cost-shaping, so surface it next to the backend that uses it — and
+        // when the backend has the knob but arc set nothing, say the delegation out loud rather
+        // than omitting the line.
+        let reasoning = match (self.reasoning_effort, self.reasoning_applicable) {
+            (Some(effort), _) => format!("  reasoning={effort}"),
+            (None, true) => "  reasoning=backend default (not set by arc)".to_owned(),
+            (None, false) => String::new(),
         };
         // A model id the response never confirmed is labeled, not presented as the ran identity.
         // (A dry run carries no source — the [dry run] banner already says nothing ran.)
@@ -1750,6 +1759,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         boundary,
         max_budget_usd: opts.max_budget_usd,
         reasoning_effort: opts.reasoning_effort,
+        reasoning_applicable: opts.reasoning_applicable,
         ranked: opts.ranked,
         kinds: opts.kinds,
         free_kinds: opts.free_kinds,
