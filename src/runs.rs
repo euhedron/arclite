@@ -167,11 +167,13 @@ pub struct Registry {
 /// Whether process `pid` is alive, probed with the platform's own tool — resolved by explicit
 /// system path (like [`crate::http::curl_program`]), not a PATH lookup a shadowing binary could
 /// answer: this probe's verdict green-lights marker deletion, so it must come from the platform's
-/// tool. Unix: `ps -p`, judged by exit code alone — no output parsing, so locales can't skew it —
-/// a pure existence probe with no permission dimension (`kill -0` was rejected here: its one
-/// nonzero exit conflates "no such process" with "exists, but another user's" (EPERM), and the
-/// second must not prune — a run launched under different privileges is still live). Exit 0 can
-/// also mean a recycled pid; kept anyway, per the fail direction below. Windows:
+/// tool. Unix: `ps -p <pid> -o pid=` — alive when the listing prints the pid back (bare digits,
+/// locale-stable), dead only on ps's documented no-match exit (1) with an empty listing, and any
+/// other failure inconclusive — a pure existence probe with no permission dimension (`kill -0`
+/// was rejected here: its one nonzero exit conflates "no such process" with "exists, but another
+/// user's" (EPERM), and the second must not prune — a run launched under different privileges is
+/// still live). A listed pid can also be a recycled one; kept anyway, per the fail direction
+/// below. Windows:
 /// `System32\tasklist.exe` filtered to the
 /// pid in its machine-readable CSV mode (`/FO CSV`), matched on the pid as the quoted second field
 /// split on the `","` delimiter itself — raw commas *inside* the quoted image name don't shift the
@@ -188,13 +190,26 @@ fn process_alive(pid: u32) -> Option<bool> {
             &[PathBuf::from("/bin/ps"), PathBuf::from("/usr/bin/ps")],
             "ps",
         );
-        let status = std::process::Command::new(ps)
-            .args(["-p", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
+        let pid_text = pid.to_string();
+        let output = std::process::Command::new(ps)
+            .args(["-p", &pid_text, "-o", "pid="])
             .stderr(std::process::Stdio::null())
-            .status()
+            .output()
             .ok()?;
-        Some(status.success())
+        // Alive is proven by the listing itself: `-o pid=` prints the bare pid when the process
+        // exists (digits, locale-stable). Dead is proven only by ps's documented no-match exit
+        // (1) *with* an empty listing; any other nonzero exit is an operational ps failure —
+        // inconclusive, never read as dead.
+        if String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .any(|t| t == pid_text)
+        {
+            return Some(true);
+        }
+        match output.status.code() {
+            Some(1) => Some(false),
+            _ => None,
+        }
     }
     #[cfg(windows)]
     {
