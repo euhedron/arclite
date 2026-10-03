@@ -788,6 +788,13 @@ pub trait Backend {
         None
     }
 
+    /// Whether this backend has a reasoning-effort knob at all — so the report can tell "no such
+    /// knob" apart from "the knob exists and the backend CLI's own default is in effect": the
+    /// second is a cost-shaping delegation that must be surfaced, never silently absent.
+    fn reasoning_effort_applicable(&self) -> bool {
+        false
+    }
+
     /// Whether this backend reports an authoritative dollar cost on its runs. Default: it does. A
     /// tokens-only backend (codex) overrides to `false`, so consumers can tell a record that lacks
     /// cost *by design* from one that lost a cost it should have carried.
@@ -1394,11 +1401,16 @@ impl Backend for CodexBackend {
     }
 
     /// codex bills by reasoning effort, so the effective value (configured, else the built-in
-    /// default) is surfaced and applied — never a hidden cost-shaping knob.
+    /// default) is surfaced and applied — never a hidden cost-shaping knob. `None` passes no
+    /// flag — the codex CLI's own default applies — and the report says so explicitly.
     fn reasoning_effort(&self, configured: Option<&str>) -> Option<String> {
         configured
             .or(DEFAULT_CODEX_REASONING_EFFORT)
             .map(str::to_owned)
+    }
+
+    fn reasoning_effort_applicable(&self) -> bool {
+        true
     }
 
     /// codex reports token usage but no dollar cost — its records are tokens-only by design.

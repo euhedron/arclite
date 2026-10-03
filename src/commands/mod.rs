@@ -354,6 +354,7 @@ pub fn run_synthesis(
             runs: args.runs,
             max_budget_usd,
             reasoning_effort: reasoning_effort.as_deref(),
+            reasoning_applicable: backend.reasoning_effort_applicable(),
             ranked: args.ranked,
             kinds: args.kinds,
             free_kinds: args.free_kinds,
