@@ -105,41 +105,43 @@ fn rules_from_json(path: &Path) -> anyhow::Result<Option<Vec<Rule>>> {
     if path.extension().and_then(|e| e.to_str()) != Some("json") {
         return Ok(None);
     }
+    /// One rule-pack entry — the declared `{id, statement, enabled?}` contract, strict: an
+    /// unknown or misspelled behavior-shaping field (e.g. `enable` for `enabled`) is a hard
+    /// error, never a silently-ignored key, and a non-boolean `enabled` fails on the type. The
+    /// shape is owned here and tightly coupled to this reader, so strictness is right (the
+    /// version-skew tolerance that settings' shared store needs does not apply to a pack arc
+    /// only ever consumes).
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Entry {
+        id: String,
+        statement: String,
+        #[serde(default = "enabled_default")]
+        enabled: bool,
+    }
+    fn enabled_default() -> bool {
+        true
+    }
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("cannot read rule pack {}", path.display()))?;
-    let entries: Vec<serde_json::Value> = serde_json::from_str(&text)
-        .with_context(|| format!("rule pack {} is not a JSON list", path.display()))?;
+    let entries: Vec<Entry> = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "rule pack {} is not a list of {{id, statement, enabled?}} objects",
+            path.display()
+        )
+    })?;
     let mut rules = Vec::new();
-    for (i, e) in entries.iter().enumerate() {
-        let id = e
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .unwrap_or_default();
-        let body = e
-            .get("statement")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .unwrap_or_default();
+    for (i, e) in entries.into_iter().enumerate() {
+        let id = e.id.trim();
+        let body = e.statement.trim();
         if id.is_empty() || body.is_empty() {
             anyhow::bail!(
                 "rule pack {} entry {i} needs non-empty `id` and `statement`",
                 path.display()
             );
         }
-        // The pack's own switch: absent means enabled; present, it must be a real boolean — a
-        // malformed value (a string "false", a number) errors rather than silently reading as
-        // enabled.
-        let enabled = match e.get("enabled") {
-            None => true,
-            Some(v) => v.as_bool().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "rule pack {} entry {i}: `enabled` must be a boolean",
-                    path.display()
-                )
-            })?,
-        };
-        if !enabled {
+        // The pack's own switch, dropped at its source; arc's `disabled_rules` still applies on top.
+        if !e.enabled {
             continue;
         }
         rules.push(Rule {
