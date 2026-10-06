@@ -340,6 +340,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
     };
     let mut decoded = 0usize;
     let mut unreadable = 0usize;
+    let mut unreadable_mtime = 0usize;
     let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut lost_files = 0usize;
@@ -373,10 +374,15 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
                 continue;
             }
             sessions += 1;
-            if let Some(m) = mtime_secs(&p)
-                && newest.as_ref().is_none_or(|(n, _)| m > *n)
-            {
-                newest = Some((m, p));
+            // The file exists (it came from the listing), so a `None` mtime is a read failure to
+            // disclose, not a benign absence — count it rather than letting it look like no activity.
+            match mtime_secs(&p) {
+                Some(m) => {
+                    if newest.as_ref().is_none_or(|(n, _)| m > *n) {
+                        newest = Some((m, p));
+                    }
+                }
+                None => unreadable_mtime += 1,
             }
         }
         if sessions == 0 {
@@ -427,6 +433,12 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         unreadable,
         "project dir(s) unreadable",
     );
+    if unreadable_mtime > 0 {
+        notes.push(format!(
+            "claude sessions: {unreadable_mtime} session file(s) counted but with an unreadable \
+             mtime — their activity is unknown, not absent"
+        ));
+    }
     skipped_note(
         notes,
         "claude sessions",
@@ -461,6 +473,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     let mut unresolved = 0usize;
     let mut unlabeled = 0usize;
     let mut unreadable = 0usize;
+    let mut unreadable_mtime = 0usize;
     let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut stack = vec![dir];
@@ -513,7 +526,11 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                             Counter::CodexSessions
                         }
                     };
-                    observe(map, repo, counter, 1, mtime_secs(&p), false);
+                    let activity = mtime_secs(&p);
+                    if activity.is_none() {
+                        unreadable_mtime += 1;
+                    }
+                    observe(map, repo, counter, 1, activity, false);
                 }
                 None => unresolved += 1,
             }
@@ -530,6 +547,12 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     if unlabeled > 0 {
         notes.push(format!(
             "codex sessions: {unlabeled} file(s) predate the source label — counted as sessions"
+        ));
+    }
+    if unreadable_mtime > 0 {
+        notes.push(format!(
+            "codex sessions: {unreadable_mtime} rollout(s) counted but with an unreadable mtime \
+             — their activity is unknown, not absent"
         ));
     }
     skipped_note(
@@ -571,7 +594,9 @@ fn ledger(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>) {
     }
 }
 
-/// A file's mtime as unix seconds, `None` where the platform or filesystem won't say.
+/// A file's mtime as unix seconds, `None` where the platform or filesystem won't say. For a file
+/// known to exist (one taken from a directory listing), a `None` is a read failure the caller
+/// discloses as activity-unknown, never silently folded into activity-absent.
 fn mtime_secs(path: &Path) -> Option<u64> {
     std::fs::metadata(path)
         .and_then(|m| m.modified())

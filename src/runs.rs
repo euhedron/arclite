@@ -200,14 +200,15 @@ fn process_alive(pid: u32) -> Option<bool> {
         // exists (digits, locale-stable). Dead is proven only by ps's documented no-match exit
         // (1) *with* an empty listing; any other nonzero exit is an operational ps failure —
         // inconclusive, never read as dead.
-        if String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .any(|t| t == pid_text)
-        {
+        let listing = String::from_utf8_lossy(&output.stdout);
+        if listing.split_whitespace().any(|t| t == pid_text) {
             return Some(true);
         }
-        match output.status.code() {
-            Some(1) => Some(false),
+        // Dead is proven only by ps's *documented* no-match shape: exit 1 with an empty listing.
+        // Exit 1 with unexpected nonempty output (not the pid) is malformed, not proof of death —
+        // inconclusive, so the marker is kept rather than deleted on a reading we don't understand.
+        match (output.status.code(), listing.trim().is_empty()) {
+            (Some(1), true) => Some(false),
             _ => None,
         }
     }
