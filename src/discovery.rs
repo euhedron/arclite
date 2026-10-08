@@ -77,6 +77,35 @@ fn head_scan_bounds() -> (usize, u64) {
     *BOUNDS
 }
 
+/// Warnings for a head-scan knob set to an unreadable value: an env var present but unparseable
+/// means the caller *tried* to shape completeness and was ignored — disclosed, never a silent
+/// fall-through to the default (the default still applies, per [`head_scan_bounds`]).
+fn head_scan_env_warnings() -> Vec<String> {
+    let mut w = Vec::new();
+    let present_but_unparsed = |key: &str| {
+        std::env::var_os(key).is_some_and(|v| {
+            // Non-Unicode (to_str == None) or non-numeric both count as unreadable; an empty
+            // value is treated as unset, not an error.
+            match v.to_str().map(str::trim) {
+                None => true,
+                Some("") => false,
+                Some(s) => s.parse::<u64>().is_err(),
+            }
+        })
+    };
+    for key in [
+        "ARC_DISCOVERY_HEAD_SCAN_LINES",
+        "ARC_DISCOVERY_HEAD_SCAN_BYTES",
+    ] {
+        if present_but_unparsed(key) {
+            w.push(format!(
+                "{key} is set to an unreadable value — ignored, the built-in default applies"
+            ));
+        }
+    }
+    w
+}
+
 /// The external session stores' observed layout (2026-08-23; no layout contract — see the module
 /// doc), named here so a store's move or rename is one edit rather than a literal hunt across the
 /// readers, and so the shared session-file extension has a single home. Each store's own reader
@@ -172,7 +201,7 @@ pub struct Discovery {
 /// gone paths (an explicit selection bypasses a default lens, as everywhere).
 pub fn discover(include_all: bool) -> Discovery {
     let mut map: BTreeMap<String, RepoActivity> = BTreeMap::new();
-    let mut notes = Vec::new();
+    let mut notes = head_scan_env_warnings();
     claude_store(&mut map, &mut notes);
     codex_store(&mut map, &mut notes);
     ledger(&mut map, &mut notes);
