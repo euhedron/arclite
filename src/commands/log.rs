@@ -312,19 +312,14 @@ pub(crate) fn resolve_id(prefix: &str) -> anyhow::Result<String> {
         [] => Ok(prefix.to_owned()),
         [one] => Ok(one.clone()),
         _ => {
-            // Cap the candidate listing so a very short prefix doesn't dump the whole store.
-            const AMBIGUOUS_LISTED: usize = 8;
+            // Complete output: every matching candidate is listed, never a silent cap — a short
+            // prefix that matches many is the caller's own doing, and seeing them all is how they
+            // disambiguate.
             matches.sort();
-            let extra = matches.len().saturating_sub(AMBIGUOUS_LISTED);
-            matches.truncate(AMBIGUOUS_LISTED);
             bail!(
-                "run id prefix `{prefix}` is ambiguous: {}{}",
-                matches.join(", "),
-                if extra > 0 {
-                    format!(", … and {extra} more")
-                } else {
-                    String::new()
-                }
+                "run id prefix `{prefix}` is ambiguous ({} matches): {}",
+                matches.len(),
+                matches.join(", ")
             )
         }
     }
