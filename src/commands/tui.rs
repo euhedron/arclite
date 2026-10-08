@@ -2534,13 +2534,16 @@ fn render_status(
         Ok(tail) => tail.rows.len() as u16 + LINE + BORDER,
         Err(_) => LINE + BORDER,
     };
-    let device_h = if device.repos.is_empty() {
+    // Budget the degradation notes too, and render the block whenever there is anything to show —
+    // notes included — so an absent/unreadable-store warning is never clipped or hidden, not even
+    // when no repositories were discovered (both stores absent is exactly when the notes matter).
+    let device_shown = device.repos.len().min(DEVICE_ROWS)
+        + usize::from(device.repos.len() > DEVICE_ROWS)
+        + device.notes.len();
+    let device_h = if device_shown == 0 {
         0
     } else {
-        device.repos.len().min(DEVICE_ROWS) as u16
-            + u16::from(device.repos.len() > DEVICE_ROWS)
-            + LINE
-            + BORDER
+        device_shown as u16 + LINE + BORDER
     };
     let [header, active_area, recent_area, device_area] = Layout::vertical([
         Constraint::Length(LINE),
@@ -2632,7 +2635,7 @@ fn render_status(
     // The device map's seat in the cockpit: the most recently active repos, rows shared with
     // `arc repos` (one formatter, no drift). Counts are the launch-time read; ages render fresh
     // against this tick's `now`.
-    if !device.repos.is_empty() {
+    if device_h > 0 {
         let mut dev_lines: Vec<Line> = device
             .repos
             .iter()
