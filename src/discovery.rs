@@ -42,11 +42,40 @@ pub const ACTIVE_LABEL: &str = "active now";
 /// writes the session meta as the rollout's first record by design (`codex-rs/rollout`, verified
 /// 2026-09-25), and Claude Code's store carries `cwd` within the first records (observed); the
 /// allowance covers format variants, and past it there is no metadata left to find — scanning
-/// deeper would only cost.
-const HEAD_SCAN_LINES: usize = 5;
+/// deeper would only cost. The default, overridable per [`head_scan_bounds`].
+const DEFAULT_HEAD_SCAN_LINES: usize = 5;
 
 /// A head line longer than this is not metadata; the scan stops rather than buffering content.
-const HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
+/// The default, overridable per [`head_scan_bounds`].
+const DEFAULT_HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
+
+/// Env knobs letting the caller widen or disable the head-scan bounds when the defaults would omit
+/// a repo whose metadata sits deeper: `ARC_DISCOVERY_HEAD_SCAN_LINES` and
+/// `ARC_DISCOVERY_HEAD_SCAN_BYTES`, each `0` meaning unbounded (scan the whole file). Unset uses
+/// the defaults above. Read once per process.
+fn head_scan_bounds() -> (usize, u64) {
+    use std::sync::LazyLock;
+    static BOUNDS: LazyLock<(usize, u64)> = LazyLock::new(|| {
+        let lines = match std::env::var("ARC_DISCOVERY_HEAD_SCAN_LINES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+        {
+            Some(0) => usize::MAX,
+            Some(n) => n,
+            None => DEFAULT_HEAD_SCAN_LINES,
+        };
+        let bytes = match std::env::var("ARC_DISCOVERY_HEAD_SCAN_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+        {
+            Some(0) => u64::MAX,
+            Some(n) => n,
+            None => DEFAULT_HEAD_SCAN_MAX_BYTES,
+        };
+        (lines, bytes)
+    });
+    *BOUNDS
+}
 
 /// The external session stores' observed layout (2026-08-23; no layout contract — see the module
 /// doc), named here so a store's move or rename is one edit rather than a literal hunt across the
@@ -304,10 +333,11 @@ fn skipped_note(notes: &mut Vec<String>, label: &str, n: usize, what: &str) {
 /// Bounded by [`HEAD_SCAN_LINES`].
 fn head_meta(path: &Path) -> Option<(String, Option<serde_json::Value>)> {
     use std::io::Read;
+    let (max_lines, max_bytes) = head_scan_bounds();
     let file = std::fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file.take(HEAD_SCAN_MAX_BYTES));
+    let mut reader = std::io::BufReader::new(file.take(max_bytes));
     let mut line = String::new();
-    for _ in 0..HEAD_SCAN_LINES {
+    for _ in 0..max_lines {
         line.clear();
         if reader.read_line(&mut line).ok()? == 0 {
             return None;
@@ -537,11 +567,19 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         }
     }
     if unresolved > 0 {
+        let (max_lines, max_bytes) = head_scan_bounds();
+        let bound = if max_lines == usize::MAX {
+            "scan unbounded".to_owned()
+        } else {
+            format!(
+                "scan bounded to the first {max_lines} line(s), {} KiB",
+                max_bytes / 1024
+            )
+        };
         notes.push(format!(
             "codex sessions: {unresolved} session file(s) without a readable repo in the head \
-             (scan bounded to the first {HEAD_SCAN_LINES} line(s), {} KiB) — counted nowhere \
-             rather than guessed",
-            HEAD_SCAN_MAX_BYTES / 1024
+             ({bound}; widen with ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES) — counted nowhere rather \
+             than guessed"
         ));
     }
     if unlabeled > 0 {
