@@ -101,8 +101,11 @@ pub struct Estimate {
     pub approx_tokens: usize,
 }
 
-/// Rough chars-per-token ratio for the zero-cost prompt estimate. Deliberately approximate and never
-/// refreshed: it is only a pre-spend gauge — the real, billed token counts come back from the CLI.
+/// Rough chars-per-token ratio for the zero-cost prompt estimate. Display-only, which is why it
+/// needs no refresh cadence: nothing reads it but a cosmetic pre-spend gauge — no spend, cap, or
+/// gate decision depends on it, so drift between this 4:1 approximation and any model's real
+/// tokenizer changes only an advisory number, never an outcome (the real, billed token counts
+/// come back from the CLI). It is deliberately *not* a safe upper bound for enforcement.
 const CHARS_PER_TOKEN: usize = 4;
 
 #[must_use]
