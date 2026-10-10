@@ -1201,9 +1201,8 @@ fn synthesize_claude(
             _ => {}
         },
     );
-    // Launch failures bail (nothing ran, nothing spent); any failure after the child was live —
-    // a broken stream read, a failed wait — is a metered run whose spend is unknown, carried as an
-    // errored synthesis so it reaches the log (account-for-consumed-cost-on-failure).
+    // Failures before the child ran bail; failures after it ran become errored syntheses — the
+    // spend-accounting contract on [`Synthesis::error`].
     let Driven {
         status,
         stderr,
@@ -1237,9 +1236,6 @@ fn synthesize_claude(
     };
     // A failed run usually still emits a `result` error event (e.g. a tripped --max-budget-usd cap:
     // is_error + subtype) — parse that for the real failure rather than reporting a bare exit code.
-    // The child *ran* on every path below, so tokens may have burned even where no payload came back:
-    // each failure is carried as an errored synthesis (spend unknown → zeros, disclosed by the error
-    // text) rather than bailed, which would drop the run from the log and its cost from accounting.
     let result_line = match (result_line, status.success()) {
         (Some(line), _) => line,
         (None, false) => {
@@ -1669,10 +1665,8 @@ fn synthesize_codex(
             ));
         }
     };
-    // Launch failures bail (nothing ran, nothing spent). Any failure after the child was live — a
-    // broken stream read, a failed wait — is a metered run: with captured usage it's recorded as
-    // that spend; without, as spend-unknown zeros. Either way an errored run reaches the log
-    // (account-for-consumed-cost-on-failure), never a bail that loses it.
+    // Failures before the child ran bail; failures after it ran become errored syntheses with
+    // whatever usage was captured — the spend-accounting contract on [`Synthesis::error`].
     let Driven {
         status,
         stderr,
@@ -1695,10 +1689,8 @@ fn synthesize_codex(
             ));
         }
     };
-    // A run that failed after spending still gets its cost recorded: carry the failure as a value with
-    // the captured usage (the claude contract — [`Synthesis::error`]), so the caller logs an *errored*
-    // run instead of losing the spend on a bail. No captured usage → spend UNKNOWN, marked as such —
-    // never a default-zeros record that would register as a measured zero-token run.
+    // No captured usage → spend UNKNOWN, marked as such — never a default-zeros record that would
+    // register as a measured zero-token run.
     let error = if let Some(msg) = failure {
         Some(format!("codex reported an error: {msg}"))
     } else if !status.success() {
