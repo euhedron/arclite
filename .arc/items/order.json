@@ -1,6 +1,7 @@
 {
   "order": [
     "build-verb",
+    "build-management",
     "modular-specification",
     "live-transcript-auditing",
     "dedicated-prompts",
