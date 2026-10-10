@@ -149,7 +149,27 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
         },
         warned: false,
     };
-    active.try_write().ok()?;
+    // The name is claimed atomically (create-if-absent), never by overwrite: a file already at
+    // this name is a stale corpse from a reused pid — provably not a live run, since this process
+    // holds the pid now — so it is removed and the claim retried once. `try_write`'s overwrite is
+    // the update path for a marker this run already owns, not the claim.
+    let json = serde_json::to_string(&active.run).expect("an ActiveRun serializes");
+    let claim = |path: &std::path::Path| -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        f.write_all(json.as_bytes())
+    };
+    match claim(&active.marker) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&active.marker).ok()?;
+            claim(&active.marker).ok()?;
+        }
+        Err(_) => return None,
+    }
     Some(active)
 }
 
