@@ -53,7 +53,7 @@ const DEFAULT_HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 /// a repo whose metadata sits deeper: `ARC_DISCOVERY_HEAD_SCAN_LINES` and
 /// `ARC_DISCOVERY_HEAD_SCAN_BYTES`, each `0` meaning unbounded (scan the whole file). Unset uses
 /// the defaults above. Read once per process.
-fn head_scan_bounds() -> (usize, u64) {
+pub(crate) fn head_scan_bounds() -> (usize, u64) {
     use std::sync::LazyLock;
     static BOUNDS: LazyLock<(usize, u64)> = LazyLock::new(|| {
         let lines = match std::env::var("ARC_DISCOVERY_HEAD_SCAN_LINES")

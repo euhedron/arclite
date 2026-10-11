@@ -14,6 +14,20 @@ pub(crate) struct Report {
     logs: Logs,
     items: ItemsHealth,
     gate: Gate,
+    tunables: Tunables,
+}
+
+/// The effective values of arc's env-overridable operational caps — surfaced here so a configured
+/// cap, or an override that was ignored because it didn't parse (the effective value then shows the
+/// default), is visible rather than a silent dial. Each is resolved by its owning module's resolver,
+/// so this report can't drift from what a run actually applies.
+#[derive(Serialize)]
+struct Tunables {
+    http_retries: String,
+    max_runs: usize,
+    finding_slug_max: usize,
+    head_scan_lines: usize,
+    head_scan_bytes: u64,
 }
 
 /// The cwd repo's agenda and inbox at a glance — counts, order integrity, pending notes — so
@@ -400,6 +414,16 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
         },
         items: items_health(),
         gate: gate_status(),
+        tunables: {
+            let (head_scan_lines, head_scan_bytes) = crate::discovery::head_scan_bounds();
+            Tunables {
+                http_retries: crate::http::transient_retries(),
+                max_runs: crate::synth::max_runs(),
+                finding_slug_max: crate::commands::promote::slug_max_chars(),
+                head_scan_lines,
+                head_scan_bytes,
+            }
+        },
     })
 }
 
@@ -589,5 +613,18 @@ pub(crate) fn human(report: &Report) -> String {
     };
     lines.push(row("items", &items_line));
     lines.push(row("gate", &gate_line));
+    let t = &report.tunables;
+    lines.push(row(
+        "tunables",
+        &format!(
+            "http-retries {} · max-runs {} · finding-slug-max {} · head-scan {} lines/{} KiB \
+             (ARC_HTTP_RETRIES, ARC_MAX_RUNS, ARC_FINDING_SLUG_MAX, ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES)",
+            t.http_retries,
+            t.max_runs,
+            t.finding_slug_max,
+            t.head_scan_lines,
+            t.head_scan_bytes / 1024
+        ),
+    ));
     lines.join("\n")
 }
