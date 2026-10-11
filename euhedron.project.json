@@ -10,7 +10,7 @@
   "stack": ["Rust"],
   "use_cases": ["code auditing"],
   "features": [
-    "Audit any repository against curated, composable rules — on demand or as a pre-push gate.",
+    "Audit any repository against curated, composable rules, on demand or as a pre-push gate.",
     "Catch cross-repo drift and anti-patterns that tests and linters can't express.",
     "Gate pushes on AI-judged findings with transparent, per-run token cost."
   ],
