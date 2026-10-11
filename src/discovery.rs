@@ -372,32 +372,38 @@ fn skipped_note(notes: &mut Vec<String>, label: &str, n: usize, what: &str) {
 /// Read a session file's head metadata: the `cwd`, plus the `source` kind where the same record
 /// carries one (codex's session meta does; Claude Code's store and old codex formats don't).
 /// Bounded by [`HEAD_SCAN_LINES`].
-fn head_meta(path: &Path) -> Option<(String, Option<serde_json::Value>)> {
+/// Tri-state so the caller can tell an *unreadable* head (a real degradation to disclose) from a
+/// *readable file that simply has no `cwd`* (an old format, genuinely unattributable): `Err` is
+/// the open/read failure, `Ok(None)` the readable-but-no-metadata case, `Ok(Some)` a hit.
+fn head_meta(path: &Path) -> std::io::Result<Option<(String, Option<serde_json::Value>)>> {
     use std::io::Read;
     let (max_lines, max_bytes) = head_scan_bounds();
-    let file = std::fs::File::open(path).ok()?;
+    let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file.take(max_bytes));
     let mut line = String::new();
     for _ in 0..max_lines {
         line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
-            return None;
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(None);
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
             // The fields sit at the top level (Claude Code) or under the head record's payload
             // (codex's session-meta shape) — both observed; scan both, assert neither.
             if let Some(cwd) = v.get("cwd").and_then(serde_json::Value::as_str) {
-                return Some((cwd.to_owned(), v.get("source").cloned()));
+                return Ok(Some((cwd.to_owned(), v.get("source").cloned())));
             }
             if let Some(cwd) = v
                 .pointer("/payload/cwd")
                 .and_then(serde_json::Value::as_str)
             {
-                return Some((cwd.to_owned(), v.pointer("/payload/source").cloned()));
+                return Ok(Some((
+                    cwd.to_owned(),
+                    v.pointer("/payload/source").cloned(),
+                )));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Claude Code's per-project store: one directory per project, sessions as `.jsonl` files.
@@ -412,6 +418,7 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
     let mut decoded = 0usize;
     let mut unreadable = 0usize;
     let mut unreadable_mtime = 0usize;
+    let mut unreadable_head = 0usize;
     let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut lost_files = 0usize;
@@ -463,17 +470,30 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         // and stat, or an unreadable mtime — so the sessions still map (activity unknown, the
         // repo name from the decode fallback) rather than panicking on an assumed invariant.
         let (activity, repo, name_decoded) = match newest {
-            Some((mtime, path)) => match head_meta(&path).map(|(cwd, _)| cwd) {
-                Some(cwd) => (Some(mtime), cwd, false),
-                None => {
-                    decoded += 1;
-                    (
-                        Some(mtime),
-                        decode_project_dir(&entry.file_name().to_string_lossy()),
-                        true,
-                    )
+            Some((mtime, path)) => {
+                // An unreadable head is a degradation to disclose; a readable head with no `cwd`
+                // is a clean decode fallback — both end at the name decode, but only the first
+                // is counted as a read failure.
+                let cwd = match head_meta(&path) {
+                    Ok(Some((cwd, _))) => Some(cwd),
+                    Ok(None) => None,
+                    Err(_) => {
+                        unreadable_head += 1;
+                        None
+                    }
+                };
+                match cwd {
+                    Some(cwd) => (Some(mtime), cwd, false),
+                    None => {
+                        decoded += 1;
+                        (
+                            Some(mtime),
+                            decode_project_dir(&entry.file_name().to_string_lossy()),
+                            true,
+                        )
+                    }
                 }
-            },
+            }
             None => (
                 None,
                 {
@@ -508,6 +528,12 @@ fn claude_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String
         notes.push(format!(
             "claude sessions: {unreadable_mtime} session file(s) counted but with an unreadable \
              mtime — their activity is unknown, not absent"
+        ));
+    }
+    if unreadable_head > 0 {
+        notes.push(format!(
+            "claude sessions: {unreadable_head} project(s) whose newest session head was unreadable \
+             — repo taken from the name decode, a read failure, not a clean no-metadata decode"
         ));
     }
     skipped_note(
@@ -545,6 +571,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     let mut unlabeled = 0usize;
     let mut unreadable = 0usize;
     let mut unreadable_mtime = 0usize;
+    let mut unreadable_head = 0usize;
     let mut uncheckable = 0usize;
     let mut lost = 0usize;
     let mut stack = vec![dir];
@@ -581,7 +608,7 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                 continue;
             }
             match head_meta(&p) {
-                Some((repo, source)) => {
+                Ok(Some((repo, source))) => {
                     // Classified by codex's own kind label: `exec` is a headless `codex exec`
                     // run (arc's own synthesis lands there); any other present value — `cli`,
                     // `vscode`, or a structured subagent record — is a session/thread. A file
@@ -603,7 +630,11 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
                     }
                     observe(map, repo, counter, 1, activity, false);
                 }
-                None => unresolved += 1,
+                // Readable but no repo in the head (an old format) — genuinely unattributable.
+                Ok(None) => unresolved += 1,
+                // The head couldn't be read at all — a degradation, counted apart from the clean
+                // no-metadata case so an unreadable rollout isn't filed as "simply has no repo."
+                Err(_) => unreadable_head += 1,
             }
         }
     }
@@ -626,6 +657,12 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     if unlabeled > 0 {
         notes.push(format!(
             "codex sessions: {unlabeled} file(s) predate the source label — counted as sessions"
+        ));
+    }
+    if unreadable_head > 0 {
+        notes.push(format!(
+            "codex sessions: {unreadable_head} rollout(s) whose head couldn't be read — a read \
+             failure, counted apart from the files that are simply without a repo in the head"
         ));
     }
     if unreadable_mtime > 0 {
