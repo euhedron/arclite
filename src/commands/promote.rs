@@ -174,18 +174,30 @@ fn primary_text(finding: &Value) -> &str {
         .unwrap_or("finding")
 }
 
-/// The longest a slug id may get. Caps the ledger filename so it stays recognizable and — since a
-/// finding's text (e.g. an audit `location` listing many identifiers) can run to hundreds of chars —
-/// clear of the platform path limit (notably Windows' ~260): an over-long name would make the entry
-/// fail to *write*, not merely read badly. A curator can rename.
-const SLUG_MAX_CHARS: usize = 48;
+/// The default longest a slug id may get. Caps the ledger filename so it stays recognizable and —
+/// since a finding's text (e.g. an audit `location` listing many identifiers) can run to hundreds of
+/// chars — clear of the platform path limit (notably Windows' ~260): an over-long name would make
+/// the entry fail to *write*, not merely read badly. A curator can rename.
+const DEFAULT_SLUG_MAX_CHARS: usize = 48;
+
+/// The effective slug length cap: `ARC_FINDING_SLUG_MAX` when it parses as a positive integer, else
+/// [`DEFAULT_SLUG_MAX_CHARS`]. Truncation past it is already surfaced (the `slug` bool drives the
+/// promotion's "id truncated" note), so this only moves where the cut falls, never hides it.
+fn slug_max_chars() -> usize {
+    std::env::var("ARC_FINDING_SLUG_MAX")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DEFAULT_SLUG_MAX_CHARS)
+}
 
 /// A kebab-case id stem from a finding's text: its leading alphanumeric words, lowercased and joined
-/// with `-`, up to [`SLUG_MAX_CHARS`] on a word boundary (a single word longer than the budget is
+/// with `-`, up to [`slug_max_chars`] on a word boundary (a single word longer than the budget is
 /// truncated). Same-text findings still collide here by design — the atomic claim bumps a suffix.
 /// The bool reports whether the budget cut anything off, so the promotion can *say* an id was
 /// truncated rather than silently shortening it.
 fn slug(text: &str) -> (String, bool) {
+    let max = slug_max_chars();
     let mut out = String::new();
     let mut truncated = false;
     for word in text
@@ -200,9 +212,9 @@ fn slug(text: &str) -> (String, bool) {
     {
         if out.is_empty() {
             // The first word seeds the slug, truncated if it alone exceeds the budget.
-            truncated = word.chars().count() > SLUG_MAX_CHARS;
-            out.extend(word.chars().take(SLUG_MAX_CHARS));
-        } else if out.len() + 1 + word.len() <= SLUG_MAX_CHARS {
+            truncated = word.chars().count() > max;
+            out.extend(word.chars().take(max));
+        } else if out.len() + 1 + word.len() <= max {
             out.push('-');
             out.push_str(&word);
         } else {
@@ -364,7 +376,7 @@ fn seed_ledger_readme(repo: &Path) -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SLUG_MAX_CHARS, slug};
+    use super::{DEFAULT_SLUG_MAX_CHARS, slug};
 
     #[test]
     fn slug_stays_within_the_path_budget_on_a_word_boundary() {
@@ -374,7 +386,10 @@ mod tests {
         let (s, truncated) = slug(
             "PairThesisController citationcontext handlers GetTranscriptCitationContextAsync GetFilingCitationContextAsync",
         );
-        assert!(s.len() <= SLUG_MAX_CHARS, "`{s}` exceeds {SLUG_MAX_CHARS}");
+        assert!(
+            s.len() <= DEFAULT_SLUG_MAX_CHARS,
+            "`{s}` exceeds {DEFAULT_SLUG_MAX_CHARS}"
+        );
         assert!(
             !s.starts_with('-') && !s.ends_with('-'),
             "`{s}` has a stray boundary dash"
@@ -385,7 +400,7 @@ mod tests {
     #[test]
     fn slug_truncates_a_single_oversized_word() {
         let (s, truncated) = slug(&"x".repeat(200));
-        assert_eq!(s.len(), SLUG_MAX_CHARS);
+        assert_eq!(s.len(), DEFAULT_SLUG_MAX_CHARS);
         assert!(truncated);
     }
 

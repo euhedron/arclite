@@ -155,10 +155,10 @@ pub fn run_synthesis(
     role: &str,
     policy: Policy,
 ) -> anyhow::Result<ExitCode> {
+    let max_runs = crate::synth::max_runs();
     anyhow::ensure!(
-        (1..=crate::synth::MAX_RUNS).contains(&args.runs),
-        "--runs must be between 1 and {}, got {}",
-        crate::synth::MAX_RUNS,
+        (1..=max_runs).contains(&args.runs),
+        "--runs must be between 1 and {max_runs}, got {}",
         args.runs
     );
     // A recheck verb auto-loads the open ledger framed for re-checking — the opposite framing of

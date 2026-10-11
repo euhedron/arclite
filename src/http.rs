@@ -22,8 +22,19 @@ use anyhow::Context;
 /// into minutes (a lone GitHub 504 failed a release-verification `update --apply` mid-flight,
 /// 2026-08-17 — the motivating catch). Verified locally (curl 8.7.1, same date): with `--fail`, a
 /// 503-then-200 sequence exits 0 and `--output` holds only the final body, no failed-attempt
-/// residue.
+/// residue. The default is this reasoned 2; `ARC_HTTP_RETRIES` overrides it for an operator on a
+/// network where the default under- or over-retries, and the effective count is named in a GET
+/// failure so it is never a silent dial.
 const TRANSIENT_RETRIES: &str = "2";
+
+/// The effective curl `--retry` count: `ARC_HTTP_RETRIES` when it parses as a non-negative integer,
+/// else the reasoned [`TRANSIENT_RETRIES`] default.
+fn transient_retries() -> String {
+    std::env::var("ARC_HTTP_RETRIES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .map_or_else(|| TRANSIENT_RETRIES.to_owned(), |n| n.to_string())
+}
 
 /// `GET url`, returning the response body. `plain` headers go on argv; `secret` header values go via
 /// stdin config directives. `follow_redirects` is the module-doc contract: on for an
@@ -52,9 +63,10 @@ pub(crate) fn get(
     // run explicitly. stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the
     // returned error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
     // writing there directly would corrupt the display.
+    let retries = transient_retries();
     cmd.arg("-q")
         .args(["--fail", "--silent", "--show-error"])
-        .args(["--retry", TRANSIENT_RETRIES])
+        .args(["--retry", &retries])
         .args(["--user-agent", "arclite"])
         .arg(url)
         .stdout(Stdio::piped())
@@ -88,7 +100,8 @@ pub(crate) fn get(
         let reason = String::from_utf8_lossy(&output.stderr);
         let reason = reason.trim();
         anyhow::bail!(
-            "curl could not GET {url} (exit {}){}{}",
+            "curl could not GET {url} after {retries} retr{} (exit {}){}{}",
+            if retries == "1" { "y" } else { "ies" },
             output
                 .status
                 .code()

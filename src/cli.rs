@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// `--runs`' help, naming the applied ceiling from its one definition ([`crate::synth::MAX_RUNS`])
-/// so the documented bound can't drift from the enforced one.
+/// `--runs`' help, naming the applied ceiling from its one definition ([`crate::synth::max_runs`])
+/// so the documented bound can't drift from the enforced one — including an `ARC_MAX_RUNS` override.
 fn runs_help() -> String {
     format!(
-        "Run the synthesis N times concurrently (1–{}; a larger value is rejected, never silently capped). Structured `results` are unioned (only byte-identical items collapse); prose outputs concatenate as per-run sections. A per-run --max-budget-usd applies to each, so N runs can spend up to N× it",
-        crate::synth::MAX_RUNS
+        "Run the synthesis N times concurrently (1–{}, the default ceiling, raisable with ARC_MAX_RUNS; a larger value is rejected, never silently capped). Structured `results` are unioned (only byte-identical items collapse); prose outputs concatenate as per-run sections. A per-run --max-budget-usd applies to each, so N runs can spend up to N× it",
+        crate::synth::max_runs()
     )
 }
 
@@ -471,8 +471,8 @@ pub struct SynthArgs {
     /// on the run, never the ambient default. Rejected when there is nothing it would unlock.
     #[arg(long)]
     pub free_kinds: bool,
-    // Help derived at runtime so the ceiling it names is the one applied (synth::MAX_RUNS) — a
-    // hand-written "small maximum" would hide the actual bound.
+    // Help derived at runtime so the ceiling it names is the one applied (synth::max_runs(),
+    // ARC_MAX_RUNS included) — a hand-written "small maximum" would hide the actual bound.
     #[arg(long, default_value_t = 1, help = runs_help())]
     pub runs: usize,
 }
