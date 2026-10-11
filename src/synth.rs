@@ -647,8 +647,11 @@ fn append_file(
 /// The canonical path of `path`, if it resolves — the identity recorded in (and checked against)
 /// `seen`, so README/manifests and every `--include`/`--changed` file dedupe by identity, not by
 /// how the path was spelled.
-fn canonical(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok()
+/// Faithful canonicalization — the failure is returned, not swallowed, so each caller decides
+/// whether an absent path and an unreadable one warrant the same handling rather than the helper
+/// deciding for them.
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path)
 }
 
 /// What [`add_unless_seen`] did with a file.
@@ -693,7 +696,10 @@ fn add_unless_seen(
     scope: &mut Scope,
     seen: &mut SeenFiles,
 ) -> Added {
-    let canon = canonical(path);
+    // Dedup needs a canonical identity or none; when canonicalization fails, the reason (absent or
+    // unreadable) is immaterial *here* — either way there is no identity to match on, and the real
+    // read failure surfaces from `append_file` below rather than being concluded as "absent".
+    let canon = canonical(path).ok();
     if let Some(c) = &canon
         && seen.identities.contains(c)
     {
@@ -1050,7 +1056,13 @@ fn gather_git_truth(root: &Path, included: &[IncludedFile]) -> GitTruthContext {
         }
     };
 
-    let canonical_root = canonical(root);
+    // `git_snapshot` just ran `git -C root` successfully, so the root is present and readable; a
+    // canonicalization failure here is a symlink/filesystem edge, not plain absence, and its
+    // consequence is uniform — no canonical identity, so `..`-bearing paths fall to unknown git
+    // state below, which `git_relative_path` already handles. So absent and unreadable need no
+    // split at this site; the reason is deliberately discarded (the now-faithful helper no longer
+    // decides that for every caller).
+    let canonical_root = canonical(root).ok();
     let rows: Vec<serde_json::Value> = included
         .iter()
         .map(|file| {
