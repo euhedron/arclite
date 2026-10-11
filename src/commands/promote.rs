@@ -140,9 +140,12 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 p.id,
                 crate::display_path(&p.path),
                 if p.truncated {
-                    " · id truncated to the filename budget"
+                    format!(
+                        " · id truncated to the {}-char budget (ARC_FINDING_SLUG_MAX to change)",
+                        slug_max_chars()
+                    )
                 } else {
-                    ""
+                    String::new()
                 }
             )
         })
@@ -183,7 +186,7 @@ const DEFAULT_SLUG_MAX_CHARS: usize = 48;
 /// The effective slug length cap: `ARC_FINDING_SLUG_MAX` when it parses as a positive integer, else
 /// [`DEFAULT_SLUG_MAX_CHARS`]. Truncation past it is already surfaced (the `slug` bool drives the
 /// promotion's "id truncated" note), so this only moves where the cut falls, never hides it.
-fn slug_max_chars() -> usize {
+pub(crate) fn slug_max_chars() -> usize {
     std::env::var("ARC_FINDING_SLUG_MAX")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())

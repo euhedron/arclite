@@ -29,7 +29,7 @@ const TRANSIENT_RETRIES: &str = "2";
 
 /// The effective curl `--retry` count: `ARC_HTTP_RETRIES` when it parses as a non-negative integer,
 /// else the reasoned [`TRANSIENT_RETRIES`] default.
-fn transient_retries() -> String {
+pub(crate) fn transient_retries() -> String {
     std::env::var("ARC_HTTP_RETRIES")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
