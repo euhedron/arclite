@@ -142,7 +142,7 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 if p.truncated {
                     format!(
                         " · id truncated to the {}-char budget (ARC_FINDING_SLUG_MAX to change)",
-                        slug_max_chars()
+                        slug_max_chars().0
                     )
                 } else {
                     String::new()
@@ -183,15 +183,12 @@ fn primary_text(finding: &Value) -> &str {
 /// the entry fail to *write*, not merely read badly. A curator can rename.
 const DEFAULT_SLUG_MAX_CHARS: usize = 48;
 
-/// The effective slug length cap: `ARC_FINDING_SLUG_MAX` when it parses as a positive integer, else
-/// [`DEFAULT_SLUG_MAX_CHARS`]. Truncation past it is already surfaced (the `slug` bool drives the
-/// promotion's "id truncated" note), so this only moves where the cut falls, never hides it.
-pub(crate) fn slug_max_chars() -> usize {
-    std::env::var("ARC_FINDING_SLUG_MAX")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n >= 1)
-        .unwrap_or(DEFAULT_SLUG_MAX_CHARS)
+/// The effective slug length cap and any rejected override: `ARC_FINDING_SLUG_MAX` when it parses as
+/// a positive integer, else [`DEFAULT_SLUG_MAX_CHARS`] with the raw rejected value reported.
+/// Truncation past the cap is already surfaced (the `slug` bool drives the promotion's "id
+/// truncated" note), so this only moves where the cut falls, never hides it.
+pub(crate) fn slug_max_chars() -> (usize, Option<String>) {
+    crate::env_num::<usize>("ARC_FINDING_SLUG_MAX", DEFAULT_SLUG_MAX_CHARS, 1)
 }
 
 /// A kebab-case id stem from a finding's text: its leading alphanumeric words, lowercased and joined
@@ -200,7 +197,7 @@ pub(crate) fn slug_max_chars() -> usize {
 /// The bool reports whether the budget cut anything off, so the promotion can *say* an id was
 /// truncated rather than silently shortening it.
 fn slug(text: &str) -> (String, bool) {
-    let max = slug_max_chars();
+    let (max, _) = slug_max_chars();
     let mut out = String::new();
     let mut truncated = false;
     for word in text

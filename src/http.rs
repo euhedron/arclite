@@ -25,15 +25,14 @@ use anyhow::Context;
 /// residue. The default is this reasoned 2; `ARC_HTTP_RETRIES` overrides it for an operator on a
 /// network where the default under- or over-retries, and the effective count is named in a GET
 /// failure so it is never a silent dial.
-const TRANSIENT_RETRIES: &str = "2";
+const DEFAULT_TRANSIENT_RETRIES: u32 = 2;
 
-/// The effective curl `--retry` count: `ARC_HTTP_RETRIES` when it parses as a non-negative integer,
-/// else the reasoned [`TRANSIENT_RETRIES`] default.
-pub(crate) fn transient_retries() -> String {
-    std::env::var("ARC_HTTP_RETRIES")
-        .ok()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .map_or_else(|| TRANSIENT_RETRIES.to_owned(), |n| n.to_string())
+/// The effective curl `--retry` count and any rejected override: `ARC_HTTP_RETRIES` when it parses
+/// as a non-negative integer, else the reasoned [`DEFAULT_TRANSIENT_RETRIES`] default with the raw
+/// rejected value reported (so an ignored override is disclosed, not silently dropped).
+pub(crate) fn transient_retries() -> (String, Option<String>) {
+    let (n, ignored) = crate::env_num::<u32>("ARC_HTTP_RETRIES", DEFAULT_TRANSIENT_RETRIES, 0);
+    (n.to_string(), ignored)
 }
 
 /// `GET url`, returning the response body. `plain` headers go on argv; `secret` header values go via
@@ -63,7 +62,7 @@ pub(crate) fn get(
     // run explicitly. stderr is captured, never inherited: `--show-error`'s diagnostic belongs in the
     // returned error, and a caller may hold the terminal exclusively (the TUI's model fetch) — a child
     // writing there directly would corrupt the display.
-    let retries = transient_retries();
+    let (retries, _) = transient_retries();
     cmd.arg("-q")
         .args(["--fail", "--silent", "--show-error"])
         .args(["--retry", &retries])

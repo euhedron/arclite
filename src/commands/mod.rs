@@ -155,7 +155,7 @@ pub fn run_synthesis(
     role: &str,
     policy: Policy,
 ) -> anyhow::Result<ExitCode> {
-    let max_runs = crate::synth::max_runs();
+    let (max_runs, _) = crate::synth::max_runs();
     anyhow::ensure!(
         (1..=max_runs).contains(&args.runs),
         "--runs must be between 1 and {max_runs}, got {}",

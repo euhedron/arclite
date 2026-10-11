@@ -28,6 +28,9 @@ struct Tunables {
     finding_slug_max: usize,
     head_scan_lines: usize,
     head_scan_bytes: u64,
+    /// Overrides that were set but rejected (unparsable / out of range), named so an ignored
+    /// override is disclosed rather than silently falling back to the default shown above.
+    ignored: Vec<String>,
 }
 
 /// The cwd repo's agenda and inbox at a glance — counts, order integrity, pending notes — so
@@ -416,12 +419,24 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
         gate: gate_status(),
         tunables: {
             let (head_scan_lines, head_scan_bytes) = crate::discovery::head_scan_bounds();
+            let (http_retries, http_ignored) = crate::http::transient_retries();
+            let (max_runs, runs_ignored) = crate::synth::max_runs();
+            let (finding_slug_max, slug_ignored) = crate::commands::promote::slug_max_chars();
+            let ignored = [
+                ("ARC_HTTP_RETRIES", http_ignored),
+                ("ARC_MAX_RUNS", runs_ignored),
+                ("ARC_FINDING_SLUG_MAX", slug_ignored),
+            ]
+            .into_iter()
+            .filter_map(|(key, raw)| raw.map(|v| format!("{key}=`{v}` ignored, using default")))
+            .collect();
             Tunables {
-                http_retries: crate::http::transient_retries(),
-                max_runs: crate::synth::max_runs(),
-                finding_slug_max: crate::commands::promote::slug_max_chars(),
+                http_retries,
+                max_runs,
+                finding_slug_max,
                 head_scan_lines,
                 head_scan_bytes,
+                ignored,
             }
         },
     })
@@ -614,11 +629,16 @@ pub(crate) fn human(report: &Report) -> String {
     lines.push(row("items", &items_line));
     lines.push(row("gate", &gate_line));
     let t = &report.tunables;
+    let ignored = if t.ignored.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", t.ignored.join(" · "))
+    };
     lines.push(row(
         "tunables",
         &format!(
             "http-retries {} · max-runs {} · finding-slug-max {} · head-scan {} lines/{} KiB \
-             (ARC_HTTP_RETRIES, ARC_MAX_RUNS, ARC_FINDING_SLUG_MAX, ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES)",
+             (ARC_HTTP_RETRIES, ARC_MAX_RUNS, ARC_FINDING_SLUG_MAX, ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES){ignored}",
             t.http_retries,
             t.max_runs,
             t.finding_slug_max,

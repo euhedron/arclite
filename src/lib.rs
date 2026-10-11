@@ -300,6 +300,26 @@ pub(crate) fn try_is_dir(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(optional(std::fs::metadata(path))?.is_some_and(|m| m.is_dir()))
 }
 
+/// Resolve a numeric env override against a default, reporting a *rejected* override rather than
+/// swallowing it: `(effective, ignored)` where `ignored` is the raw value when the var was set but
+/// did not parse or fell below `min` — so a caller's attempted override is disclosed, never a
+/// silent fall-back to the default. One home for the parse so every tunable rejects alike.
+pub(crate) fn env_num<T>(key: &str, default: T, min: T) -> (T, Option<String>)
+where
+    T: std::str::FromStr + PartialOrd + Copy,
+{
+    match std::env::var_os(key) {
+        None => (default, None),
+        Some(raw) => {
+            let s = raw.to_string_lossy();
+            match s.trim().parse::<T>() {
+                Ok(v) if v >= min => (v, None),
+                _ => (default, Some(s.into_owned())),
+            }
+        }
+    }
+}
+
 pub(crate) fn join_or(items: &[String], empty: &str) -> String {
     if items.is_empty() {
         empty.to_owned()
