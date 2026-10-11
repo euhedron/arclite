@@ -762,6 +762,16 @@ fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String
     ai::command("git")
         .map_err(|e| format!("could not prepare git: {e:#}"))?
         .env("LC_ALL", "C")
+        // Ambient-config isolation, the determinism sibling of LC_ALL: the snapshot must read the
+        // same repo state on any machine, so the operator's global and system git config can't
+        // shape it — notably `core.excludesFile`, whose global ignore `--exclude-standard` would
+        // otherwise fold into the "ignored" set, making the snapshot differ per operator. Only
+        // repo-local config (`.gitignore`, `.git/info/exclude`, `.git/config`) counts. `/dev/null`
+        // is git's documented disable sentinel for GIT_CONFIG_GLOBAL (honored on Git for Windows
+        // too; the per-platform release verifier exercises it). Config *reads* that want the
+        // effective value — `core.hooksPath` via `git_config_get` — deliberately route elsewhere.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .arg("-C")
         .arg(root)
         .args(args)
