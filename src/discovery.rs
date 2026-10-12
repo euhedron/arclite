@@ -2,7 +2,7 @@
 //! by discovery rather than declaration, read from indexes that already exist: the agent CLIs' own
 //! session stores and arc's run ledger. Each session file contributes its head record's metadata
 //! (`cwd`, and codex's `source` kind) and its mtime — a head read suffices because both stores
-//! put the session metadata first (see [`HEAD_SCAN_LINES`]).
+//! put the session metadata first (see [`head_scan_bounds`]).
 //!
 //! The session stores are external surfaces with no layout contract (observed on this machine
 //! 2026-08-23, source kinds 2026-09-25; every read here fails soft per store, disclosed in the
@@ -390,7 +390,7 @@ fn skipped_note(notes: &mut Vec<String>, label: &str, n: usize, what: &str) {
 
 /// Read a session file's head metadata: the `cwd`, plus the `source` kind where the same record
 /// carries one (codex's session meta does; Claude Code's store and old codex formats don't).
-/// Bounded by [`HEAD_SCAN_LINES`].
+/// Bounded by [`head_scan_bounds`].
 /// Tri-state so the caller can tell an *unreadable* head (a real degradation to disclose) from a
 /// *readable file that simply has no `cwd`* (an old format, genuinely unattributable): `Err` is
 /// the open/read failure, `Ok(None)` the readable-but-no-metadata case, `Ok(Some)` a hit.
