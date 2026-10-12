@@ -17,12 +17,15 @@ use crate::output::emit;
 /// consensus sampling, low enough that even the max isn't wasteful at a premium model's price.
 const DEFAULT_MAX_RUNS: usize = 8;
 
+/// The override env var, named once and shared with `doctor`'s tunables report.
+pub(crate) const MAX_RUNS_ENV: &str = "ARC_MAX_RUNS";
+
 /// The effective `--runs` ceiling and any rejected override: `ARC_MAX_RUNS` when it parses as a
 /// positive integer (an operator with the machine and budget to fan out wider raises it), else
 /// [`DEFAULT_MAX_RUNS`] with the raw rejected value reported. Resolved at runtime so the `--runs`
 /// help and the rejection error both name the ceiling actually applied.
 pub(crate) fn max_runs() -> (usize, Option<String>) {
-    crate::env_num::<usize>("ARC_MAX_RUNS", DEFAULT_MAX_RUNS, 1)
+    crate::env_num::<usize>(MAX_RUNS_ENV, DEFAULT_MAX_RUNS, 1)
 }
 
 const DRY_RUN_NOTE: &str = "estimate counts the prompt only; a real call also loads the model's base system/tool context (not counted here) — actual usage is reported after the call runs";

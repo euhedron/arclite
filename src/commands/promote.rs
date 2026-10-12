@@ -183,12 +183,15 @@ fn primary_text(finding: &Value) -> &str {
 /// the entry fail to *write*, not merely read badly. A curator can rename.
 const DEFAULT_SLUG_MAX_CHARS: usize = 48;
 
+/// The override env var, named once and shared with `doctor`'s tunables report.
+pub(crate) const FINDING_SLUG_MAX_ENV: &str = "ARC_FINDING_SLUG_MAX";
+
 /// The effective slug length cap and any rejected override: `ARC_FINDING_SLUG_MAX` when it parses as
 /// a positive integer, else [`DEFAULT_SLUG_MAX_CHARS`] with the raw rejected value reported.
 /// Truncation past the cap is already surfaced (the `slug` bool drives the promotion's "id
 /// truncated" note), so this only moves where the cut falls, never hides it.
 pub(crate) fn slug_max_chars() -> (usize, Option<String>) {
-    crate::env_num::<usize>("ARC_FINDING_SLUG_MAX", DEFAULT_SLUG_MAX_CHARS, 1)
+    crate::env_num::<usize>(FINDING_SLUG_MAX_ENV, DEFAULT_SLUG_MAX_CHARS, 1)
 }
 
 /// A kebab-case id stem from a finding's text: its leading alphanumeric words, lowercased and joined

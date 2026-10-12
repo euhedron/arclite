@@ -27,11 +27,14 @@ use anyhow::Context;
 /// failure so it is never a silent dial.
 const DEFAULT_TRANSIENT_RETRIES: u32 = 2;
 
+/// The override env var, named once and shared with `doctor`'s tunables report.
+pub(crate) const HTTP_RETRIES_ENV: &str = "ARC_HTTP_RETRIES";
+
 /// The effective curl `--retry` count and any rejected override: `ARC_HTTP_RETRIES` when it parses
 /// as a non-negative integer, else the reasoned [`DEFAULT_TRANSIENT_RETRIES`] default with the raw
 /// rejected value reported (so an ignored override is disclosed, not silently dropped).
 pub(crate) fn transient_retries() -> (String, Option<String>) {
-    let (n, ignored) = crate::env_num::<u32>("ARC_HTTP_RETRIES", DEFAULT_TRANSIENT_RETRIES, 0);
+    let (n, ignored) = crate::env_num::<u32>(HTTP_RETRIES_ENV, DEFAULT_TRANSIENT_RETRIES, 0);
     (n.to_string(), ignored)
 }
 
