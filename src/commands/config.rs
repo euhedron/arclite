@@ -421,34 +421,13 @@ pub(crate) fn set_value(
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
     // Stage-then-rename, never write in place: a failed or interrupted write must leave the prior
-    // settings file intact, not truncated mid-JSON (which would fail every later load). The staged
-    // name carries the pid so concurrent setters can't clobber each other's staging; the rename is
-    // the atomic swap, and a failure cleans the staged file (best-effort) with the original untouched.
-    let staged = path.with_file_name(format!(
-        "{}.{}.new",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .expect("the settings path ends in its file name"),
-        std::process::id()
-    ));
+    // settings file intact, not truncated mid-JSON (which would fail every later load). Shared with
+    // the self-derived doc writer via [`crate::atomic_write`].
     let body = format!(
         "{}\n",
         serde_json::to_string_pretty(&root).expect("a serde_json::Value re-serializes")
     );
-    if let Err(e) = std::fs::write(&staged, &body).and_then(|()| std::fs::rename(&staged, &path)) {
-        // Cleanup of the staging file is best-effort, but its failure is part of the error, not
-        // hidden: a leftover .new would otherwise sit undisclosed beside the (intact) settings.
-        let mut msg = format!("cannot write {}", path.display());
-        if let Err(rm) = std::fs::remove_file(&staged)
-            && rm.kind() != std::io::ErrorKind::NotFound
-        {
-            msg.push_str(&format!(
-                " (and the staged {} was left behind: {rm})",
-                staged.display()
-            ));
-        }
-        return Err(anyhow::Error::new(e).context(msg));
-    }
+    crate::atomic_write(&path, body.as_bytes())?;
     Ok(path)
 }
 
