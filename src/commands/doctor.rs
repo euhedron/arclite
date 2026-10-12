@@ -422,7 +422,7 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
             let (http_retries, http_ignored) = crate::http::transient_retries();
             let (max_runs, runs_ignored) = crate::synth::max_runs();
             let (finding_slug_max, slug_ignored) = crate::commands::promote::slug_max_chars();
-            let ignored = [
+            let mut ignored: Vec<String> = [
                 ("ARC_HTTP_RETRIES", http_ignored),
                 ("ARC_MAX_RUNS", runs_ignored),
                 ("ARC_FINDING_SLUG_MAX", slug_ignored),
@@ -430,6 +430,10 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
             .into_iter()
             .filter_map(|(key, raw)| raw.map(|v| format!("{key}=`{v}` ignored, using default")))
             .collect();
+            // The head-scan vars resolve their own rejected-override warnings (two dimensions, 0 =
+            // unbounded), so doctor folds those in rather than re-deriving them — one disclosure of
+            // an ignored override, whether read from `arc repos` or here.
+            ignored.extend(crate::discovery::head_scan_env_warnings());
             Tunables {
                 http_retries,
                 max_runs,
