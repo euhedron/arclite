@@ -107,7 +107,7 @@ fn head_scan_desc_effective() -> String {
 /// Warnings for a head-scan knob set to an unreadable value: an env var present but unparseable
 /// means the caller *tried* to shape completeness and was ignored — disclosed, never a silent
 /// fall-through to the default (the default still applies, per [`head_scan_bounds`]).
-fn head_scan_env_warnings() -> Vec<String> {
+pub(crate) fn head_scan_env_warnings() -> Vec<String> {
     let mut w = Vec::new();
     let present_but_unparsed = |key: &str| {
         std::env::var_os(key).is_some_and(|v| {
