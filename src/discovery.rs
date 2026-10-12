@@ -53,28 +53,48 @@ const DEFAULT_HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 /// a repo whose metadata sits deeper: `ARC_DISCOVERY_HEAD_SCAN_LINES` and
 /// `ARC_DISCOVERY_HEAD_SCAN_BYTES`, each `0` meaning unbounded (scan the whole file). Unset uses
 /// the defaults above. Read once per process.
+/// The head-scan configuration, parsed once: the effective bounds and any rejected-override
+/// warnings, both derived from the *single* [`crate::env_num`] parse per var — the same numeric
+/// override parser every other tunable uses — so the parse and the "was it rejected?" judgment are
+/// single-sourced, never two re-reads that could drift on type or wording.
+struct HeadScan {
+    lines: usize,
+    bytes: u64,
+    warnings: Vec<String>,
+}
+
+fn resolve_head_scan() -> HeadScan {
+    // min is 0 because 0 is a *valid* value here — "unbounded", mapped to MAX below (the one
+    // head-scan-specific semantic); everything else (parse, reject, disclose) is env_num's.
+    let (lines_n, lines_ignored) =
+        crate::env_num::<usize>("ARC_DISCOVERY_HEAD_SCAN_LINES", DEFAULT_HEAD_SCAN_LINES, 0);
+    let (bytes_n, bytes_ignored) = crate::env_num::<u64>(
+        "ARC_DISCOVERY_HEAD_SCAN_BYTES",
+        DEFAULT_HEAD_SCAN_MAX_BYTES,
+        0,
+    );
+    let warnings = [
+        ("ARC_DISCOVERY_HEAD_SCAN_LINES", lines_ignored),
+        ("ARC_DISCOVERY_HEAD_SCAN_BYTES", bytes_ignored),
+    ]
+    .into_iter()
+    .filter_map(|(key, ignored)| {
+        ignored.map(|raw| format!("{key}=`{raw}` ignored, the built-in default applies"))
+    })
+    .collect();
+    HeadScan {
+        lines: if lines_n == 0 { usize::MAX } else { lines_n },
+        bytes: if bytes_n == 0 { u64::MAX } else { bytes_n },
+        warnings,
+    }
+}
+
+/// Parsed once per process; both [`head_scan_bounds`] and [`head_scan_env_warnings`] read this one
+/// cache, so the vars are parsed a single time, not once per accessor.
+static HEAD_SCAN: std::sync::LazyLock<HeadScan> = std::sync::LazyLock::new(resolve_head_scan);
+
 pub(crate) fn head_scan_bounds() -> (usize, u64) {
-    use std::sync::LazyLock;
-    static BOUNDS: LazyLock<(usize, u64)> = LazyLock::new(|| {
-        let lines = match std::env::var("ARC_DISCOVERY_HEAD_SCAN_LINES")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-        {
-            Some(0) => usize::MAX,
-            Some(n) => n,
-            None => DEFAULT_HEAD_SCAN_LINES,
-        };
-        let bytes = match std::env::var("ARC_DISCOVERY_HEAD_SCAN_BYTES")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-        {
-            Some(0) => u64::MAX,
-            Some(n) => n,
-            None => DEFAULT_HEAD_SCAN_MAX_BYTES,
-        };
-        (lines, bytes)
-    });
-    *BOUNDS
+    (HEAD_SCAN.lines, HEAD_SCAN.bytes)
 }
 
 /// A human description of a head-scan bound, each dimension named honestly: an unbounded (`usize`/
@@ -104,33 +124,10 @@ fn head_scan_desc_effective() -> String {
     head_scan_desc(lines, bytes)
 }
 
-/// Warnings for a head-scan knob set to an unreadable value: an env var present but unparseable
-/// means the caller *tried* to shape completeness and was ignored — disclosed, never a silent
-/// fall-through to the default (the default still applies, per [`head_scan_bounds`]).
+/// Warnings for a head-scan knob set to an unreadable value — derived from the same single parse
+/// as the bounds (see [`HeadScan`]), never a second re-read.
 pub(crate) fn head_scan_env_warnings() -> Vec<String> {
-    let mut w = Vec::new();
-    let present_but_unparsed = |key: &str| {
-        std::env::var_os(key).is_some_and(|v| {
-            // Non-Unicode (to_str == None) or non-numeric both count as unreadable; an empty
-            // value is treated as unset, not an error.
-            match v.to_str().map(str::trim) {
-                None => true,
-                Some("") => false,
-                Some(s) => s.parse::<u64>().is_err(),
-            }
-        })
-    };
-    for key in [
-        "ARC_DISCOVERY_HEAD_SCAN_LINES",
-        "ARC_DISCOVERY_HEAD_SCAN_BYTES",
-    ] {
-        if present_but_unparsed(key) {
-            w.push(format!(
-                "{key} is set to an unreadable value — ignored, the built-in default applies"
-            ));
-        }
-    }
-    w
+    HEAD_SCAN.warnings.clone()
 }
 
 /// The external session stores' observed layout (2026-08-23; no layout contract — see the module
