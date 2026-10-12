@@ -77,6 +77,33 @@ pub(crate) fn head_scan_bounds() -> (usize, u64) {
     *BOUNDS
 }
 
+/// A human description of a head-scan bound, each dimension named honestly: an unbounded (`usize`/
+/// `u64::MAX`) lines *or* bytes value is called unbounded only for *that* dimension, since the
+/// other can still bind — so lines=unbounded with a finite byte cap reads "unbounded lines, 64 KiB",
+/// never a blanket "unbounded" that hides the byte cap. Pure in its arguments (no env read), so the
+/// discovery notes (passing [`head_scan_bounds`]) and `doctor`'s render (passing its gathered
+/// values) share one home without the renderer reading the environment.
+pub(crate) fn head_scan_desc(lines: usize, bytes: u64) -> String {
+    let l = if lines == usize::MAX {
+        "unbounded lines".to_owned()
+    } else {
+        format!("{lines} line(s)")
+    };
+    let b = if bytes == u64::MAX {
+        "unbounded bytes".to_owned()
+    } else {
+        format!("{} KiB", bytes / 1024)
+    };
+    format!("{l}, {b}")
+}
+
+/// [`head_scan_desc`] of the *effective* bounds — the convenience the discovery notes use, where
+/// the live env-resolved bound is what they disclose.
+fn head_scan_desc_effective() -> String {
+    let (lines, bytes) = head_scan_bounds();
+    head_scan_desc(lines, bytes)
+}
+
 /// Warnings for a head-scan knob set to an unreadable value: an env var present but unparseable
 /// means the caller *tried* to shape completeness and was ignored — disclosed, never a silent
 /// fall-through to the default (the default still applies, per [`head_scan_bounds`]).
@@ -205,15 +232,10 @@ pub fn discover(include_all: bool) -> Discovery {
     // Surface the attribution method unconditionally, not only when a file fails to resolve: the
     // head-scan bound shapes what the map can see, and the caller should know it is in effect
     // rather than discover it. Names the bound and the knob that widens or disables it.
-    let (max_lines, max_bytes) = head_scan_bounds();
-    notes.push(if max_lines == usize::MAX {
-        "sessions attributed by scanning each file's head (unbounded; ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES set the cap)".to_owned()
-    } else {
-        format!(
-            "sessions attributed by scanning each file's head (first {max_lines} line(s), {} KiB; ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES to widen, 0 to disable)",
-            max_bytes / 1024
-        )
-    });
+    notes.push(format!(
+        "sessions attributed by scanning each file's head ({}; ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES to widen, 0 to disable)",
+        head_scan_desc_effective()
+    ));
     claude_store(&mut map, &mut notes);
     codex_store(&mut map, &mut notes);
     ledger(&mut map, &mut notes);
@@ -639,19 +661,11 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
         }
     }
     if unresolved > 0 {
-        let (max_lines, max_bytes) = head_scan_bounds();
-        let bound = if max_lines == usize::MAX {
-            "scan unbounded".to_owned()
-        } else {
-            format!(
-                "scan bounded to the first {max_lines} line(s), {} KiB",
-                max_bytes / 1024
-            )
-        };
         notes.push(format!(
             "codex sessions: {unresolved} session file(s) without a readable repo in the head \
-             ({bound}; widen with ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES) — counted nowhere rather \
-             than guessed"
+             (scan bound: {}; widen with ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES) — counted nowhere \
+             rather than guessed",
+            head_scan_desc_effective()
         ));
     }
     if unlabeled > 0 {
