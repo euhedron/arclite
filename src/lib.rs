@@ -320,6 +320,38 @@ where
     }
 }
 
+/// Write `bytes` to `path` by staging and atomically replacing: a plain write truncates the target
+/// first, so an interrupted write would destroy a prior usable file. Stage to a pid-named temp in
+/// the same directory (same filesystem → the rename is atomic), rename over the target, and on
+/// failure clean up the temp — a cleanup failure folded into the error, never a leftover temp left
+/// silently beside the (intact) original. One home for the pattern that `config set` and the
+/// self-derived doc writer both need.
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let staged = path.with_file_name(format!(
+        "{}.{}.new",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!(
+                "{} has no file name to stage beside",
+                path.display()
+            ))?,
+        std::process::id()
+    ));
+    if let Err(e) = std::fs::write(&staged, bytes).and_then(|()| std::fs::rename(&staged, path)) {
+        let mut msg = format!("cannot write {}", path.display());
+        if let Err(rm) = std::fs::remove_file(&staged)
+            && rm.kind() != std::io::ErrorKind::NotFound
+        {
+            msg.push_str(&format!(
+                " (and the staged {} was left behind: {rm})",
+                staged.display()
+            ));
+        }
+        return Err(anyhow::Error::new(e).context(msg));
+    }
+    Ok(())
+}
+
 pub(crate) fn join_or(items: &[String], empty: &str) -> String {
     if items.is_empty() {
         empty.to_owned()
