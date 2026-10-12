@@ -74,6 +74,21 @@ pub struct Rule {
     pub source: PathBuf,
 }
 
+/// A rule id becomes a `## {id}` Markdown heading in the rules block the model reads, so a control
+/// character (notably a newline) would let it escape its heading slot and inject arbitrary prompt
+/// structure. Both id sources — a Markdown file's stem (a filename *can* hold a newline on Unix)
+/// and a JSON-pack entry's string — validate through here, so the guard can't cover one and be
+/// forgotten on the other.
+fn validate_rule_id(id: &str, whence: &str) -> anyhow::Result<()> {
+    if let Some(bad) = id.chars().find(|c| c.is_control()) {
+        anyhow::bail!(
+            "{whence}: rule id `{}` contains a control character ({bad:?}) — a rule id becomes a Markdown heading and must be a single clean line",
+            id.escape_debug()
+        );
+    }
+    Ok(())
+}
+
 /// Load `path` as a rule, or `None` if it isn't a `.md` file. A `.md` file whose stem can't be a
 /// rule id (non-UTF-8) is a hard error, not a skip: a *present* rule silently vanishing from the
 /// active set is exactly the kind of quiet shrinkage the loaders elsewhere refuse.
@@ -87,6 +102,7 @@ fn rule_from_file(path: &Path) -> anyhow::Result<Option<Rule>> {
             path.display()
         );
     };
+    validate_rule_id(&id, &format!("rule file {}", path.display()))?;
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("cannot read rule {}", path.display()))?;
     Ok(Some(Rule {
@@ -140,18 +156,7 @@ fn rules_from_json(path: &Path) -> anyhow::Result<Option<Vec<Rule>>> {
                 path.display()
             );
         }
-        // The id becomes a `## {id}` Markdown heading in the rules block fed to the model, so a
-        // control character (notably a newline) would let a pack id escape its heading slot and
-        // inject arbitrary prose or further headings into the prompt. Markdown-file ids are
-        // filesystem-constrained; a JSON-pack id is arbitrary, so it is validated here.
-        if let Some(bad) = id.chars().find(|c| c.is_control()) {
-            anyhow::bail!(
-                "rule pack {} entry {i}: id `{}` contains a control character ({:?}) — a rule id becomes a Markdown heading and must be a single clean line",
-                path.display(),
-                id.escape_debug(),
-                bad
-            );
-        }
+        validate_rule_id(id, &format!("rule pack {} entry {i}", path.display()))?;
         // The pack's own switch, dropped at its source; arc's `disabled_rules` still applies on top.
         if !e.enabled {
             continue;
