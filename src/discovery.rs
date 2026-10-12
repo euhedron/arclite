@@ -49,6 +49,11 @@ const DEFAULT_HEAD_SCAN_LINES: usize = 5;
 /// The default, overridable per [`head_scan_bounds`].
 const DEFAULT_HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 
+/// The override env vars, named once and reused by both the resolver and its rejected-override
+/// warnings below, so the parse key and the disclosure key cannot drift apart.
+const HEAD_SCAN_LINES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_LINES";
+const HEAD_SCAN_BYTES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_BYTES";
+
 /// Env knobs letting the caller widen or disable the head-scan bounds when the defaults would omit
 /// a repo whose metadata sits deeper: `ARC_DISCOVERY_HEAD_SCAN_LINES` and
 /// `ARC_DISCOVERY_HEAD_SCAN_BYTES`, each `0` meaning unbounded (scan the whole file). Unset uses
@@ -67,15 +72,12 @@ fn resolve_head_scan() -> HeadScan {
     // min is 0 because 0 is a *valid* value here — "unbounded", mapped to MAX below (the one
     // head-scan-specific semantic); everything else (parse, reject, disclose) is env_num's.
     let (lines_n, lines_ignored) =
-        crate::env_num::<usize>("ARC_DISCOVERY_HEAD_SCAN_LINES", DEFAULT_HEAD_SCAN_LINES, 0);
-    let (bytes_n, bytes_ignored) = crate::env_num::<u64>(
-        "ARC_DISCOVERY_HEAD_SCAN_BYTES",
-        DEFAULT_HEAD_SCAN_MAX_BYTES,
-        0,
-    );
+        crate::env_num::<usize>(HEAD_SCAN_LINES_ENV, DEFAULT_HEAD_SCAN_LINES, 0);
+    let (bytes_n, bytes_ignored) =
+        crate::env_num::<u64>(HEAD_SCAN_BYTES_ENV, DEFAULT_HEAD_SCAN_MAX_BYTES, 0);
     let warnings = [
-        ("ARC_DISCOVERY_HEAD_SCAN_LINES", lines_ignored),
-        ("ARC_DISCOVERY_HEAD_SCAN_BYTES", bytes_ignored),
+        (HEAD_SCAN_LINES_ENV, lines_ignored),
+        (HEAD_SCAN_BYTES_ENV, bytes_ignored),
     ]
     .into_iter()
     .filter_map(|(key, ignored)| {

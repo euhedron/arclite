@@ -423,9 +423,9 @@ pub(crate) fn gather() -> anyhow::Result<Report> {
             let (max_runs, runs_ignored) = crate::synth::max_runs();
             let (finding_slug_max, slug_ignored) = crate::commands::promote::slug_max_chars();
             let mut ignored: Vec<String> = [
-                ("ARC_HTTP_RETRIES", http_ignored),
-                ("ARC_MAX_RUNS", runs_ignored),
-                ("ARC_FINDING_SLUG_MAX", slug_ignored),
+                (crate::http::HTTP_RETRIES_ENV, http_ignored),
+                (crate::synth::MAX_RUNS_ENV, runs_ignored),
+                (crate::commands::promote::FINDING_SLUG_MAX_ENV, slug_ignored),
             ]
             .into_iter()
             .filter_map(|(key, raw)| raw.map(|v| format!("{key}=`{v}` ignored, using default")))
