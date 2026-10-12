@@ -770,21 +770,17 @@ struct GitTruthContext {
 
 /// Run Git in the target directory with a pinned message locale. Paths are consumed only from `-z`
 /// stdout below; stderr is human diagnostic text and is never interpreted except for the shared
-/// not-a-repository distinction on the initial probe.
+/// not-a-repository distinction on the initial probe. The operator's global/system config is left in
+/// force: `safe.directory` so a differently-owned container or shared checkout stays usable, and the
+/// global ignore config so `changed_files`' content selection keeps excluding a globally-ignored
+/// secret rather than reading it into the prompt. The sole determinism concern — the disclosed
+/// *ignored* classification, which `--exclude-standard` would otherwise shape per-operator via the
+/// global `core.excludesFile` — is neutralized surgically at its own queries with
+/// `GIT_LOCAL_EXCLUDES_ONLY`, never by clearing protected config scopes wholesale.
 fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     ai::command("git")
         .map_err(|e| format!("could not prepare git: {e:#}"))?
         .env("LC_ALL", "C")
-        // Ambient-config isolation, the determinism sibling of LC_ALL: the snapshot must read the
-        // same repo state on any machine, so the operator's global and system git config can't
-        // shape it — notably `core.excludesFile`, whose global ignore `--exclude-standard` would
-        // otherwise fold into the "ignored" set, making the snapshot differ per operator. Only
-        // repo-local config (`.gitignore`, `.git/info/exclude`, `.git/config`) counts. `/dev/null`
-        // is git's documented disable sentinel for GIT_CONFIG_GLOBAL (honored on Git for Windows
-        // too; the per-platform release verifier exercises it). Config *reads* that want the
-        // effective value — `core.hooksPath` via `git_config_get` — deliberately route elsewhere.
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
         .arg("-C")
         .arg(root)
         .args(args)
@@ -835,6 +831,15 @@ fn query_git_paths(root: &Path, args: &[&str]) -> Result<GitPathSet, String> {
     git_stdout(root, args).map(|stdout| git_path_set(&stdout))
 }
 
+/// Neutralize the operator's global/system `core.excludesFile` for one invocation (a later `-c` wins
+/// over any ambient value — verified against a configured global excludes file), so the disclosed
+/// *ignored* classification depends only on repo-local sources (`.gitignore`, `.git/info/exclude`)
+/// and is identical on every machine. Scoped to exactly the two queries that produce that
+/// classification; every other query, and `changed_files`, keeps honoring the operator's global
+/// ignores, and no protected scope (`safe.directory`) is touched. `/dev/null` names an empty excludes
+/// source on every platform (Git treats a missing excludes path as "no patterns").
+const GIT_LOCAL_EXCLUDES_ONLY: [&str; 2] = ["-c", "core.excludesFile=/dev/null"];
+
 /// Collect the target-relative index and exception sets. `ls-files` emits paths relative to the
 /// `-C` directory, and `git diff --relative` does the same, avoiding any need to parse/strip a
 /// newline-delimited worktree prefix. Directory entries in the untracked/ignored sets stay collapsed.
@@ -860,7 +865,12 @@ fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
     // A target directory ignored by an ancestor worktree makes collapsed `ls-files --ignored`
     // fail in Git itself. Probe the scope root directly and represent it with `.`; exact tracked
     // entries still win during classification (a force-added file can live under an ignored dir).
-    let root_ignore = git_output(root, &["check-ignore", "--quiet", "--no-index", "--", "."])?;
+    let root_ignore_args: Vec<&str> = GIT_LOCAL_EXCLUDES_ONLY
+        .iter()
+        .copied()
+        .chain(["check-ignore", "--quiet", "--no-index", "--", "."])
+        .collect();
+    let root_ignore = git_output(root, &root_ignore_args)?;
     let root_ignored = match root_ignore.status.code() {
         Some(0) => true,
         Some(1) => false,
@@ -912,9 +922,10 @@ fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
             undecodable: 0,
         }
     } else {
-        query_git_paths(
-            root,
-            &[
+        let ignored_args: Vec<&str> = GIT_LOCAL_EXCLUDES_ONLY
+            .iter()
+            .copied()
+            .chain([
                 "ls-files",
                 "--others",
                 "--ignored",
@@ -924,8 +935,9 @@ fn git_snapshot(root: &Path) -> Result<GitSnapshot, String> {
                 "-z",
                 "--",
                 ".",
-            ],
-        )?
+            ])
+            .collect();
+        query_git_paths(root, &ignored_args)?
     };
     Ok(GitSnapshot {
         tracked,
