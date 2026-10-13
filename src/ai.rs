@@ -712,6 +712,35 @@ pub trait Backend {
         progress: Option<crate::runs::Active>,
     ) -> anyhow::Result<Synthesis>;
 
+    /// Drive this backend's agent CLI in agentic mode to implement work in a granted worktree — the
+    /// counterpart to [`Backend::synthesize`]'s constrained judgment (edit/write tools enabled, the
+    /// worktree write-granted, no output schema). Default: the backend has no agentic mode, so a
+    /// build refuses before spending; a backend adds agentic support by overriding this.
+    fn implement(
+        &self,
+        _req: &Request,
+        _progress: Option<crate::runs::Active>,
+    ) -> anyhow::Result<Synthesis> {
+        anyhow::bail!(
+            "this backend has no agentic build mode yet — `arc run build` currently supports only `--backend claude`"
+        )
+    }
+
+    /// Whether this backend has an agentic [`Backend::implement`] mode, so `build` can refuse before
+    /// creating a worktree or spending rather than only when `implement`'s default fires. Default:
+    /// false; a backend that overrides `implement` overrides this to `true`.
+    fn supports_agentic(&self) -> bool {
+        false
+    }
+
+    /// The execution boundary of an agentic [`Backend::implement`] run — distinct from
+    /// [`Backend::boundary`] because the worktree is write-granted and edit tools are enabled, which
+    /// the report must disclose honestly. Default: the constrained [`Backend::boundary`] (correct for
+    /// a backend with no agentic mode); an agentic backend overrides it to declare the write grant.
+    fn build_boundary(&self, ambient: bool, allowed_tools: &[String]) -> RunBoundary {
+        self.boundary(ambient, allowed_tools)
+    }
+
     /// This backend's default model, when neither `--model` nor an applicable configured default is
     /// set. Per-backend because the backends' model families differ.
     fn default_model(&self) -> &'static str;
@@ -962,6 +991,36 @@ impl Backend for ClaudeBackend {
     ) -> anyhow::Result<Synthesis> {
         synthesize_claude(req, progress)
     }
+
+    fn implement(
+        &self,
+        req: &Request,
+        progress: Option<crate::runs::Active>,
+    ) -> anyhow::Result<Synthesis> {
+        implement_claude(req, progress)
+    }
+
+    fn supports_agentic(&self) -> bool {
+        true
+    }
+
+    /// The boundary [`implement_claude`] enforces: the agentic build path runs in the worktree and
+    /// write-grants it to edit tools — a strictly stronger grant than synthesis, so it is disclosed
+    /// as its own shape rather than sharing the read-only one.
+    fn build_boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
+        RunBoundary {
+            ambient,
+            customizations: if ambient {
+                "user/project customizations enabled; inherited MCP disabled"
+            } else {
+                "user/project customizations disabled"
+            },
+            tool_runtime: "edit/write tools enabled (agentic build)",
+            repository_access: "build worktree granted read-write to edit tools",
+            session: "CLI session files disabled",
+            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
+        }
+    }
 }
 
 /// Spawn a configured agent-CLI `cmd`, feed it `prompt` on stdin, and fold its stdout JSONL event
@@ -1144,10 +1203,11 @@ fn claude_command(req: &Request) -> anyhow::Result<Command> {
     Ok(cmd)
 }
 
-/// Drive `claude -p` for one [`Request`] — the [`ClaudeBackend`] implementation. Costs real tokens.
+/// Drive `claude -p` for one constrained-synthesis [`Request`] — the [`ClaudeBackend::synthesize`]
+/// path. Costs real tokens.
 fn synthesize_claude(
     req: &Request,
-    mut progress: Option<crate::runs::Active>,
+    progress: Option<crate::runs::Active>,
 ) -> anyhow::Result<Synthesis> {
     let cmd = claude_command(req)?;
     // Ambient mode deliberately uses the target as Claude's cwd so its project customizations can
@@ -1157,10 +1217,34 @@ fn synthesize_claude(
     } else {
         std::env::temp_dir()
     };
+    run_claude(cmd, &cwd, req, progress)
+}
+
+/// Drive `claude` in agentic mode for a build [`Request`] — the [`ClaudeBackend::implement`] path.
+/// The command is the same builder (the caller shapes the Request with write-capable tools and no
+/// output schema); the only difference is the cwd — the granted worktree, where the agent edits.
+/// Costs real tokens.
+fn implement_claude(
+    req: &Request,
+    progress: Option<crate::runs::Active>,
+) -> anyhow::Result<Synthesis> {
+    run_claude(claude_command(req)?, req.dir, req, progress)
+}
+
+/// The shared executor behind [`synthesize_claude`] and [`implement_claude`]: drive a built
+/// `claude -p` command in `cwd`, fold its event stream into live progress, and parse the final
+/// `result` into a [`Synthesis`] — salvaging real usage from a mid-stream failure. The synthesis and
+/// build paths differ only in the command they build and the directory they run it in.
+fn run_claude(
+    cmd: Command,
+    cwd: &Path,
+    req: &Request,
+    mut progress: Option<crate::runs::Active>,
+) -> anyhow::Result<Synthesis> {
     let mut result_line: Option<String> = None;
     let driven = drive(
         cmd,
-        &cwd,
+        cwd,
         req.prompt,
         "failed to launch `claude` — is the Claude Code CLI installed and on PATH?",
         |kind, event, raw| match kind {

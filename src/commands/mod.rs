@@ -20,7 +20,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 
-use crate::cli::{GlobalArgs, SynthArgs};
+use crate::cli::{BuildArgs, GlobalArgs, SynthArgs};
 use crate::synth::{self, SynthOptions};
 
 /// A command's structured output: a JSON Schema the model's result is validated against (returned
@@ -200,40 +200,22 @@ pub fn run_synthesis(
     // per-backend policy below — which model default applies, whether a native spend cap is
     // honored, and which requested capabilities it can't — so this function never branches on the
     // backend name (that lives only in `ai::backend`, the single home of the known backends).
-    let backend_name = args
-        .backend
-        .clone()
-        .or_else(|| settings.backend.clone())
-        .ok_or_else(crate::ai::no_backend_selected)?;
-    let backend = crate::ai::backend(&backend_name)?;
-    // Validate an explicit cap at the boundary — the same rule `config set` and the settings loader
-    // apply — so a zero/negative/non-finite value is rejected before any spend rather than riding
-    // into the backend as a nonsense "safety" cap.
-    if let Some(cap) = args.max_budget_usd {
-        crate::settings::validate_budget(cap).context("invalid --max-budget-usd")?;
-    }
-    // Reject, before any spend, a requested capability this backend can't honor — surfaced as an
-    // error, never silently dropped.
-    backend.reject_unsupported(args.max_budget_usd, &args.allow_tool)?;
-    let model = backend.resolve_model(args.model.as_deref(), backend.configured_model(&settings));
-    // The resolved id — whichever of flag/config/default supplied it — rides argv as `--model`'s
-    // value; reject an option-shaped or empty one here, before any spend, rather than let it
-    // escape its value slot in the child CLI's grammar.
-    crate::ai::validate_model_id(&model)?;
-    let max_budget_usd = backend.resolve_budget(args.max_budget_usd, settings.max_budget_usd);
-    // A configured budget cap the backend can't honor is surfaced, never silently dropped. An explicit
-    // --max-budget-usd is already rejected above; a configured default would otherwise just vanish here
-    // (e.g. codex has no native cap), leaving the user's safety lever silently inactive.
-    if args.max_budget_usd.is_none()
-        && let Some(cap) = settings.max_budget_usd
-        && max_budget_usd.is_none()
-    {
-        eprintln!(
-            "arclite: the max_budget_usd setting ({}) not applied — the {backend_name} backend has no native budget cap",
-            crate::log::cost_display(cap)
-        );
-    }
-    let reasoning_effort = backend.reasoning_effort(settings.codex_reasoning_effort.as_deref());
+    // Backend and its per-run parameters — resolved once, in the one home the build verb shares, so
+    // no path re-derives (or drifts on) which model/budget/effort applies. Destructured into the same
+    // names the assembly below already uses, so this is the only line that changes here.
+    let RunBackend {
+        backend,
+        name: backend_name,
+        model,
+        max_budget_usd,
+        reasoning_effort,
+    } = resolve_run_backend(
+        args.backend.as_deref(),
+        args.model.as_deref(),
+        args.max_budget_usd,
+        &args.allow_tool,
+        &settings,
+    )?;
     let log = settings.logging_enabled();
     // Disclose which settings layers are active (user then project) in the run output — configuration
     // detected and in effect is reported, never left for the reader to infer.
@@ -394,6 +376,182 @@ pub fn run_synthesis(
         }
     }
     outcome
+}
+
+/// The backend and its resolved per-run parameters, shared by every AI verb (synthesis and build).
+struct RunBackend {
+    backend: Box<dyn crate::ai::Backend>,
+    name: String,
+    model: String,
+    max_budget_usd: Option<f64>,
+    reasoning_effort: Option<String>,
+}
+
+/// Resolve the backend (explicit `--backend` over the configured `backend` setting, with no built-in
+/// default — the backend is the thing that spends) and its per-run parameters: the model
+/// (flag → config → default), the honored budget cap, and reasoning effort — with the same pre-spend
+/// validations (budget shape, option-shaped model id, a capability the backend can't honor) and the
+/// same not-applied-budget disclosure. One home, so synthesis and build can't drift on backend policy.
+fn resolve_run_backend(
+    backend_flag: Option<&str>,
+    model_flag: Option<&str>,
+    max_budget_flag: Option<f64>,
+    allow_tool: &[String],
+    settings: &crate::settings::Settings,
+) -> anyhow::Result<RunBackend> {
+    let name = backend_flag
+        .map(str::to_owned)
+        .or_else(|| settings.backend.clone())
+        .ok_or_else(crate::ai::no_backend_selected)?;
+    let backend = crate::ai::backend(&name)?;
+    // Validate an explicit cap at the boundary — a zero/negative/non-finite value is rejected before
+    // any spend rather than riding into the backend as a nonsense "safety" cap.
+    if let Some(cap) = max_budget_flag {
+        crate::settings::validate_budget(cap).context("invalid --max-budget-usd")?;
+    }
+    // Reject, before any spend, a requested capability this backend can't honor.
+    backend.reject_unsupported(max_budget_flag, allow_tool)?;
+    let model = backend.resolve_model(model_flag, backend.configured_model(settings));
+    // The resolved id rides argv as `--model`'s value; reject an option-shaped or empty one here.
+    crate::ai::validate_model_id(&model)?;
+    let max_budget_usd = backend.resolve_budget(max_budget_flag, settings.max_budget_usd);
+    // A configured cap the backend can't honor is surfaced, never silently dropped.
+    if max_budget_flag.is_none()
+        && let Some(cap) = settings.max_budget_usd
+        && max_budget_usd.is_none()
+    {
+        eprintln!(
+            "arclite: the max_budget_usd setting ({}) not applied — the {name} backend has no native budget cap",
+            crate::log::cost_display(cap)
+        );
+    }
+    let reasoning_effort = backend.reasoning_effort(settings.codex_reasoning_effort.as_deref());
+    Ok(RunBackend {
+        backend,
+        name,
+        model,
+        max_budget_usd,
+        reasoning_effort,
+    })
+}
+
+/// The build verb's role directive — minimal by the dedicated-prompts discipline (name the role and
+/// the grounds; don't prescribe the tools or the thinking). The item, the rules, and the repository
+/// orientation follow it in the assembled prompt.
+const BUILD_ROLE: &str = "You are implementing one item from this repository's agenda, working directly in a dedicated git worktree set up for you. The item below states the intent; the repository's rules state the standards the change must meet; the orientation that follows (the README/specification) is your map. Make the edits that implement the item, in the style and structure the surrounding code already uses. Leave the worktree holding the change you believe is correct — committing it and judging whether it is good happen after you finish, through the operator's review and the repository's own pre-push gate, so your work is the implementation itself, not verifying or committing it.";
+
+/// The tools a build agent is granted — read and edit within the worktree only. No shell: build runs
+/// no verification of its own (the pre-push gate does) and arc makes the commit, so the grant stays
+/// dir-scoped, with nothing that can write outside the worktree.
+const BUILD_TOOL_NAMES: &[&str] = &["Read", "Edit", "Write", "Glob", "Grep"];
+
+/// The `arc run build --item <id>` marshal: assemble the build prompt (the item, the active rules,
+/// the repository orientation) and resolve the worktree plan (branch, local default-branch base,
+/// worktree path), then hand off to [`crate::synth::run_build`] for the agentic run. Every
+/// refusal — a non-agentic backend, an unknown item, an item that already has a worktree — happens
+/// here, before anything is created or any spend.
+pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
+    let settings = crate::settings::Settings::load(&args.path)?;
+    let rb = resolve_run_backend(
+        args.backend.as_deref(),
+        args.model.as_deref(),
+        args.max_budget_usd,
+        &[],
+        &settings,
+    )?;
+    anyhow::ensure!(
+        rb.backend.supports_agentic(),
+        "the {} backend has no agentic build mode — `arc run build` currently requires `--backend claude`",
+        rb.name
+    );
+    // The item is the build's primary instruction — resolve its text (and refuse an unknown id,
+    // listing the open agenda) before creating anything.
+    let agenda = items::load(&args.path)?;
+    let item_body = agenda.body(&args.item).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no open agenda item `{}` — open items: {}",
+            args.item,
+            agenda.presented_ids().join(", ")
+        )
+    })?;
+    // The id becomes a branch and a path component; keep it a single safe segment.
+    anyhow::ensure!(
+        !args.item.is_empty()
+            && !args.item.contains('/')
+            && !args.item.contains("..")
+            && args.item.chars().all(|c| !c.is_control()),
+        "`{}` is not a usable item id for a build branch and worktree",
+        args.item
+    );
+    let resolution =
+        resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
+    let ctx = synth::gather_context(
+        &args.path,
+        &synth::ContextSpec {
+            includes: &[],
+            rule_sources: &resolution.sources,
+            disabled_rules: &settings.disabled_rules,
+            max: None,
+            changed: false,
+            exclude: &[],
+            scan: true,
+            findings: false,
+            recheck_findings: false,
+            agenda: false,
+            from_runs: &[],
+        },
+    )?;
+    let mut prompt = BUILD_ROLE.to_owned();
+    prompt.push_str("\n\n## The item to implement\n\n### ");
+    prompt.push_str(&args.item);
+    prompt.push_str("\n\n");
+    prompt.push_str(item_body);
+    prompt.push_str("\n\n");
+    prompt.push_str(&ctx.text);
+
+    // The worktree plan — resolved before any spend; a missing default branch or an existing build
+    // for this item is refused here.
+    let (_default_branch, base) = synth::default_branch_base(&ctx.root)
+        .map_err(|e| anyhow::anyhow!("could not resolve the build base: {e}"))?;
+    let branch = format!("arc/build/{}", args.item);
+    if synth::build_branch_exists(&ctx.root, &branch)
+        .map_err(|e| anyhow::anyhow!("could not check for an existing build: {e}"))?
+    {
+        anyhow::bail!(
+            "a build already exists for `{}` (branch {branch}) — resume or discard it (build-management)",
+            args.item
+        );
+    }
+    let worktree = crate::build_worktree_path(&ctx.root, &args.item).ok_or_else(|| {
+        anyhow::anyhow!("could not resolve a worktree path (home directory unknown)")
+    })?;
+
+    let build_tools: Vec<String> = BUILD_TOOL_NAMES.iter().map(|s| (*s).to_owned()).collect();
+    let config = settings.active_display();
+    synth::run_build(
+        &prompt,
+        &synth::BuildOptions {
+            item: &args.item,
+            branch: &branch,
+            base: &base,
+            worktree: &worktree,
+            repo: &ctx.root,
+            model: &rb.model,
+            backend: &rb.name,
+            max_budget_usd: rb.max_budget_usd,
+            reasoning_effort: rb.reasoning_effort.as_deref(),
+            reasoning_applicable: rb.backend.reasoning_effort_applicable(),
+            allowed_tools: &build_tools,
+            sources: &ctx.sources,
+            rules_active: &ctx.rules_active,
+            scope: &ctx.scope,
+            config: &config,
+            ambient_memory: args.ambient_memory,
+            dry_run: args.dry_run,
+            json: global.json,
+            log: settings.logging_enabled(),
+        },
+    )
 }
 
 /// What `--rules`/`--ruleset`/the `ruleset` setting resolved to: a human description of the

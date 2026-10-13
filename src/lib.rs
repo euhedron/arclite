@@ -78,6 +78,31 @@ pub(crate) fn inbox_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
     repo_root.join(ARC_DIR).join(INBOX_DIR)
 }
 
+/// Build worktrees live under `~/.arc/worktrees/<repo-key>/` — outside any launch tree (never inside
+/// it, which the build contract forbids), namespaced by the repo's canonical path so builds across
+/// repos don't collide. `git worktree list` tracks them regardless of location; this is the
+/// deterministic home build-management derives the same way. `None` when the home dir is unknown
+/// (same as [`arc_home`]).
+pub(crate) const WORKTREES_DIR: &str = "worktrees";
+pub(crate) fn build_worktrees_dir(repo_root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let canon = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    let key: String = canon
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    Some(arc_home()?.join(WORKTREES_DIR).join(key))
+}
+
+/// The build worktree path for `item_id` in `repo` — the per-item directory under the repo's
+/// worktrees home. The caller validates `item_id` is a safe single path component first.
+pub(crate) fn build_worktree_path(
+    repo_root: &std::path::Path,
+    item_id: &str,
+) -> Option<std::path::PathBuf> {
+    Some(build_worktrees_dir(repo_root)?.join(item_id))
+}
+
 /// Atomically create `path` with `content` if absent: `create_new` claims the name, an existing
 /// file is the benign already-seeded case (`Ok(false)`, left untouched — seeding never overwrites),
 /// any other error propagates. The seed-if-absent skeleton stated once — init's scaffold files, the
@@ -453,12 +478,17 @@ pub fn run() -> ExitCode {
                 ExitCode::SUCCESS
             })
         }
-        Command::Run(args) => {
-            // The verb registry owns the enum→verb mapping (verbs::resolve, beside verbs::ALL);
-            // this call site just drives the resolved row.
-            let (verb, a) = commands::verbs::resolve(&args.verb);
-            verb.run(a, &cli.global)
-        }
+        Command::Run(args) => match &args.verb {
+            // `build` is agentic (a committed changeset, not a structured synthesis), so it carries
+            // its own args and its own dispatch path rather than the synthesis registry.
+            cli::RunVerb::Build(a) => commands::run_build(a, &cli.global),
+            verb => {
+                // The verb registry owns the enum→verb mapping (verbs::resolve, beside verbs::ALL);
+                // this call site just drives the resolved row.
+                let (resolved, a) = commands::verbs::resolve(verb);
+                resolved.run(a, &cli.global)
+            }
+        },
     };
 
     match result {

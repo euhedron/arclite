@@ -1326,6 +1326,133 @@ fn repo_commit(root: &Path) -> Option<String> {
     }
 }
 
+/// The default branch a build worktree bases on, and that branch's *local* head sha. The branch is
+/// what `origin/HEAD` names (`origin/main` → `main`), falling back to a local `main` when no remote
+/// HEAD is set; the base is the local branch's head, never the remote-tracking tip, so a
+/// local-vs-remote divergence stays visible on the run record. Errors before anything is created
+/// when no such local branch resolves. Reuses `git_output` for the pinned locale and config handling.
+pub(crate) fn default_branch_base(root: &Path) -> Result<(String, String), String> {
+    let branch = match git_output(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
+        Ok(out) if out.status.success() => {
+            let named = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            named.strip_prefix("origin/").unwrap_or(&named).to_owned()
+        }
+        _ => "main".to_owned(),
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    let head = git_output(
+        root,
+        &["rev-parse", "--verify", "--quiet", branch_ref.as_str()],
+    )
+    .map_err(|e| format!("could not resolve the default branch `{branch}`: {e}"))?;
+    if !head.status.success() {
+        return Err(format!(
+            "no local default branch to base the build on — `{branch}` (what origin/HEAD names, or a local main) has no local ref"
+        ));
+    }
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    if sha.is_empty() {
+        return Err(format!("default branch `{branch}` resolves to no commit"));
+    }
+    Ok((branch, sha))
+}
+
+/// Whether a build branch already exists for an item — build refuses a second worktree per item,
+/// pointing the operator at resume/discard (build-management's surface) instead.
+pub(crate) fn build_branch_exists(root: &Path, branch: &str) -> Result<bool, String> {
+    let branch_ref = format!("refs/heads/{branch}");
+    let out = git_output(
+        root,
+        &["rev-parse", "--verify", "--quiet", branch_ref.as_str()],
+    )
+    .map_err(|e| format!("could not check for an existing build branch: {e}"))?;
+    Ok(out.status.success())
+}
+
+/// Create the build worktree: a fresh `branch` at `base`, checked out at `path`. Surfaces git's
+/// stderr on failure rather than leaving a partial worktree behind.
+pub(crate) fn create_build_worktree(
+    root: &Path,
+    branch: &str,
+    path: &Path,
+    base: &str,
+) -> Result<(), String> {
+    let path_str = path.to_string_lossy();
+    let out = git_output(
+        root,
+        &["worktree", "add", "-b", branch, path_str.as_ref(), base],
+    )
+    .map_err(|e| format!("git worktree add could not run: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Close out a build: commit anything the agent left uncommitted in the worktree, then report the
+/// branch's short head sha if it advanced past `base` (a committed change was produced), or `None`
+/// (no change — build-management reads that as an errored, not pending-review, run). Every git call
+/// runs in the worktree (`-C path`), never the launch tree. `message` anchors only the commit of
+/// leftover work; commits the agent made itself keep their own messages.
+pub(crate) fn finalize_build(
+    worktree: &Path,
+    base: &str,
+    message: &str,
+) -> Result<Option<String>, String> {
+    let run = |args: &[&str]| -> Result<std::process::Output, String> {
+        let verb = args.first().copied().unwrap_or("git");
+        git_output(worktree, args)
+            .map_err(|e| format!("git {verb} could not run: {e}"))
+            .and_then(|out| {
+                if out.status.success() || verb == "diff" {
+                    Ok(out)
+                } else {
+                    Err(format!(
+                        "git {verb} failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ))
+                }
+            })
+    };
+    run(&["add", "-A"])?;
+    // `diff --cached --quiet` exits 0 when nothing is staged, 1 when staged changes exist; anything
+    // else is a real failure. Only commit when there is something staged — the agent may already
+    // have committed its own work.
+    let staged = run(&["diff", "--cached", "--quiet"])?;
+    match staged.status.code() {
+        Some(0) => {}
+        Some(1) => {
+            run(&["commit", "-m", message])?;
+        }
+        _ => {
+            return Err(format!(
+                "git diff --cached failed: {}",
+                String::from_utf8_lossy(&staged.stderr).trim()
+            ));
+        }
+    }
+    // A change was produced iff the branch advanced past base — whether by the agent's own commits
+    // or the one just made for leftover work.
+    let range = format!("{base}..HEAD");
+    let count = run(&["rev-list", "--count", range.as_str()])?;
+    let n: u64 = String::from_utf8_lossy(&count.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    if n == 0 {
+        return Ok(None);
+    }
+    let head = run(&["rev-parse", "--verify", "--quiet", "--short", "HEAD"])?;
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    Ok((!sha.is_empty()).then_some(sha))
+}
+
 /// What a run gathers into context — the shaping levers, grouped so adding one is a field, not a new
 /// positional argument. Built from the run's args at the call site (the CLI↔synth marshal stays there).
 pub struct ContextSpec<'a> {
@@ -1646,6 +1773,22 @@ struct SynthOutput<'a> {
     error: Option<String>,
 }
 
+/// The build-verb slice of a run record — present only on `arc run build` runs (absent, and omitted
+/// from the JSON, on every synthesis run, which it leaves untouched). Carries what build-management
+/// derives state from: the item built, its worktree branch and path, the base it forked from, and
+/// the clean-completion signal — `completed` with the committed head sha, or `errored` (no change
+/// produced, or the commit could not be made).
+#[derive(Serialize, Clone)]
+struct BuildRun<'a> {
+    item: &'a str,
+    branch: &'a str,
+    worktree: String,
+    base: &'a str,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<String>,
+}
+
 /// One line of `~/.arc/logs/runs.jsonl`: the durable, machine-readable trace of a real run — its
 /// params, context sources, and ground-truth token usage + cost. Dry runs are never logged (no
 /// spend, no call). The full [`ai::Usage`] is nested verbatim, so token/cost fields single-source.
@@ -1710,6 +1853,10 @@ struct RunRecord<'a> {
     /// absent, so existing records and the success case are unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
+    /// The build-verb outcome ([`BuildRun`]) — present only on `arc run build` runs; omitted (and the
+    /// JSON unchanged) on every synthesis run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_run: Option<BuildRun<'a>>,
 }
 
 /// The full result of one run, written to `~/.arc/logs/results/<id>.json` so `arc log <id>` can
@@ -2023,6 +2170,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             gate: opts.gate,
             blocked: gate_blocked,
             error: errored.as_deref(),
+            build_run: None,
         };
         let logged = crate::log::append(&record);
         // Store the full result (best-effort) so `arc log <id>` can re-show it without re-running.
@@ -2068,6 +2216,263 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         ExitCode::from(ERRORED_EXIT)
     } else if gate_blocked {
         ExitCode::from(GATE_BLOCKED_EXIT)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// The build verb's run-shaping inputs — the agentic counterpart to [`SynthOptions`]. The caller
+/// (the CLI marshal) resolves the item, backend, context, branch and base, and the worktree path;
+/// this path creates the worktree (real runs only), drives the agent, and records the outcome.
+pub struct BuildOptions<'a> {
+    pub item: &'a str,
+    pub branch: &'a str,
+    pub base: &'a str,
+    pub worktree: &'a Path,
+    pub repo: &'a Path,
+    pub model: &'a str,
+    pub backend: &'a str,
+    pub max_budget_usd: Option<f64>,
+    pub reasoning_effort: Option<&'a str>,
+    pub reasoning_applicable: bool,
+    pub allowed_tools: &'a [String],
+    pub sources: &'a [String],
+    pub rules_active: &'a [crate::rules::ActiveRule],
+    pub scope: &'a Scope,
+    pub config: &'a [String],
+    pub ambient_memory: bool,
+    pub dry_run: bool,
+    pub json: bool,
+    pub log: bool,
+}
+
+#[derive(Serialize)]
+struct BuildDryRun<'a> {
+    dry_run: bool,
+    run: RunReport<'a>,
+    build: BuildRun<'a>,
+    estimate: ai::Estimate,
+    prompt: &'a str,
+}
+
+#[derive(Serialize)]
+struct BuildOutput<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    run: RunReport<'a>,
+    build: BuildRun<'a>,
+    usage: ai::Usage,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    log: Option<String>,
+}
+
+/// The agentic `build` path — the counterpart to [`run`]: drive the backend in agentic mode to
+/// implement one item inside its worktree, commit the result, and record the run with its
+/// [`BuildRun`] outcome. No schema, gate, or fan-out: build owns only "did the agent produce a
+/// committed change"; whether that change is *good* is the standing pre-push gate's job when the
+/// operator reviews and pushes the branch. The worktree is created here (a real run only — a dry run
+/// has no side effects), so nothing is made before the run is actually going to spend.
+pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> {
+    let backend = ai::backend(opts.backend)?;
+    let mut report = RunReport {
+        model: opts.model.to_owned(),
+        model_source: None,
+        backend: opts.backend,
+        runs: 1,
+        runs_requested: 1,
+        tools: opts.allowed_tools.iter().map(String::as_str).collect(),
+        boundary: backend.build_boundary(opts.ambient_memory, opts.allowed_tools),
+        max_budget_usd: opts.max_budget_usd,
+        reasoning_effort: opts.reasoning_effort,
+        reasoning_applicable: opts.reasoning_applicable,
+        ranked: false,
+        kinds: false,
+        free_kinds: false,
+        context: opts.sources,
+        excluded: &[],
+        config: opts.config,
+        gate: None,
+    };
+    let build_line = format!(
+        "build: item={} branch={} base={} worktree={}",
+        opts.item,
+        opts.branch,
+        opts.base,
+        crate::display_path(&opts.worktree.display().to_string())
+    );
+
+    if opts.dry_run {
+        let estimate = ai::estimate(prompt);
+        let preview = format!(
+            "[dry run]\nrun: {}\n{build_line}\nprompt: {} chars (~{} tokens)\nnote: a real build creates the worktree, drives the agent to edit it, then commits — correctness is the standing pre-push gate's when you push the branch",
+            report.human(),
+            estimate.chars,
+            estimate.approx_tokens,
+        );
+        let human =
+            format!("[dry run] the exact prompt a real build would send:\n\n{prompt}\n\n{preview}");
+        let out = BuildDryRun {
+            dry_run: true,
+            run: report,
+            build: BuildRun {
+                item: opts.item,
+                branch: opts.branch,
+                worktree: opts.worktree.display().to_string(),
+                base: opts.base,
+                outcome: "dry-run",
+                commit: None,
+            },
+            estimate,
+            prompt,
+        };
+        emit(&out, &human, opts.json)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Create the worktree before spending — a real run only, so a dry run leaves no side effect.
+    create_build_worktree(opts.repo, opts.branch, opts.worktree, opts.base)
+        .map_err(|e| anyhow::anyhow!("could not create the build worktree: {e}"))?;
+
+    let active = crate::runs::register("build", opts.repo, opts.model, 0);
+    if active.is_none() {
+        eprintln!(
+            "arclite: this build won't appear in `arc status` (couldn't write its registry marker)"
+        );
+    }
+    let synthesis = backend.implement(
+        &ai::Request {
+            prompt,
+            model: opts.model,
+            allowed_tools: opts.allowed_tools,
+            dir: opts.worktree,
+            ambient_memory: opts.ambient_memory,
+            json_schema: None,
+            max_budget_usd: opts.max_budget_usd,
+            reasoning_effort: opts.reasoning_effort,
+        },
+        active,
+    )?;
+    let usage = synthesis.usage;
+    report.model = usage.model.clone();
+    report.model_source = Some(usage.model_source);
+
+    // Commit whatever the agent left (its own commits keep their messages; this anchors any leftover
+    // uncommitted work), then decide the outcome: a clean completion is a committed change from a
+    // non-errored agent run; anything else — the agent failed, or produced no change — is errored,
+    // and build-management reads that (never "pending review") for the worktree it leaves behind.
+    let commit_msg = format!("arc build: {}", opts.item);
+    let committed = finalize_build(opts.worktree, opts.base, &commit_msg)
+        .map_err(|e| anyhow::anyhow!("could not finalize the build worktree: {e}"))?;
+    let errored: Option<String> = match (synthesis.error, committed.is_some()) {
+        (Some(e), _) => Some(e),
+        (None, false) => {
+            Some("the build produced no committed change — the agent made no edits".to_owned())
+        }
+        (None, true) => None,
+    };
+    let is_errored = errored.is_some();
+    let outcome = if is_errored { "errored" } else { "completed" };
+    let commit = if is_errored { None } else { committed };
+    let build_run = BuildRun {
+        item: opts.item,
+        branch: opts.branch,
+        worktree: opts.worktree.display().to_string(),
+        base: opts.base,
+        outcome,
+        commit: commit.clone(),
+    };
+
+    let id = crate::log::new_id();
+    let ts = crate::log::now_secs();
+    let (logged, stored_id) = if opts.log {
+        let record = RunRecord {
+            id: id.clone(),
+            ts,
+            version: env!("CARGO_PKG_VERSION"),
+            build: env!("ARC_BUILD_COMMIT"),
+            command: "build",
+            repo: crate::log::repo_record_string(opts.repo),
+            commit: repo_commit(opts.repo),
+            model: &report.model,
+            backend: opts.backend,
+            runs: 1,
+            runs_requested: 1,
+            boundary: report.boundary,
+            max_budget_usd: opts.max_budget_usd,
+            reasoning_effort: opts.reasoning_effort,
+            tools: opts.allowed_tools,
+            ranked: false,
+            kinds: false,
+            free_kinds: false,
+            structured: false,
+            prompt_chars: prompt.chars().count(),
+            sources: opts.sources,
+            rules: opts.rules_active,
+            taxonomy: &[],
+            scope: opts.scope,
+            usage: &usage,
+            gate: None,
+            blocked: false,
+            error: errored.as_deref(),
+            build_run: Some(build_run.clone()),
+        };
+        let logged = crate::log::append(&record);
+        crate::log::store_result(
+            &id,
+            &StoredRun {
+                run: &record,
+                prompt,
+                text: &synthesis.text,
+                structured: None,
+            },
+        );
+        (logged, Some(id))
+    } else {
+        (None, None)
+    };
+
+    let outcome_line = match (&commit, &errored) {
+        (Some(sha), _) => format!("completed — committed {sha} on {}", opts.branch),
+        (None, Some(reason)) => format!("errored — {reason}"),
+        (None, None) => "errored".to_owned(),
+    };
+    let mut human = format!(
+        "{outcome_line}\n\nrun: {}\n{build_line}\ncost: {}",
+        report.human(),
+        crate::log::usage_display(
+            usage.input_tokens,
+            usage.cache_creation_input_tokens,
+            usage.cache_read_input_tokens,
+            usage.output_tokens,
+            usage.cost_usd,
+            usage.cost_partial,
+        ),
+    );
+    match (&logged, &stored_id) {
+        (Some(path), Some(id)) => {
+            human.push_str(&format!(
+                "\nlogged: {} · id {id}",
+                crate::display_path(&path.display().to_string())
+            ));
+        }
+        (None, _) if !opts.log => human.push_str(LOGGING_OFF_NOTE),
+        _ => {}
+    }
+    let out = BuildOutput {
+        id: stored_id,
+        run: report,
+        build: build_run,
+        usage,
+        text: synthesis.text,
+        error: errored,
+        log: logged.map(|p| p.display().to_string()),
+    };
+    emit(&out, &human, opts.json)?;
+    Ok(if is_errored {
+        ExitCode::from(ERRORED_EXIT)
     } else {
         ExitCode::SUCCESS
     })

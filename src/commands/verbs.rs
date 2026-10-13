@@ -347,6 +347,11 @@ pub fn resolve(verb: &cli::RunVerb) -> (&'static Verb, &SynthArgs) {
         V::Verify(a) => (&VERIFY, a),
         V::Evolve(a) => (&EVOLVE, a),
         V::Aggregate(a) => (&AGGREGATE, a),
+        // `build` is agentic — its own args and its own dispatch path (`lib.rs` routes it to
+        // `commands::run_build`), so it never reaches the synthesis registry and has no row here.
+        V::Build(_) => {
+            unreachable!("`build` dispatches via its own path, not the synthesis registry")
+        }
     }
 }
 
@@ -362,10 +367,13 @@ mod tests {
         let run = cmd
             .find_subcommand(crate::cli::NAME_RUN)
             .expect("the run group exists");
-        let clap_names: std::collections::BTreeSet<String> = run
+        let mut clap_names: std::collections::BTreeSet<String> = run
             .get_subcommands()
             .map(|c| c.get_name().to_owned())
             .collect();
+        // `build` is the one run verb deliberately absent from the synthesis registry — it is
+        // agentic, with its own args and dispatch path — so it is excluded from this parity check.
+        clap_names.remove(crate::cli::NAME_BUILD);
         let all_names: std::collections::BTreeSet<String> =
             super::ALL.iter().map(|v| v.name().to_owned()).collect();
         assert_eq!(clap_names, all_names);
