@@ -1023,7 +1023,7 @@ impl Backend for ClaudeBackend {
             ambient,
             customizations: claude_customizations_boundary(ambient),
             tool_runtime: "edit/write tools enabled (agentic build)",
-            repository_access: "build worktree granted read-write to edit tools",
+            repository_access: "edit/write path-scoped to the build worktree; reads over the checkout",
             session: CLAUDE_SESSION_BOUNDARY,
             inherited: CLAUDE_INHERITED_BOUNDARY,
         }
@@ -1176,6 +1176,11 @@ fn claude_command(req: &Request) -> anyhow::Result<Command> {
     if req.allowed_tools.is_empty() {
         cmd.arg("");
     } else {
+        // Each grant is passed verbatim to both `--tools` (availability) and `--allowedTools`
+        // (permission). A grant may be path-scoped — build passes `Edit(//worktree/**)` so the write
+        // is confined to the worktree (a bare `Edit` would permit any absolute path; verified against
+        // the Claude permission docs) — exactly as a scoped `Bash(git …)` grant already flows through
+        // here; the confinement is the scoped rule in `--allowedTools`.
         cmd.args(req.allowed_tools);
         cmd.arg("--allowedTools").args(req.allowed_tools);
         // cwd is neutral (below), so grant the allowed tools read access to the repo.

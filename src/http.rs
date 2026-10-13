@@ -124,21 +124,27 @@ pub(crate) fn get(
 /// never on an inconclusive probe, and never silently on Windows without `SystemRoot`.
 pub(crate) fn curl_program() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
-    let system_curl = {
-        // The trusted binary resolves via SystemRoot; with it unset the explicit path can't be built
-        // at all, and a bare PATH `curl` could be any shadowing binary — so that anomaly errors
-        // rather than silently downgrading the trust anchor.
-        let root = std::env::var_os("SystemRoot").ok_or_else(|| {
-            anyhow::anyhow!(
-                "SystemRoot is unset, so the system curl.exe can't be located — refusing to fall \
-                 back to an arbitrary curl on PATH"
-            )
-        })?;
-        Path::new(&root).join("System32").join("curl.exe")
-    };
+    let system_curl = system32_tool("curl.exe").ok_or_else(|| {
+        // With SystemRoot unset the explicit path can't be built at all, and a bare PATH `curl` could
+        // be any shadowing binary — so that anomaly errors rather than silently downgrading the trust
+        // anchor.
+        anyhow::anyhow!(
+            "SystemRoot is unset, so the system curl.exe can't be located — refusing to fall \
+             back to an arbitrary curl on PATH"
+        )
+    })?;
     #[cfg(not(windows))]
     let system_curl = PathBuf::from("/usr/bin/curl");
     Ok(system_binary(&[system_curl], "curl"))
+}
+
+/// `%SystemRoot%\System32\<name>` — the trusted system-tool path on Windows, built from the one home
+/// so curl's resolution and the liveness probe's `tasklist` resolution can't drift. `None` when
+/// `SystemRoot` is unset (the trusted path can't be built at all); each caller decides what that
+/// means — curl errors rather than fall back to a shadowing binary, the probe reports inconclusive.
+#[cfg(windows)]
+pub(crate) fn system32_tool(name: &str) -> Option<PathBuf> {
+    std::env::var_os("SystemRoot").map(|root| Path::new(&root).join("System32").join(name))
 }
 
 /// Resolve a trusted tool by explicit system path: the first `candidate` not *confirmed* absent

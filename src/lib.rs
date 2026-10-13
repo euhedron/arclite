@@ -86,11 +86,16 @@ pub(crate) fn inbox_dir(repo_root: &std::path::Path) -> std::path::PathBuf {
 pub(crate) const WORKTREES_DIR: &str = "worktrees";
 pub(crate) fn build_worktrees_dir(repo_root: &std::path::Path) -> Option<std::path::PathBuf> {
     let canon = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
-    let key: String = canon
-        .to_string_lossy()
+    let canon_str = canon.to_string_lossy();
+    // A readable sanitized prefix for browsability, plus a fingerprint of the *full* canonical path
+    // so the key is injective: the char-replacement alone is lossy (`/tmp/a-b/c` and `/tmp/a/b-c`
+    // both sanitize to `-tmp-a-b-c`), so distinct repos could otherwise share a worktrees home and
+    // collide; the fingerprint disambiguates them.
+    let sanitized: String = canon_str
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
+    let key = format!("{sanitized}-{}", crate::rules::fingerprint(&canon_str));
     Some(arc_home()?.join(WORKTREES_DIR).join(key))
 }
 

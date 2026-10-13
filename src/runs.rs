@@ -237,10 +237,7 @@ fn process_alive(pid: u32) -> Option<bool> {
         // SystemRoot unset means the trusted path can't be built at all — inconclusive (None),
         // never a silent downgrade to an arbitrary PATH tasklist (curl_program's posture, applied
         // to the probe's can't-tell direction).
-        let root = std::env::var_os("SystemRoot")?;
-        let tasklist = std::path::Path::new(&root)
-            .join("System32")
-            .join("tasklist.exe");
+        let tasklist = crate::http::system32_tool("tasklist.exe")?;
         let output = std::process::Command::new(tasklist)
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
             .output()

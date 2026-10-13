@@ -1395,6 +1395,35 @@ pub(crate) fn create_build_worktree(
     Ok(())
 }
 
+/// Remove a build worktree and its branch — the rollback when the agent fails to even launch after
+/// the worktree was created (nothing spent), so the item is not left with an orphan that blocks a
+/// re-build until the operator cleans up Git by hand. Surfaces any git failure to the caller (folded
+/// onto the original launch error), never hidden.
+pub(crate) fn remove_build_worktree(
+    root: &Path,
+    branch: &str,
+    worktree: &Path,
+) -> Result<(), String> {
+    let path_str = worktree.to_string_lossy();
+    let rm = git_output(root, &["worktree", "remove", "--force", path_str.as_ref()])
+        .map_err(|e| format!("git worktree remove could not run: {e}"))?;
+    if !rm.status.success() {
+        return Err(format!(
+            "git worktree remove failed: {}",
+            String::from_utf8_lossy(&rm.stderr).trim()
+        ));
+    }
+    let br = git_output(root, &["branch", "-D", branch])
+        .map_err(|e| format!("git branch -D could not run: {e}"))?;
+    if !br.status.success() {
+        return Err(format!(
+            "git branch -D failed: {}",
+            String::from_utf8_lossy(&br.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 /// Close out a build. The agent has only edit tools (no shell), so it never commits — any change it
 /// made sits uncommitted in the worktree. Stage everything and commit it iff something is staged,
 /// returning the new short head sha; nothing staged means the agent produced no change (`None` —
@@ -2358,7 +2387,7 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
             "arclite: this build won't appear in `arc status` (couldn't write its registry marker)"
         );
     }
-    let synthesis = backend.implement(
+    let synthesis = match backend.implement(
         &ai::Request {
             prompt,
             model: opts.model,
@@ -2370,7 +2399,23 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
             reasoning_effort: opts.reasoning_effort,
         },
         active,
-    )?;
+    ) {
+        Ok(s) => s,
+        // A hard failure before any Synthesis (the agent CLI couldn't even launch) spent nothing, but
+        // the worktree already exists — roll it back so the item isn't orphaned and can be rebuilt.
+        // A post-spend failure returns Ok(Synthesis { error }) instead and keeps the worktree (it is
+        // recorded errored); only this launch-failure path rolls back.
+        Err(e) => {
+            return Err(
+                match remove_build_worktree(opts.repo, opts.branch, opts.worktree) {
+                    Ok(()) => e,
+                    Err(cleanup) => e.context(format!(
+                        "and the build worktree could not be rolled back: {cleanup}"
+                    )),
+                },
+            );
+        }
+    };
     let usage = synthesis.usage;
     report.model = usage.model.clone();
     report.model_source = Some(usage.model_source);

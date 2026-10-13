@@ -440,11 +440,6 @@ fn resolve_run_backend(
 /// orientation follow it in the assembled prompt.
 const BUILD_ROLE: &str = "You are implementing one item from this repository's agenda, working directly in a dedicated git worktree set up for you. The item below states the intent; the repository's rules state the standards the change must meet; the orientation that follows (the README/specification) is your map. Make the edits that implement the item, in the style and structure the surrounding code already uses. Leave the worktree holding the change you believe is correct — committing it and judging whether it is good happen after you finish, through the operator's review and the repository's own pre-push gate, so your work is the implementation itself, not verifying or committing it.";
 
-/// The tools a build agent is granted — read and edit within the worktree only. No shell: build runs
-/// no verification of its own (the pre-push gate does) and arc makes the commit, so the grant stays
-/// dir-scoped, with nothing that can write outside the worktree.
-const BUILD_TOOL_NAMES: &[&str] = &["Read", "Edit", "Write", "Glob", "Grep"];
-
 /// The `arc run build --item <id>` marshal: assemble the build prompt (the item, the active rules,
 /// the repository orientation) and resolve the worktree plan (branch, local default-branch base,
 /// worktree path), then hand off to [`crate::synth::run_build`] for the agentic run. Every
@@ -525,7 +520,18 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
         anyhow::anyhow!("could not resolve a worktree path (home directory unknown)")
     })?;
 
-    let build_tools: Vec<String> = BUILD_TOOL_NAMES.iter().map(|s| (*s).to_owned()).collect();
+    // Writes are path-scoped to the worktree: a bare Edit/Write grant would let the agent edit any
+    // absolute path (so --add-dir alone does not confine it — verified against the Claude permission
+    // docs), and the "nothing but the worktree" contract needs the `//<abs>/**` gitignore scoping.
+    // Reads stay broad over the checkout. claude_command derives the bare `--tools` name from each.
+    let w = worktree.display();
+    let build_tools = vec![
+        "Read".to_owned(),
+        "Glob".to_owned(),
+        "Grep".to_owned(),
+        format!("Edit(/{w}/**)"),
+        format!("Write(/{w}/**)"),
+    ];
     let config = settings.active_display();
     synth::run_build(
         &prompt,
