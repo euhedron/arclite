@@ -583,6 +583,22 @@ pub(crate) fn backends_help() -> String {
     )
 }
 
+/// A "use an agentic backend" hint for `build`'s refusals — the agentic-capable backends from the
+/// [`BACKENDS`] registry (those whose [`Backend::supports_agentic`] is true) as `--backend <name>`
+/// options, derived from the one table so the wording can't go stale when a backend gains the mode.
+pub(crate) fn agentic_backends_hint() -> String {
+    let names: Vec<String> = known_backends()
+        .into_iter()
+        .filter(|name| backend(name).is_ok_and(|b| b.supports_agentic()))
+        .map(|name| format!("--backend {name}"))
+        .collect();
+    if names.is_empty() {
+        "no backend currently has one".to_owned()
+    } else {
+        names.join(" or ")
+    }
+}
+
 /// The providers' model-listing endpoints and Anthropic's pinned API version (the value the API
 /// docs' own example pins) — named here as each URL's one home.
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
@@ -722,7 +738,8 @@ pub trait Backend {
         _progress: Option<crate::runs::Active>,
     ) -> anyhow::Result<Synthesis> {
         anyhow::bail!(
-            "this backend has no agentic build mode yet — `arc run build` currently supports only `--backend claude`"
+            "this backend has no agentic build mode — `arc run build` needs an agentic backend ({})",
+            agentic_backends_hint()
         )
     }
 

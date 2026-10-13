@@ -456,8 +456,9 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
     )?;
     anyhow::ensure!(
         rb.backend.supports_agentic(),
-        "the {} backend has no agentic build mode — `arc run build` currently requires `--backend claude`",
-        rb.name
+        "the {} backend has no agentic build mode — `arc run build` needs an agentic backend ({})",
+        rb.name,
+        crate::ai::agentic_backends_hint()
     );
     // The item is the build's primary instruction — resolve its text (and refuse an unknown id,
     // listing the open agenda) before creating anything.
