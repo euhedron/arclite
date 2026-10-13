@@ -27,6 +27,7 @@
     "public-run-record",
     "release-notes-view",
     "verbs-as-configurations",
+    "rule-trigger-patterns",
     "primitives-search",
     "lexicon",
     "backend-docs-reference",
