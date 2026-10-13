@@ -469,14 +469,22 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
             agenda.presented_ids().join(", ")
         )
     })?;
-    // The id becomes a branch and a path component; require a single safe segment via the shared
-    // guard the run-id path joins already use, so build can't drift from that contract.
-    crate::commands::log::ensure_safe_run_id(&args.item).with_context(|| {
-        format!(
-            "`{}` is not a usable item id for a build branch and worktree",
-            args.item
-        )
-    })?;
+    // The id becomes a branch, a path component, AND a Claude permission-rule specifier
+    // (`Edit(//<worktree>/**)`) whose grammar uses `(` `)` `*`. The path-traversal guard
+    // (ensure_safe_run_id) only rejects `/ \ : ..`, so it would still let `)` close that specifier
+    // early or `*` widen the match — breaking the write-confinement that is the build's security
+    // boundary. Require a plain identifier instead: alphanumerics, `-`, `_`, `.` (what an agenda file
+    // stem actually is), with no `..`, which is safe in all three contexts at once.
+    anyhow::ensure!(
+        !args.item.is_empty()
+            && !args.item.contains("..")
+            && args
+                .item
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        "`{}` is not a usable build item id — use a plain id (letters, digits, '-', '_', '.')",
+        args.item
+    );
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
     let ctx = synth::gather_context(
