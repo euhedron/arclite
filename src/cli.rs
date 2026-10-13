@@ -79,6 +79,8 @@ pub(crate) const NAME_AGGREGATE: &str = "aggregate";
 pub(crate) const VERB_AGGREGATE: &str = "Merge prior runs' results by shared substance";
 pub(crate) const NAME_ALIGN: &str = "align";
 pub(crate) const VERB_ALIGN: &str = "Audit the tracked items — the open agenda — for coherence";
+pub(crate) const NAME_BUILD: &str = "build";
+pub(crate) const VERB_BUILD: &str = "Implement an open agenda item in a worktree (agentic)";
 
 /// The set of arclite subcommands.
 // Parsed once at startup and dispatched immediately — never held in a collection or a hot path — so
@@ -168,6 +170,47 @@ pub enum RunVerb {
     Aggregate(SynthArgs),
     #[command(name = NAME_ALIGN, about = VERB_ALIGN)]
     Align(SynthArgs),
+    /// `build` is agentic, not a constrained synthesis — it carries its own args (an item to
+    /// implement, a worktree to produce) rather than the shared `SynthArgs`, and dispatches to its
+    /// own path, so it is deliberately not a `verbs::ALL` synthesis row.
+    #[command(name = NAME_BUILD, about = VERB_BUILD)]
+    Build(BuildArgs),
+}
+
+/// Arguments for `arc run build` — the agentic build verb. Distinct from `SynthArgs` because build
+/// produces a committed changeset in a worktree, not a structured synthesis: it takes an item to
+/// implement and omits the synthesis-only shaping (schema, gate, fan-out, include/changed context).
+#[derive(Debug, clap::Args)]
+pub struct BuildArgs {
+    /// The open agenda item to implement — its id (the item file's stem under `.arc/items/open`).
+    #[arg(long, value_name = "ID")]
+    pub item: String,
+    /// The repository to build in.
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Model override (else the backend's configured or default model).
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Backend override (else the configured `backend`). Build currently requires an agentic backend
+    /// (claude); a backend without agentic mode errors before spending.
+    #[arg(long)]
+    pub backend: Option<String>,
+    /// Preview the exact prompt and the worktree plan without creating anything or spending.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Hard per-run cost cap in USD (on backends with a native cap).
+    #[arg(long, value_name = "USD")]
+    pub max_budget_usd: Option<f64>,
+    /// Reopen the target project's own agent customizations (CLAUDE.md, etc.) as ambient context.
+    #[arg(long)]
+    pub ambient_memory: bool,
+    /// Ruleset override — the id of a ruleset whose rules shape the build prompt (else the configured
+    /// or default ruleset).
+    #[arg(long)]
+    pub ruleset: Option<String>,
+    /// Rule-source override (a path), composed like `--rules` on the synthesis verbs.
+    #[arg(long)]
+    pub rules: Option<PathBuf>,
 }
 
 /// Arguments for `arc repos` — the device's discovered repo map (see `commands::repos`).
