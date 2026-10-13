@@ -3,6 +3,7 @@
     "build-management",
     "modular-specification",
     "live-transcript-auditing",
+    "behavioral-exhibit-ledger",
     "dedicated-prompts",
     "github-check-gate",
     "github-action",
