@@ -529,11 +529,28 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
         anyhow::anyhow!("could not resolve a worktree path (home directory unknown)")
     })?;
 
+    // The worktree path is spliced into the Claude permission-rule specifier `Edit(/<path>/**)`,
+    // whose grammar reserves `( ) * ? [ ]` (rule delimiters and gitignore globs). The id segment is
+    // already a plain identifier (validated above), but the home-directory prefix the path carries is
+    // not under our control: a prefix with one of those characters would break out of the specifier
+    // and defeat the write-confinement, and a lossy non-UTF-8 render would scope a different path than
+    // exists. Refuse before any spend in either case rather than emit a grant that cannot confine.
+    let w = worktree.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "the worktree path is not valid UTF-8, so it can't be safely scoped in the write grant"
+        )
+    })?;
+    anyhow::ensure!(
+        !w.contains(['(', ')', '*', '?', '[', ']']),
+        "the worktree path `{w}` contains a character reserved by the permission-rule grammar \
+         (`( ) * ? [ ]`), so the build's write-confinement cannot be expressed safely — set ARC_HOME \
+         (or move the checkout) to a path without those characters"
+    );
+
     // Writes are path-scoped to the worktree: a bare Edit/Write grant would let the agent edit any
     // absolute path (so --add-dir alone does not confine it — verified against the Claude permission
     // docs), and the "nothing but the worktree" contract needs the `//<abs>/**` gitignore scoping.
     // Reads stay broad over the checkout. claude_command derives the bare `--tools` name from each.
-    let w = worktree.display();
     let build_tools = vec![
         "Read".to_owned(),
         "Glob".to_owned(),
