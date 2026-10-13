@@ -1917,6 +1917,61 @@ pub(crate) fn item_bullets(item: &serde_json::Value) -> String {
         .join("\n")
 }
 
+/// The cost line a run report shows — billed token usage + dollar cost from the run's own usage.
+/// Shared by the synthesis and build reports so the line renders identically from one home.
+fn cost_line(usage: &ai::Usage) -> String {
+    crate::log::usage_display(
+        usage.input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.cache_read_input_tokens,
+        usage.output_tokens,
+        usage.cost_usd,
+        usage.cost_partial,
+    )
+}
+
+/// Append a completed run's one-line record to the ledger and store its full result — the shared
+/// ledger write every logged run makes (synthesis and build), so the append+store pair and the
+/// `StoredRun` shape have one home. Returns where it logged, or `None` on a write failure (`append`
+/// already warned).
+fn store_run(
+    record: &RunRecord,
+    prompt: &str,
+    text: &str,
+    structured: Option<&serde_json::Value>,
+) -> Option<std::path::PathBuf> {
+    let logged = crate::log::append(record);
+    crate::log::store_result(
+        &record.id,
+        &StoredRun {
+            run: record,
+            prompt,
+            text,
+            structured,
+        },
+    );
+    logged
+}
+
+/// Append the "where this run logged" disclosure — or the logging-off note — to a run's human
+/// report. Shared by the synthesis and build reports so the disclosure reads identically; the log
+/// location is never hidden.
+fn append_log_disclosure(
+    human: &mut String,
+    logged: &Option<std::path::PathBuf>,
+    id: &Option<String>,
+    log_on: bool,
+) {
+    match (logged, id) {
+        (Some(path), Some(id)) => human.push_str(&format!(
+            "\nlogged: {} · id {id}",
+            crate::display_path(&path.display().to_string())
+        )),
+        (None, _) if !log_on => human.push_str(LOGGING_OFF_NOTE),
+        _ => {}
+    }
+}
+
 /// Preview (dry-run) or run a synthesis prompt, echoing the full run parameters.
 pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
     // The model was resolved by the backend (per-backend defaults live there, not here).
@@ -2086,14 +2141,7 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
         "{}\n\nrun: {}\ncost: {}",
         body,
         report.human(),
-        crate::log::usage_display(
-            usage.input_tokens,
-            usage.cache_creation_input_tokens,
-            usage.cache_read_input_tokens,
-            usage.output_tokens,
-            usage.cost_usd,
-            usage.cost_partial,
-        ),
+        cost_line(&usage),
     );
     if let Some(path) = &written {
         human.push_str(&format!("\nwrote: {}", path.display()));
@@ -2158,33 +2206,15 @@ pub fn run(prompt: &str, opts: &SynthOptions) -> anyhow::Result<ExitCode> {
             error: errored.as_deref(),
             build_run: None,
         };
-        let logged = crate::log::append(&record);
-        // Store the full result (best-effort) so `arc log <id>` can re-show it without re-running.
-        crate::log::store_result(
-            &id,
-            &StoredRun {
-                run: &record,
-                prompt,
-                text: &text,
-                structured: structured.as_ref(),
-            },
-        );
+        // Append the record + store the full result (so `arc log <id>` re-shows it) via the shared
+        // ledger-write helper.
+        let logged = store_run(&record, prompt, &text, structured.as_ref());
         (logged, Some(id))
     } else {
         (None, None)
     };
-    // Disclose where the run was logged and its id (`arc log <id>` re-shows it), or that logging is
-    // off — the log location is never hidden.
-    match (&logged, &id) {
-        (Some(path), Some(id)) => {
-            human.push_str(&format!(
-                "\nlogged: {} · id {id}",
-                crate::display_path(&path.display().to_string())
-            ));
-        }
-        (None, _) if !opts.log => human.push_str(LOGGING_OFF_NOTE),
-        _ => {} // logging on but the append failed — append() already warned to stderr
-    }
+    // Disclose where the run was logged (or that logging is off) via the shared tail helper.
+    append_log_disclosure(&mut human, &logged, &id, opts.log);
     let out = SynthOutput {
         id,
         run: report,
@@ -2379,6 +2409,11 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
     let id = crate::log::new_id();
     let ts = crate::log::now_secs();
     let (logged, stored_id) = if opts.log {
+        // The record's field *values* are build-specific (build_run set; gate/taxonomy/structured the
+        // no-op defaults), so they differ from the synthesis `run`'s record; the parallel field list
+        // is compiler-guarded — a new RunRecord field fails to build in both places until added — so
+        // this is parallel data construction, not the silent drift no-duplicated-logic targets (the
+        // behavioral recording machinery itself is shared via store_run/cost_line/append_log_disclosure).
         let record = RunRecord {
             id: id.clone(),
             ts,
@@ -2410,16 +2445,7 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
             error: errored.as_deref(),
             build_run: Some(build_run.clone()),
         };
-        let logged = crate::log::append(&record);
-        crate::log::store_result(
-            &id,
-            &StoredRun {
-                run: &record,
-                prompt,
-                text: &synthesis.text,
-                structured: None,
-            },
-        );
+        let logged = store_run(&record, prompt, &synthesis.text, None);
         (logged, Some(id))
     } else {
         (None, None)
@@ -2433,25 +2459,9 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
     let mut human = format!(
         "{outcome_line}\n\nrun: {}\n{build_line}\ncost: {}",
         report.human(),
-        crate::log::usage_display(
-            usage.input_tokens,
-            usage.cache_creation_input_tokens,
-            usage.cache_read_input_tokens,
-            usage.output_tokens,
-            usage.cost_usd,
-            usage.cost_partial,
-        ),
+        cost_line(&usage),
     );
-    match (&logged, &stored_id) {
-        (Some(path), Some(id)) => {
-            human.push_str(&format!(
-                "\nlogged: {} · id {id}",
-                crate::display_path(&path.display().to_string())
-            ));
-        }
-        (None, _) if !opts.log => human.push_str(LOGGING_OFF_NOTE),
-        _ => {}
-    }
+    append_log_disclosure(&mut human, &logged, &stored_id, opts.log);
     let out = BuildOutput {
         id: stored_id,
         run: report,
