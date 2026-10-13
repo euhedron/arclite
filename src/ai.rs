@@ -935,6 +935,21 @@ fn openai_key(settings: &Settings) -> anyhow::Result<Option<(String, String)>> {
 /// [`RunBoundary`] discloses rather than collapsing the whole shape into an "isolated" claim.
 pub struct ClaudeBackend;
 
+/// The RunBoundary fields shared by [`ClaudeBackend::boundary`] and [`ClaudeBackend::build_boundary`]
+/// — the customizations posture (ambient-dependent), the session isolation, and what still inherits.
+/// Single-sourced so a wording change to these authoritative, user-facing boundary facts can't update
+/// only one of the two paths; the two differ only in `tool_runtime`/`repository_access`.
+const CLAUDE_SESSION_BOUNDARY: &str = "CLI session files disabled";
+const CLAUDE_INHERITED_BOUNDARY: &str =
+    "auth, provider base instructions, permissions, and admin-managed policy";
+fn claude_customizations_boundary(ambient: bool) -> &'static str {
+    if ambient {
+        "user/project customizations enabled; inherited MCP disabled"
+    } else {
+        "user/project customizations disabled"
+    }
+}
+
 impl Backend for ClaudeBackend {
     fn default_model(&self) -> &'static str {
         DEFAULT_MODEL
@@ -950,11 +965,7 @@ impl Backend for ClaudeBackend {
         let tool_grants = !allowed_tools.is_empty();
         RunBoundary {
             ambient,
-            customizations: if ambient {
-                "user/project customizations enabled; inherited MCP disabled"
-            } else {
-                "user/project customizations disabled"
-            },
+            customizations: claude_customizations_boundary(ambient),
             tool_runtime: if tool_grants {
                 "explicit built-in allowlist"
             } else {
@@ -967,8 +978,8 @@ impl Backend for ClaudeBackend {
             } else {
                 "prompt only; no target-directory grant"
             },
-            session: "CLI session files disabled",
-            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
+            session: CLAUDE_SESSION_BOUNDARY,
+            inherited: CLAUDE_INHERITED_BOUNDARY,
         }
     }
 
@@ -1010,15 +1021,11 @@ impl Backend for ClaudeBackend {
     fn build_boundary(&self, ambient: bool, _allowed_tools: &[String]) -> RunBoundary {
         RunBoundary {
             ambient,
-            customizations: if ambient {
-                "user/project customizations enabled; inherited MCP disabled"
-            } else {
-                "user/project customizations disabled"
-            },
+            customizations: claude_customizations_boundary(ambient),
             tool_runtime: "edit/write tools enabled (agentic build)",
             repository_access: "build worktree granted read-write to edit tools",
-            session: "CLI session files disabled",
-            inherited: "auth, provider base instructions, permissions, and admin-managed policy",
+            session: CLAUDE_SESSION_BOUNDARY,
+            inherited: CLAUDE_INHERITED_BOUNDARY,
         }
     }
 }
