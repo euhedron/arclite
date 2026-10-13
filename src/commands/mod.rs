@@ -474,15 +474,14 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
             agenda.presented_ids().join(", ")
         )
     })?;
-    // The id becomes a branch and a path component; keep it a single safe segment.
-    anyhow::ensure!(
-        !args.item.is_empty()
-            && !args.item.contains('/')
-            && !args.item.contains("..")
-            && args.item.chars().all(|c| !c.is_control()),
-        "`{}` is not a usable item id for a build branch and worktree",
-        args.item
-    );
+    // The id becomes a branch and a path component; require a single safe segment via the shared
+    // guard the run-id path joins already use, so build can't drift from that contract.
+    crate::commands::log::ensure_safe_run_id(&args.item).with_context(|| {
+        format!(
+            "`{}` is not a usable item id for a build branch and worktree",
+            args.item
+        )
+    })?;
     let resolution =
         resolve_rule_sources(args.rules.as_deref(), args.ruleset.as_deref(), &settings)?;
     let ctx = synth::gather_context(

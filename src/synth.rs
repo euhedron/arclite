@@ -1395,16 +1395,12 @@ pub(crate) fn create_build_worktree(
     Ok(())
 }
 
-/// Close out a build: commit anything the agent left uncommitted in the worktree, then report the
-/// branch's short head sha if it advanced past `base` (a committed change was produced), or `None`
-/// (no change — build-management reads that as an errored, not pending-review, run). Every git call
-/// runs in the worktree (`-C path`), never the launch tree. `message` anchors only the commit of
-/// leftover work; commits the agent made itself keep their own messages.
-pub(crate) fn finalize_build(
-    worktree: &Path,
-    base: &str,
-    message: &str,
-) -> Result<Option<String>, String> {
+/// Close out a build. The agent has only edit tools (no shell), so it never commits — any change it
+/// made sits uncommitted in the worktree. Stage everything and commit it iff something is staged,
+/// returning the new short head sha; nothing staged means the agent produced no change (`None` —
+/// build-management reads that as an errored, not pending-review, run). Every git call runs in the
+/// worktree (`-C path`), never the launch tree.
+pub(crate) fn finalize_build(worktree: &Path, message: &str) -> Result<Option<String>, String> {
     let run = |args: &[&str]| -> Result<std::process::Output, String> {
         let verb = args.first().copied().unwrap_or("git");
         git_output(worktree, args)
@@ -1421,36 +1417,26 @@ pub(crate) fn finalize_build(
             })
     };
     run(&["add", "-A"])?;
-    // `diff --cached --quiet` exits 0 when nothing is staged, 1 when staged changes exist; anything
-    // else is a real failure. Only commit when there is something staged — the agent may already
-    // have committed its own work.
+    // `diff --cached --quiet` exits 0 when nothing is staged, 1 when staged changes exist; any other
+    // status is a real failure (surfaced, not defended past).
     let staged = run(&["diff", "--cached", "--quiet"])?;
     match staged.status.code() {
-        Some(0) => {}
+        Some(0) => Ok(None),
         Some(1) => {
             run(&["commit", "-m", message])?;
+            let head = run(&["rev-parse", "--verify", "--quiet", "--short", "HEAD"])?;
+            let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+            if sha.is_empty() {
+                Err("committed the build but could not read the new HEAD sha".to_owned())
+            } else {
+                Ok(Some(sha))
+            }
         }
-        _ => {
-            return Err(format!(
-                "git diff --cached failed: {}",
-                String::from_utf8_lossy(&staged.stderr).trim()
-            ));
-        }
+        other => Err(format!(
+            "git diff --cached failed (exit {other:?}): {}",
+            String::from_utf8_lossy(&staged.stderr).trim()
+        )),
     }
-    // A change was produced iff the branch advanced past base — whether by the agent's own commits
-    // or the one just made for leftover work.
-    let range = format!("{base}..HEAD");
-    let count = run(&["rev-list", "--count", range.as_str()])?;
-    let n: u64 = String::from_utf8_lossy(&count.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(0);
-    if n == 0 {
-        return Ok(None);
-    }
-    let head = run(&["rev-parse", "--verify", "--quiet", "--short", "HEAD"])?;
-    let sha = String::from_utf8_lossy(&head.stdout).trim().to_owned();
-    Ok((!sha.is_empty()).then_some(sha))
 }
 
 /// What a run gathers into context — the shaping levers, grouped so adding one is a field, not a new
@@ -2359,20 +2345,25 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
     report.model = usage.model.clone();
     report.model_source = Some(usage.model_source);
 
-    // Commit whatever the agent left (its own commits keep their messages; this anchors any leftover
-    // uncommitted work), then decide the outcome: a clean completion is a committed change from a
-    // non-errored agent run; anything else — the agent failed, or produced no change — is errored,
-    // and build-management reads that (never "pending review") for the worktree it leaves behind.
+    // Commit the agent's edits, then decide the outcome: a clean completion is a committed change
+    // from a non-errored agent run; anything else — the agent failed, finalization failed, or no
+    // change was produced — is errored, and build-management reads that (never "pending review") for
+    // the worktree it leaves behind. finalize can fail *after* `implement` has spent, so its failure
+    // joins the errored-run path (logged below with the real cost), never `?`-ed away — the same
+    // spend-accounting the synthesis path keeps (account-for-consumed-cost-on-failure).
     let commit_msg = format!("arc build: {}", opts.item);
-    let committed = finalize_build(opts.worktree, opts.base, &commit_msg)
-        .map_err(|e| anyhow::anyhow!("could not finalize the build worktree: {e}"))?;
-    let errored: Option<String> = match (synthesis.error, committed.is_some()) {
-        (Some(e), _) => Some(e),
-        (None, false) => {
-            Some("the build produced no committed change — the agent made no edits".to_owned())
-        }
-        (None, true) => None,
+    let (committed, finalize_error) = match finalize_build(opts.worktree, &commit_msg) {
+        Ok(c) => (c, None),
+        Err(e) => (
+            None,
+            Some(format!("could not finalize the build worktree: {e}")),
+        ),
     };
+    let errored: Option<String> = synthesis.error.or(finalize_error).or_else(|| {
+        committed
+            .is_none()
+            .then(|| "the build produced no committed change — the agent made no edits".to_owned())
+    });
     let is_errored = errored.is_some();
     let outcome = if is_errored { "errored" } else { "completed" };
     let commit = if is_errored { None } else { committed };
