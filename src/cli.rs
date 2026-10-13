@@ -191,8 +191,8 @@ pub struct BuildArgs {
     /// Model override (else the backend's configured or default model).
     #[arg(long)]
     pub model: Option<String>,
-    /// Backend override (else the configured `backend`). Build currently requires an agentic backend
-    /// (claude); a backend without agentic mode errors before spending.
+    /// Backend override (else the configured `backend`). Build requires an agentic backend;
+    /// one without agentic mode errors before spending, naming the backend(s) that qualify.
     #[arg(long)]
     pub backend: Option<String>,
     /// Preview the exact prompt and the worktree plan without creating anything or spending.
