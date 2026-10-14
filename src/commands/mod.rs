@@ -1,3 +1,4 @@
+pub mod builds;
 pub mod config;
 pub mod doctor;
 pub mod feedback;
@@ -446,6 +447,18 @@ const BUILD_ROLE: &str = "You are implementing one item from this repository's a
 /// refusal — a non-agentic backend, an unknown item, an item that already has a worktree — happens
 /// here, before anything is created or any spend.
 pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCode> {
+    run_build_mode(args, global, false)
+}
+
+/// The one build launcher, shared by `arc run build` (fresh) and `arc builds --resume` (relaunch).
+/// `resume` inverts the existing-build check — a fresh build refuses an existing branch, a resume
+/// requires one — records the worktree's current HEAD as the base (the continuation point), skips
+/// worktree creation, and grounds the prompt in the fact that partial work is already present.
+pub(crate) fn run_build_mode(
+    args: &BuildArgs,
+    global: &GlobalArgs,
+    resume: bool,
+) -> anyhow::Result<ExitCode> {
     let settings = crate::settings::Settings::load(&args.path)?;
     let rb = resolve_run_backend(
         args.backend.as_deref(),
@@ -477,12 +490,7 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
     // boundary. Require a plain identifier instead: alphanumerics, `-`, `_`, `.` (what an agenda file
     // stem actually is), with no `..`, which is safe in all three contexts at once.
     anyhow::ensure!(
-        !args.item.is_empty()
-            && !args.item.contains("..")
-            && args
-                .item
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        builds::valid_item_id(&args.item),
         "`{}` is not a usable build item id — use a plain id (letters, digits, '-', '_', '.')",
         args.item
     );
@@ -512,22 +520,46 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
     prompt.push_str("\n\n");
     prompt.push_str(&ctx.text);
 
-    // The worktree plan — resolved before any spend; a missing default branch or an existing build
-    // for this item is refused here.
-    let (_default_branch, base) = synth::default_branch_base(&ctx.root)
-        .map_err(|e| anyhow::anyhow!("could not resolve the build base: {e}"))?;
-    let branch = format!("arc/build/{}", args.item);
-    if synth::build_branch_exists(&ctx.root, &branch)
-        .map_err(|e| anyhow::anyhow!("could not check for an existing build: {e}"))?
-    {
+    // The worktree plan — resolved before any spend. A fresh build refuses an existing build for
+    // the item (resume or discard it instead); a resume requires one, with its worktree present.
+    let branch = builds::build_branch(&args.item);
+    let branch_exists = synth::build_branch_exists(&ctx.root, &branch)
+        .map_err(|e| anyhow::anyhow!("could not check for an existing build: {e}"))?;
+    if resume {
+        anyhow::ensure!(
+            branch_exists,
+            "nothing to resume for `{}` — no build branch {branch} exists",
+            args.item
+        );
+    } else if branch_exists {
         anyhow::bail!(
-            "a build already exists for `{}` (branch {branch}) — resume or discard it (build-management)",
+            "a build already exists for `{}` (branch {branch}) — resume or discard it (`arc builds`)",
             args.item
         );
     }
     let worktree = crate::build_worktree_path(&ctx.root, &args.item).ok_or_else(|| {
         anyhow::anyhow!("could not resolve a worktree path (home directory unknown)")
     })?;
+    // Fresh: the branch is cut from the default branch's head. Resume: nothing is created, and the
+    // recorded base is the worktree's current HEAD — the continuation point the relaunch starts from.
+    let base = if resume {
+        anyhow::ensure!(
+            crate::try_is_dir(&worktree)?,
+            "the build branch {branch} exists but its worktree is missing — discard it (`arc builds --discard {}`) and rebuild",
+            args.item
+        );
+        synth::worktree_head(&worktree)
+            .map_err(|e| anyhow::anyhow!("could not read the worktree's continuation point: {e}"))?
+    } else {
+        let (_default_branch, base) = synth::default_branch_base(&ctx.root)
+            .map_err(|e| anyhow::anyhow!("could not resolve the build base: {e}"))?;
+        base
+    };
+    if resume {
+        prompt.push_str(
+            "\n\nA prior interrupted run left partial work in this worktree; continue from its current on-disk state rather than starting over.\n",
+        );
+    }
 
     // The worktree path is spliced into the Claude permission-rule specifier `Edit(/<path>/**)`,
     // whose grammar reserves `( ) * ? [ ]` (rule delimiters and gitignore globs). The id segment is
@@ -581,6 +613,7 @@ pub fn run_build(args: &BuildArgs, global: &GlobalArgs) -> anyhow::Result<ExitCo
             dry_run: args.dry_run,
             json: global.json,
             log: settings.logging_enabled(),
+            resume,
         },
     )
 }

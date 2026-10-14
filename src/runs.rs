@@ -16,6 +16,11 @@ pub struct ActiveRun {
     /// Distinguishes the concurrent runs of a `--runs N` fan-out within one process.
     pub index: usize,
     pub command: String,
+    /// The agenda item a `build` run targets — so build-management can tell *which* item is in flight
+    /// (one live build worktree per item, keyed by id). `None` for every non-build run, written
+    /// explicitly (never a serde default) so a marker missing the field reads as unreadable, like
+    /// every other field here.
+    pub item: Option<String>,
     pub repo: String,
     /// The *requested* model id: a marker is written before any response could name the model that
     /// ran, so every view of an active run qualifies this identity rather than presenting it as
@@ -129,7 +134,13 @@ impl Drop for Active {
 /// Record an in-flight run; the returned guard clears its marker on drop. Best-effort: returns
 /// `None` (the run proceeds untracked) if the registry can't be written, never failing the run.
 #[must_use]
-pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option<Active> {
+pub fn register(
+    command: &str,
+    repo: &Path,
+    model: &str,
+    index: usize,
+    item: Option<&str>,
+) -> Option<Active> {
     let dir = dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     let marker = dir.join(format!("{}-{index}.json", std::process::id()));
@@ -139,6 +150,7 @@ pub fn register(command: &str, repo: &Path, model: &str, index: usize) -> Option
             pid: std::process::id(),
             index,
             command: command.to_owned(),
+            item: item.map(str::to_owned),
             // The shared recorded form (see log::repo_record_string) — not display formatting.
             repo: crate::log::repo_record_string(repo),
             model: model.to_owned(),
