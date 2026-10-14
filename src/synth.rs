@@ -1372,6 +1372,42 @@ pub(crate) fn build_branch_exists(root: &Path, branch: &str) -> Result<bool, Str
     Ok(out.status.success())
 }
 
+/// The current short HEAD of a build worktree — the continuation point a resumed build relaunches
+/// from, recorded as the resumed run's `base` so the ledger says what state the relaunch started at.
+pub(crate) fn worktree_head(worktree: &Path) -> Result<String, String> {
+    let out = git_stdout(
+        worktree,
+        &["rev-parse", "--verify", "--quiet", "--short", "HEAD"],
+    )?;
+    let sha = String::from_utf8_lossy(&out).trim().to_owned();
+    if sha.is_empty() {
+        Err("the worktree resolves to no HEAD commit".to_owned())
+    } else {
+        Ok(sha)
+    }
+}
+
+/// Whether the build on `branch` has landed in the default branch (`base_ref`, a ref or sha) — true
+/// when every commit the branch carries beyond the merge base is already present there *by patch-id*.
+/// `git cherry` compares patch-ids, not shas, so this detects the build as merged however it was
+/// integrated: a merge commit, a fast-forward, a rebase, or — because a build is a single commit
+/// (`finalize_build` commits all the agent's work at once) — a squash. Raw tip-reachability
+/// (`merge-base --is-ancestor`) would miss a rebased or squashed merge, since both rewrite the sha.
+/// A `+`-prefixed line is a commit not yet upstream; an empty list means the branch produced nothing
+/// beyond base, which is not "merged" (it never landed a change) but an interrupted/no-change build.
+pub(crate) fn build_branch_merged(
+    root: &Path,
+    branch: &str,
+    base_ref: &str,
+) -> Result<bool, String> {
+    let branch_ref = format!("refs/heads/{branch}");
+    let out = git_stdout(root, &["cherry", base_ref, branch_ref.as_str()])
+        .map_err(|e| format!("could not check whether the build is merged: {e}"))?;
+    let text = String::from_utf8_lossy(&out);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    Ok(!lines.is_empty() && lines.iter().all(|l| l.trim_start().starts_with('-')))
+}
+
 /// Create the build worktree: a fresh `branch` at `base`, checked out at `path`. Surfaces git's
 /// stderr on failure rather than leaving a partial worktree behind.
 pub(crate) fn create_build_worktree(
@@ -1798,7 +1834,11 @@ struct BuildRun<'a> {
     item: &'a str,
     branch: &'a str,
     worktree: String,
+    /// A fresh build's branch base; a resumed one's continuation HEAD (what the relaunch started at).
     base: &'a str,
+    /// Whether this run resumed an interrupted worktree — re-builds accumulate as ledger history,
+    /// and this keeps that history legible without re-deriving it from `base`.
+    resumed: bool,
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<String>,
@@ -2289,6 +2329,10 @@ pub struct BuildOptions<'a> {
     pub dry_run: bool,
     pub json: bool,
     pub log: bool,
+    /// A relaunch of an interrupted build: the worktree and branch already exist (nothing is
+    /// created, and a launch failure must not remove the prior work), and `base` carries the
+    /// worktree's continuation HEAD rather than the default branch's head.
+    pub resume: bool,
 }
 
 #[derive(Serialize)]
@@ -2367,6 +2411,7 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
                 branch: opts.branch,
                 worktree: opts.worktree.display().to_string(),
                 base: opts.base,
+                resumed: opts.resume,
                 outcome: "dry-run",
                 commit: None,
             },
@@ -2378,10 +2423,13 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
     }
 
     // Create the worktree before spending — a real run only, so a dry run leaves no side effect.
-    create_build_worktree(opts.repo, opts.branch, opts.worktree, opts.base)
-        .map_err(|e| anyhow::anyhow!("could not create the build worktree: {e}"))?;
+    // A resume relaunches into the existing worktree; only a fresh build creates one.
+    if !opts.resume {
+        create_build_worktree(opts.repo, opts.branch, opts.worktree, opts.base)
+            .map_err(|e| anyhow::anyhow!("could not create the build worktree: {e}"))?;
+    }
 
-    let active = crate::runs::register("build", opts.repo, opts.model, 0);
+    let active = crate::runs::register("build", opts.repo, opts.model, 0, Some(opts.item));
     if active.is_none() {
         eprintln!(
             "arclite: this build won't appear in `arc status` (couldn't write its registry marker)"
@@ -2402,10 +2450,14 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
     ) {
         Ok(s) => s,
         // A hard failure before any Synthesis (the agent CLI couldn't even launch) spent nothing, but
-        // the worktree already exists — roll it back so the item isn't orphaned and can be rebuilt.
-        // A post-spend failure returns Ok(Synthesis { error }) instead and keeps the worktree (it is
-        // recorded errored); only this launch-failure path rolls back.
+        // a fresh build has already created the worktree — roll it back so the item isn't orphaned
+        // and can be rebuilt. A post-spend failure returns Ok(Synthesis { error }) instead and keeps
+        // the worktree (it is recorded errored); only this launch-failure path rolls back — and never
+        // on a resume, whose worktree holds prior work this run did not create.
         Err(e) => {
+            if opts.resume {
+                return Err(e);
+            }
             return Err(
                 match remove_build_worktree(opts.repo, opts.branch, opts.worktree) {
                     Ok(()) => e,
@@ -2447,6 +2499,7 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
         branch: opts.branch,
         worktree: opts.worktree.display().to_string(),
         base: opts.base,
+        resumed: opts.resume,
         outcome,
         commit: commit.clone(),
     };
@@ -2533,7 +2586,7 @@ fn synthesize_run(
     opts: &SynthOptions,
     index: usize,
 ) -> anyhow::Result<ai::Synthesis> {
-    let active = crate::runs::register(opts.command, opts.dir, model, index);
+    let active = crate::runs::register(opts.command, opts.dir, model, index, None);
     if active.is_none() {
         // Live tracking is best-effort, but a failure shouldn't be silent — say so (as logging warns
         // when its write fails) rather than leave the user wondering why `arc status` shows nothing.

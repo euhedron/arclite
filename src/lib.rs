@@ -463,6 +463,9 @@ pub fn run() -> ExitCode {
         }
         Command::Items(args) => commands::items::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
         Command::Repos(args) => commands::repos::run(args, &cli.global).map(|()| ExitCode::SUCCESS),
+        // Returns its own exit code: `--resume` relaunches a real build run, whose errored exit
+        // must propagate like `arc run build`'s.
+        Command::Builds(args) => commands::builds::run(args, &cli.global),
         Command::Completions(args) => {
             // A shell script, not JSON — rejected through the one policy (output::reject_json;
             // an explicit option silently dropped is worse than a silent default).

@@ -244,3 +244,70 @@ fn show_one(agenda: &Agenda, repo: &Path, id: &str, global: &GlobalArgs) -> anyh
     let payload = serde_json::json!({ "id": id, "status": status, "body": body });
     emit(&payload, &human, global.json)
 }
+
+/// Resolve an open item for a merged build: move `open/<id>.md` into the resolved ledger with a
+/// short resolution note appended — the build run id and commit, so the trail stays surfaceable
+/// without reconstructing history — and drop the id from `order.json`, keeping membership total.
+/// A missing open item is a reported outcome, never an error: the worktree can outlive an item the
+/// operator already resolved by hand. Write-new-then-remove-old with rollback (the retire pattern),
+/// so a failure never leaves the item half-moved; an order-file failure after the move surfaces as
+/// an error naming the by-hand fix, since the move itself already happened and drift is disclosed
+/// wherever the agenda appears.
+pub(crate) fn resolve_item(
+    repo: &Path,
+    id: &str,
+    run_id: Option<&str>,
+    commit: Option<&str>,
+) -> anyhow::Result<String> {
+    let open_path = crate::items_open_dir(repo).join(format!("{id}.md"));
+    let Some(body) = crate::read_optional(&open_path)
+        .with_context(|| format!("cannot read {}", open_path.display()))?
+    else {
+        return Ok(
+            "no open item to resolve (already resolved, or never an agenda item)".to_owned(),
+        );
+    };
+    let note = format!(
+        "\n\n---\n\nResolved: implemented by build run `{}` (commit {}), merged into the default branch; worktree cleaned by `arc builds --clean`.\n",
+        run_id.unwrap_or("unknown"),
+        commit.unwrap_or("unknown"),
+    );
+    let (dest, mut file) = crate::claim_findings_entry(&crate::items_resolved_dir(repo), id)
+        .with_context(|| format!("claiming a resolved entry for `{id}`"))?;
+    let write = (|| -> std::io::Result<()> {
+        use std::io::Write as _;
+        file.write_all(body.trim_end().as_bytes())?;
+        file.write_all(note.as_bytes())
+    })();
+    if let Err(e) = write.and_then(|()| std::fs::remove_file(&open_path)) {
+        // Roll the claimed entry back so the item stays cleanly open rather than half-moved.
+        let _ = std::fs::remove_file(&dest);
+        return Err(e).with_context(|| format!("could not move `{id}` into the resolved ledger"));
+    }
+    let order_path = crate::items_order_path(repo);
+    if let Some(text) = crate::read_optional(&order_path)
+        .with_context(|| format!("cannot read {}", order_path.display()))?
+    {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Order {
+            order: Vec<String>,
+        }
+        let mut parsed: Order = serde_json::from_str(&text)
+            .with_context(|| format!("invalid order file {}", order_path.display()))?;
+        parsed.order.retain(|listed| listed != id);
+        let rendered = format!("{}\n", serde_json::to_string_pretty(&parsed)?);
+        crate::atomic_write(&order_path, rendered.as_bytes()).with_context(|| {
+            format!(
+                "item `{id}` is resolved, but {} could not be updated — remove `{id}` from it by hand",
+                order_path.display()
+            )
+        })?;
+    }
+    Ok(format!(
+        "item resolved → {}",
+        dest.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ))
+}
