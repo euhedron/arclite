@@ -1387,25 +1387,40 @@ pub(crate) fn worktree_head(worktree: &Path) -> Result<String, String> {
     }
 }
 
-/// Whether the build on `branch` has landed in the default branch (`base_ref`, a ref or sha) — true
-/// when every commit the branch carries beyond the merge base is already present there *by patch-id*.
-/// `git cherry` compares patch-ids, not shas, so this detects the build as merged however it was
-/// integrated: a merge commit, a fast-forward, a rebase, or — because a build is a single commit
-/// (`finalize_build` commits all the agent's work at once) — a squash. Raw tip-reachability
-/// (`merge-base --is-ancestor`) would miss a rebased or squashed merge, since both rewrite the sha.
-/// A `+`-prefixed line is a commit not yet upstream; an empty list means the branch produced nothing
-/// beyond base, which is not "merged" (it never landed a change) but an interrupted/no-change build.
-pub(crate) fn build_branch_merged(
+/// How the build on `branch` relates to the default branch (`base_ref`, a ref or sha), by git
+/// topology alone — one `git cherry` invocation, whose range is `merge-base..branch`:
+/// - a `+` line is a commit not yet upstream → `Unmerged`;
+/// - all `-` lines → every branch commit is upstream *by patch-id* → `PatchEquivalent` (a rebased
+///   or, for the single commit a build is, squashed merge — raw tip-ancestry misses both);
+/// - an *empty* range means the whole branch sits within the merge base, i.e. the tip is reachable
+///   from `base_ref` → `TipReachable`. That is what an ordinary fast-forward or merge-commit
+///   integration leaves — and also what a branch that never gained a commit looks like, and no
+///   topology can tell those apart. The caller resolves `TipReachable` with the run record
+///   (a `completed` build there is merged; an errored/absent one never landed anything), which
+///   build runs are guaranteed to have: `arc run build` refuses to run unlogged.
+pub(crate) enum MergeSignal {
+    Unmerged,
+    PatchEquivalent,
+    TipReachable,
+}
+
+pub(crate) fn build_branch_merge_signal(
     root: &Path,
     branch: &str,
     base_ref: &str,
-) -> Result<bool, String> {
+) -> Result<MergeSignal, String> {
     let branch_ref = format!("refs/heads/{branch}");
     let out = git_stdout(root, &["cherry", base_ref, branch_ref.as_str()])
         .map_err(|e| format!("could not check whether the build is merged: {e}"))?;
     let text = String::from_utf8_lossy(&out);
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    Ok(!lines.is_empty() && lines.iter().all(|l| l.trim_start().starts_with('-')))
+    if lines.is_empty() {
+        Ok(MergeSignal::TipReachable)
+    } else if lines.iter().all(|l| l.trim_start().starts_with('-')) {
+        Ok(MergeSignal::PatchEquivalent)
+    } else {
+        Ok(MergeSignal::Unmerged)
+    }
 }
 
 /// Create the build worktree: a fresh `branch` at `base`, checked out at `path`. Surfaces git's

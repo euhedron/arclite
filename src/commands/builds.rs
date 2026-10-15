@@ -68,51 +68,77 @@ pub(crate) fn build_branch(item: &str) -> String {
 /// Derive the state of the one build worktree for `item`, in the documented priority order. Earlier
 /// runs for the item are ledger history, never state inputs, so only the *latest* build run's outcome
 /// is consulted (and only after the live-marker and merged signals fall through).
+/// The shared inputs every state derivation reads — resolved once per `arc builds` invocation and
+/// passed as one, so a new signal is a field here rather than another positional argument each
+/// action helper must re-thread in order.
+struct StateInputs<'a> {
+    default_head: &'a str,
+    /// This repo's recorded form — scopes the device-wide run log and the live markers to it.
+    repo_record: &'a str,
+    live_items: &'a [String],
+    records: &'a [serde_json::Value],
+}
+
 fn derive_state(
     root: &Path,
     item: &str,
-    default_head: &str,
-    live_items: &[String],
-    records: &[serde_json::Value],
+    s: &StateInputs,
 ) -> anyhow::Result<(BuildState, Option<String>)> {
     // 1. A live marker for this item — a running agent, never double-driven.
-    if live_items.iter().any(|i| i == item) {
+    if s.live_items.iter().any(|i| i == item) {
         return Ok((BuildState::InFlight, None));
     }
+    let latest = latest_build_run(s.records, s.repo_record, item);
+    let completed = matches!(&latest, Some(l) if l.outcome == "completed" && l.commit.is_some());
     let branch = build_branch(item);
-    // 2. Merged into the default branch — by patch-id, so a rebased or squashed merge still counts.
+    // 2. Merged into the default branch. Patch-equivalence covers a rebased or squashed merge; a
+    // reachable tip with an empty cherry range is an ordinary fast-forward/merge-commit integration
+    // *or* a branch that never gained a commit — topology can't tell them apart, so the run record
+    // (guaranteed: build refuses to run unlogged) resolves it: a completed build there is merged,
+    // an errored/absent one never landed anything and falls through to interrupted.
     let branch_present = crate::synth::build_branch_exists(root, &branch)
         .map_err(|e| anyhow::anyhow!("{e}"))
         .with_context(|| format!("checking the build branch for `{item}`"))?;
-    if branch_present
-        && crate::synth::build_branch_merged(root, &branch, default_head)
+    if branch_present {
+        let merged = match crate::synth::build_branch_merge_signal(root, &branch, s.default_head)
             .map_err(|e| anyhow::anyhow!("{e}"))
             .with_context(|| format!("checking whether `{item}` is merged"))?
-    {
-        let commit = latest_build_run(records, item).and_then(|l| l.commit);
-        return Ok((BuildState::Merged, commit));
+        {
+            crate::synth::MergeSignal::PatchEquivalent => true,
+            crate::synth::MergeSignal::TipReachable => completed,
+            crate::synth::MergeSignal::Unmerged => false,
+        };
+        if merged {
+            return Ok((BuildState::Merged, latest.and_then(|l| l.commit)));
+        }
     }
     // 3. The latest build run's outcome; 4. otherwise interrupted.
-    match latest_build_run(records, item) {
-        Some(latest) if latest.outcome == "completed" && latest.commit.is_some() => {
-            Ok((BuildState::PendingReview, latest.commit))
-        }
-        _ => Ok((BuildState::Interrupted, None)),
+    if completed {
+        Ok((BuildState::PendingReview, latest.and_then(|l| l.commit)))
+    } else {
+        Ok((BuildState::Interrupted, None))
     }
 }
 
-/// The latest `build` run record for `item`, read newest-first from the `build_run` slice
-/// `arc run build` writes into `runs.jsonl` — structured fields, never reparsed prose. The run id
-/// rides along for the resolution trail `--clean` writes.
+/// The latest `build` run record for `item` *in this repo*, read newest-first from the `build_run`
+/// slice `arc run build` writes into `runs.jsonl` — structured fields, never reparsed prose. The
+/// run id rides along for the resolution trail `--clean` writes. The log is device-wide, so the
+/// record's `repo` must match: two repos can hold an item with the same id, and the other repo's
+/// newer run must not determine this repo's state or provenance.
 struct LatestBuild {
     run_id: Option<String>,
     outcome: String,
     commit: Option<String>,
 }
 
-fn latest_build_run(records: &[serde_json::Value], item: &str) -> Option<LatestBuild> {
+fn latest_build_run(
+    records: &[serde_json::Value],
+    repo_record: &str,
+    item: &str,
+) -> Option<LatestBuild> {
     records.iter().find_map(|r| {
         (r.get("command").and_then(serde_json::Value::as_str) == Some("build")
+            && crate::log::record_repo(r) == Some(repo_record)
             && r.pointer("/build_run/item")
                 .and_then(serde_json::Value::as_str)
                 == Some(item))
@@ -197,31 +223,29 @@ pub fn run(args: &BuildsArgs, global: &GlobalArgs) -> anyhow::Result<std::proces
     let repo_record = crate::log::repo_record_string(&root);
     let live_items = live_build_items(&repo_record)?;
     let (records, _skipped) = crate::log::records_newest_first()?;
+    let s = StateInputs {
+        default_head: &default_head,
+        repo_record: &repo_record,
+        live_items: &live_items,
+        records: &records,
+    };
 
     if let Some(item) = &args.resume {
-        return resume(
-            &root,
-            item,
-            &default_head,
-            &live_items,
-            &records,
-            args,
-            global,
-        );
+        return resume(&root, item, &s, args, global);
     }
     if let Some(item) = &args.discard {
-        discard(&root, item, &default_head, &live_items, &records, global)?;
+        discard(&root, item, &s, global)?;
         return Ok(std::process::ExitCode::SUCCESS);
     }
     if args.clean {
-        clean(&root, &default_head, &live_items, &records, global)?;
+        clean(&root, &s, global)?;
         return Ok(std::process::ExitCode::SUCCESS);
     }
 
     let (items, unreadable) = enumerate_worktrees(&root)?;
     let mut builds = Vec::with_capacity(items.len());
     for item in items {
-        let (state, commit) = derive_state(&root, &item, &default_head, &live_items, &records)?;
+        let (state, commit) = derive_state(&root, &item, &s)?;
         let worktree = crate::build_worktree_path(&root, &item)
             .map(|p| p.display().to_string())
             .unwrap_or_default();
@@ -248,14 +272,12 @@ pub fn run(args: &BuildsArgs, global: &GlobalArgs) -> anyhow::Result<std::proces
 fn resume(
     root: &Path,
     item: &str,
-    default_head: &str,
-    live_items: &[String],
-    records: &[serde_json::Value],
+    s: &StateInputs,
     args: &BuildsArgs,
     global: &GlobalArgs,
 ) -> anyhow::Result<std::process::ExitCode> {
     let _ = item_worktree(root, item)?;
-    let (state, _) = derive_state(root, item, default_head, live_items, records)?;
+    let (state, _) = derive_state(root, item, s)?;
     match state {
         BuildState::Interrupted => {}
         BuildState::InFlight => anyhow::bail!(
@@ -302,16 +324,9 @@ fn item_worktree(root: &Path, item: &str) -> anyhow::Result<std::path::PathBuf> 
 /// `--discard <item>`: remove the item's build worktree and branch. Refused while the build is in
 /// flight — a worktree a running agent is writing into is never pulled out from under it; any other
 /// state is the operator's to discard.
-fn discard(
-    root: &Path,
-    item: &str,
-    default_head: &str,
-    live_items: &[String],
-    records: &[serde_json::Value],
-    global: &GlobalArgs,
-) -> anyhow::Result<()> {
+fn discard(root: &Path, item: &str, s: &StateInputs, global: &GlobalArgs) -> anyhow::Result<()> {
     let worktree = item_worktree(root, item)?;
-    let (state, _) = derive_state(root, item, default_head, live_items, records)?;
+    let (state, _) = derive_state(root, item, s)?;
     anyhow::ensure!(
         state != BuildState::InFlight,
         "the build for `{item}` is in flight — a running agent owns that worktree; wait for it or kill the run first"
@@ -338,17 +353,11 @@ fn discard(
 /// `--clean`: remove every *merged* build worktree and resolve its item — the merged build is the
 /// one whose change has landed, so the worktree is done serving and the agenda entry it implemented
 /// closes with the trail (the latest run's commit in the resolution note).
-fn clean(
-    root: &Path,
-    default_head: &str,
-    live_items: &[String],
-    records: &[serde_json::Value],
-    global: &GlobalArgs,
-) -> anyhow::Result<()> {
+fn clean(root: &Path, s: &StateInputs, global: &GlobalArgs) -> anyhow::Result<()> {
     let (items, _unreadable) = enumerate_worktrees(root)?;
     let mut cleaned = Vec::new();
     for item in items {
-        let (state, commit) = derive_state(root, &item, default_head, live_items, records)?;
+        let (state, commit) = derive_state(root, &item, s)?;
         if state != BuildState::Merged {
             continue;
         }
@@ -357,7 +366,7 @@ fn clean(
         })?;
         crate::synth::remove_build_worktree(root, &build_branch(&item), &worktree)
             .map_err(|e| anyhow::anyhow!("could not clean the merged build for `{item}`: {e}"))?;
-        let run_id = latest_build_run(records, &item).and_then(|l| l.run_id);
+        let run_id = latest_build_run(s.records, s.repo_record, &item).and_then(|l| l.run_id);
         let resolution =
             super::items::resolve_item(root, &item, run_id.as_deref(), commit.as_deref())?;
         cleaned.push(CleanedBuild {
