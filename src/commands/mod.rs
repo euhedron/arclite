@@ -473,6 +473,17 @@ pub(crate) fn run_build_mode(
         rb.name,
         crate::ai::agentic_backends_hint()
     );
+    // A build's lifecycle is derived from its run record — pending review *is* the latest record's
+    // `outcome: completed`, resume and merged-cleanup read it, and a reachable-tip merge is told
+    // apart from a never-committed branch by it. An unlogged build would be unmanageable (`arc
+    // builds` could only ever read it as interrupted), so `logging = false` is refused before any
+    // spend rather than silently degrading the lifecycle (reject-unsupported-option-before-acting).
+    anyhow::ensure!(
+        settings.logging_enabled(),
+        "`arc run build` requires run logging, and `logging = false` is set — a build's lifecycle \
+         (pending review, resume, merged cleanup) is derived from its run record; re-enable logging \
+         to build"
+    );
     // The item is the build's primary instruction — resolve its text (and refuse an unknown id,
     // listing the open agenda) before creating anything.
     let agenda = items::load(&args.path)?;
