@@ -111,6 +111,15 @@ impl Agenda {
     }
 }
 
+/// The one parse shape of `.arc/items/order.json` — `{"order": [ids]}`, nothing else
+/// (`deny_unknown_fields`). Read by [`load`] and rewritten by [`resolve_item`] through this single
+/// declaration, so the two sides of the contract cannot drift.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Order {
+    order: Vec<String>,
+}
+
 /// Load a repo's agenda: the open ledger, the order file (malformed = a hard error, absent =
 /// disclosed as such), the integrity verdicts, and the resolved count.
 pub(crate) fn load(repo: &Path) -> anyhow::Result<Agenda> {
@@ -120,11 +129,6 @@ pub(crate) fn load(repo: &Path) -> anyhow::Result<Agenda> {
         .with_context(|| format!("cannot read {}", order_path.display()))?
     {
         Some(text) => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Order {
-                order: Vec<String>,
-            }
             let parsed: Order = serde_json::from_str(&text)
                 .with_context(|| format!("invalid order file {}", order_path.display()))?;
             Some(parsed.order)
@@ -288,11 +292,6 @@ pub(crate) fn resolve_item(
     if let Some(text) = crate::read_optional(&order_path)
         .with_context(|| format!("cannot read {}", order_path.display()))?
     {
-        #[derive(serde::Serialize, serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Order {
-            order: Vec<String>,
-        }
         let mut parsed: Order = serde_json::from_str(&text)
             .with_context(|| format!("invalid order file {}", order_path.display()))?;
         parsed.order.retain(|listed| listed != id);
