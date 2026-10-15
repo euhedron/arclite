@@ -410,6 +410,9 @@ struct CleanedBuild {
 
 fn human_report(report: &BuildsReport) -> String {
     use std::fmt::Write as _;
+    /// State-label column width: the longest [`BuildState::label`] ("pending review", 14) plus a
+    /// two-space gutter, so the item column stays aligned across every state.
+    const STATE_WIDTH: usize = 16;
     let mut out = String::new();
     if report.builds.is_empty() {
         out.push_str("no build worktrees\n");
@@ -420,7 +423,13 @@ fn human_report(report: &BuildsReport) -> String {
                 .as_deref()
                 .map(|c| format!(" @ {c}"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "{:<16} {}{}", b.state.label(), b.item, commit);
+            let _ = writeln!(
+                out,
+                "{:<STATE_WIDTH$} {}{}",
+                b.state.label(),
+                b.item,
+                commit
+            );
         }
     }
     for name in &report.unreadable {
