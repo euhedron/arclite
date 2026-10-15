@@ -246,9 +246,14 @@ pub fn run(args: &BuildsArgs, global: &GlobalArgs) -> anyhow::Result<std::proces
     let mut builds = Vec::with_capacity(items.len());
     for item in items {
         let (state, commit) = derive_state(&root, &item, &s)?;
+        // Effectively infallible here (the items came from a resolved worktrees dir), so the None
+        // is asserted as an error like the sibling sites — never papered over with an empty path.
         let worktree = crate::build_worktree_path(&root, &item)
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                anyhow::anyhow!("could not resolve a worktree path (home directory unknown)")
+            })?
+            .display()
+            .to_string();
         builds.push(BuildEntry {
             branch: build_branch(&item),
             item,
