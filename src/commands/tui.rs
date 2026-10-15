@@ -2151,8 +2151,14 @@ fn handle_feedback_compose_key(app: &mut App, code: KeyCode) {
     let Some((inbox, message)) = save else { return };
     let id = crate::log::new_id();
     let outcome = if inbox {
-        crate::commands::feedback::inbox_note(Path::new(&app.cwd), &id, &message, None)
-            .map(|path| format!("queued for the next session: {}", path.display()))
+        crate::commands::feedback::inbox_note(Path::new(&app.cwd), &id, &message, None).map(
+            |(path, seed_warning)| {
+                // The returned seed warning is disclosed here, in the viewport's own info line —
+                // never raw stderr into the terminal the TUI exclusively holds.
+                let warning = seed_warning.map(|w| format!(" ({w})")).unwrap_or_default();
+                format!("queued for the next session: {}{warning}", path.display())
+            },
+        )
     } else {
         crate::commands::feedback::capture(&id, &message, None)
             .map(|path| format!("captured: {id} -> {}", path.display()))
