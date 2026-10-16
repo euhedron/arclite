@@ -110,6 +110,9 @@ pub enum Command {
     /// arc's own ledger — with per-repo session counts and activity recency (--all includes
     /// suppressed entries).
     Repos(ReposArgs),
+    /// List this repo's build worktrees with their derived state (in flight / merged / pending
+    /// review / interrupted), and act on them: resume, discard, or clean out the merged ones.
+    Builds(BuildsArgs),
     /// List the models each backend's provider API reports available (needs an API key: the
     /// provider's standard env var, or a saved user-layer `api_keys.*` setting).
     Models(ModelsArgs),
@@ -220,6 +223,36 @@ pub struct ReposArgs {
     /// discovered paths that no longer exist on disk.
     #[arg(long)]
     pub all: bool,
+}
+
+/// Arguments for `arc builds` — the build-worktree lifecycle surface (see `commands::builds`).
+#[derive(Debug, Args)]
+pub struct BuildsArgs {
+    /// Path to the repository whose builds to manage (defaults to the current directory).
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+    /// Relaunch an *interrupted* build against its worktree's current on-disk state (refused for an
+    /// in-flight, merged, or pending-review build). Costs real tokens, like `arc run build`.
+    #[arg(long, value_name = "ITEM", conflicts_with_all = ["discard", "clean"])]
+    pub resume: Option<String>,
+    /// Backend for the `--resume` relaunch (else the configured `backend`).
+    #[arg(long, requires = "resume")]
+    pub backend: Option<String>,
+    /// Model for the `--resume` relaunch (else the backend's configured or default model).
+    #[arg(long, requires = "resume")]
+    pub model: Option<String>,
+    /// Hard per-run cost cap in USD for the `--resume` relaunch (on backends with a native cap).
+    #[arg(long, requires = "resume")]
+    pub max_budget_usd: Option<f64>,
+    /// Preview the `--resume` relaunch — the exact prompt and worktree plan — without spending.
+    #[arg(long, requires = "resume")]
+    pub dry_run: bool,
+    /// Remove an item's build worktree and branch (refused while its build is in flight).
+    #[arg(long, value_name = "ITEM", conflicts_with_all = ["resume", "clean"])]
+    pub discard: Option<String>,
+    /// Remove every *merged* build worktree and resolve its item (the run id in the resolution note).
+    #[arg(long, conflicts_with_all = ["resume", "discard"])]
+    pub clean: bool,
 }
 
 /// Arguments for `arc items` — the agenda's read surface (see `commands::items`).

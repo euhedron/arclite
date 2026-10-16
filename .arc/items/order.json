@@ -1,6 +1,5 @@
 {
   "order": [
-    "build-management",
     "modular-specification",
     "live-transcript-auditing",
     "behavioral-exhibit-ledger",
