@@ -137,7 +137,7 @@ fn latest_build_run(
     item: &str,
 ) -> Option<LatestBuild> {
     records.iter().find_map(|r| {
-        (r.get("command").and_then(serde_json::Value::as_str) == Some("build")
+        (r.get("command").and_then(serde_json::Value::as_str) == Some(crate::cli::NAME_BUILD)
             && crate::log::record_repo(r) == Some(repo_record)
             && r.pointer("/build_run/item")
                 .and_then(serde_json::Value::as_str)
@@ -170,7 +170,7 @@ fn live_build_items(repo_record: &str) -> anyhow::Result<Vec<String>> {
     Ok(registry
         .runs
         .into_iter()
-        .filter(|r| r.command == "build" && r.repo == repo_record)
+        .filter(|r| r.command == crate::cli::NAME_BUILD && r.repo == repo_record)
         .filter_map(|r| r.item)
         .collect())
 }

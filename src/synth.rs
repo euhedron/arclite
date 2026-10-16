@@ -2444,7 +2444,13 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
             .map_err(|e| anyhow::anyhow!("could not create the build worktree: {e}"))?;
     }
 
-    let active = crate::runs::register("build", opts.repo, opts.model, 0, Some(opts.item));
+    let active = crate::runs::register(
+        crate::cli::NAME_BUILD,
+        opts.repo,
+        opts.model,
+        0,
+        Some(opts.item),
+    );
     if active.is_none() {
         eprintln!(
             "arclite: this build won't appear in `arc status` (couldn't write its registry marker)"
@@ -2532,7 +2538,7 @@ pub fn run_build(prompt: &str, opts: &BuildOptions) -> anyhow::Result<ExitCode> 
             ts,
             version: env!("CARGO_PKG_VERSION"),
             build: env!("ARC_BUILD_COMMIT"),
-            command: "build",
+            command: crate::cli::NAME_BUILD,
             repo: crate::log::repo_record_string(opts.repo),
             commit: repo_commit(opts.repo),
             model: &report.model,
