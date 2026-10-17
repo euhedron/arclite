@@ -583,11 +583,13 @@ pub(crate) fn run_build_mode(
             "the worktree path is not valid UTF-8, so it can't be safely scoped in the write grant"
         )
     })?;
+    // No remedy is advised because none exists today: the prefix comes from the home directory
+    // (`arc_home` reads only `dirs::home_dir()`), so naming a knob here would be false advice.
     anyhow::ensure!(
         !w.contains(['(', ')', '*', '?', '[', ']']),
-        "the worktree path `{w}` contains a character reserved by the permission-rule grammar \
-         (`( ) * ? [ ]`), so the build's write-confinement cannot be expressed safely — set ARC_HOME \
-         (or move the checkout) to a path without those characters"
+        "the build worktree path `{w}` (derived from your home directory) contains a character \
+         reserved by the permission-rule grammar (`( ) * ? [ ]`), so the build's write-confinement \
+         cannot be expressed safely"
     );
 
     // Writes are path-scoped to the worktree: a bare Edit/Write grant would let the agent edit any

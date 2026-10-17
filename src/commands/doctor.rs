@@ -642,11 +642,15 @@ pub(crate) fn human(report: &Report) -> String {
         "tunables",
         &format!(
             "http-retries {} · max-runs {} · finding-slug-max {} · head-scan {} \
-             (ARC_HTTP_RETRIES, ARC_MAX_RUNS, ARC_FINDING_SLUG_MAX, ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES){ignored}",
+             ({}, {}, {}, {}){ignored}",
             t.http_retries,
             t.max_runs,
             t.finding_slug_max,
-            crate::discovery::head_scan_desc(t.head_scan_lines, t.head_scan_bytes)
+            crate::discovery::head_scan_desc(t.head_scan_lines, t.head_scan_bytes),
+            crate::http::HTTP_RETRIES_ENV,
+            crate::synth::MAX_RUNS_ENV,
+            crate::commands::promote::FINDING_SLUG_MAX_ENV,
+            crate::discovery::head_scan_env_names()
         ),
     ));
     lines.join("\n")
