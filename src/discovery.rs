@@ -51,8 +51,14 @@ const DEFAULT_HEAD_SCAN_MAX_BYTES: u64 = 64 * 1024;
 
 /// The override env vars, named once and reused by both the resolver and its rejected-override
 /// warnings below, so the parse key and the disclosure key cannot drift apart.
-const HEAD_SCAN_LINES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_LINES";
-const HEAD_SCAN_BYTES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_BYTES";
+pub(crate) const HEAD_SCAN_LINES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_LINES";
+pub(crate) const HEAD_SCAN_BYTES_ENV: &str = "ARC_DISCOVERY_HEAD_SCAN_BYTES";
+
+/// The head-scan knob names, rendered `LINES/BYTES` from their one definition — for the disclosure
+/// notes here and doctor's tunables report, so the displayed name can't drift from the parsed one.
+pub(crate) fn head_scan_env_names() -> String {
+    format!("{HEAD_SCAN_LINES_ENV}/{HEAD_SCAN_BYTES_ENV}")
+}
 
 /// Env knobs letting the caller widen or disable the head-scan bounds when the defaults would omit
 /// a repo whose metadata sits deeper: `ARC_DISCOVERY_HEAD_SCAN_LINES` and
@@ -232,8 +238,9 @@ pub fn discover(include_all: bool) -> Discovery {
     // head-scan bound shapes what the map can see, and the caller should know it is in effect
     // rather than discover it. Names the bound and the knob that widens or disables it.
     notes.push(format!(
-        "sessions attributed by scanning each file's head ({}; ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES to widen, 0 to disable)",
-        head_scan_desc_effective()
+        "sessions attributed by scanning each file's head ({}; {} to widen, 0 to disable)",
+        head_scan_desc_effective(),
+        head_scan_env_names()
     ));
     claude_store(&mut map, &mut notes);
     codex_store(&mut map, &mut notes);
@@ -662,9 +669,10 @@ fn codex_store(map: &mut BTreeMap<String, RepoActivity>, notes: &mut Vec<String>
     if unresolved > 0 {
         notes.push(format!(
             "codex sessions: {unresolved} session file(s) without a readable repo in the head \
-             (scan bound: {}; widen with ARC_DISCOVERY_HEAD_SCAN_LINES/_BYTES) — counted nowhere \
+             (scan bound: {}; widen with {}) — counted nowhere \
              rather than guessed",
-            head_scan_desc_effective()
+            head_scan_desc_effective(),
+            head_scan_env_names()
         ));
     }
     if unlabeled > 0 {

@@ -6,8 +6,9 @@ use clap::{Args, Parser, Subcommand};
 /// so the documented bound can't drift from the enforced one — including an `ARC_MAX_RUNS` override.
 fn runs_help() -> String {
     format!(
-        "Run the synthesis N times concurrently (1–{}, the default ceiling, raisable with ARC_MAX_RUNS; a larger value is rejected, never silently capped). Structured `results` are unioned (only byte-identical items collapse); prose outputs concatenate as per-run sections. A per-run --max-budget-usd applies to each, so N runs can spend up to N× it",
-        crate::synth::max_runs().0
+        "Run the synthesis N times concurrently (1–{}, the default ceiling, raisable with {}; a larger value is rejected, never silently capped). Structured `results` are unioned (only byte-identical items collapse); prose outputs concatenate as per-run sections. A per-run --max-budget-usd applies to each, so N runs can spend up to N× it",
+        crate::synth::max_runs().0,
+        crate::synth::MAX_RUNS_ENV
     )
 }
 
