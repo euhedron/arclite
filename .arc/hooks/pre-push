@@ -1,146 +1,52 @@
 #!/usr/bin/env bash
-# arclite pre-push hook. Nothing here is canonical — a hook is configurable by definition; this is only
-# what arclite runs today, and it is meant to change. Edit it freely. (bash, not sh: the changed-path
-# read below consumes git's NUL-delimited machine form, which POSIX sh cannot read.)
-#
-# Enable for a clone: `git config core.hooksPath .arc/hooks`. Skip one push: `ARC_GATE=0 git push`.
-# Disable: unset core.hooksPath.
-#
-# It runs the gates and the advisories *concurrently*, so the wall-clock is the slowest single run, not
-# their sum (concurrent arc/claude calls are fine — `--runs N` relies on the same):
-#   - GATE (blocking): `arc run audit` over all of src on the default model — exits non-zero on any rule
-#     violation and blocks the push.
-#   - AGENDA GATE (blocking): `arc run align` over the tracked items (.arc/items) plus the pushed src
-#     diff — priorities get reconsidered as the code moves; incoherence in the agenda blocks like a
-#     rule violation in the code.
-#   - ADVISORIES (non-blocking): `arc run critique/suggest/extract` over the pushed diff — defects,
-#     what's worth attention, and candidate rules to curate. They run *regardless* of the gates' verdicts
-#     (a blocked push still surfaces them) and never block. They run tool-less (portable across
-#     backends); on a claude-backed hook, granting read-only tools (--allow-tool Read/Grep/Glob) lets a
-#     diff-scoped advisory consult the rest of the repo — add them per verb if you want that.
+# arclite pre-push gate — not canon; edit freely. Skip once: ARC_GATE=0 git push.
 if [ "$ARC_GATE" = "0" ]; then
     echo "arclite gate: skipped (ARC_GATE=0)" >&2
     exit 0
 fi
 
-# A tag-only push moves no branch: its commits are already on the remote, gated when they landed, so
-# re-running the gate would only re-sample identical code (each fresh audit is a new judgment — a
-# release tag shouldn't be a lottery ticket on code that already passed). But that premise must be
-# PROVED, not assumed: a tag can carry commits origin/main never received (e.g. one this gate just
-# blocked), and skipping on the ref name alone once let exactly that slip through — so a tag whose
-# target isn't an ancestor of origin/main gates like a branch push. A deletion pushes no commits at
-# all (its stdin line carries the zero sha) — nothing to gate. The refs arrive on stdin as
-# `<local ref> <local sha> <remote ref> <remote sha>` lines.
 zero=0000000000000000000000000000000000000000
 branch_push=0
 while read -r local_ref local_sha _rest; do
-    [ "$local_sha" = "$zero" ] && continue # a deletion — pushes no commits
+    [ "$local_sha" = "$zero" ] && continue
     case "$local_ref" in
-    refs/tags/*)
-        # The skip's premise, verified: the tagged commit already landed on the gated branch.
-        git merge-base --is-ancestor "$local_sha" origin/main 2>/dev/null || branch_push=1
-        ;;
+    refs/tags/*) git merge-base --is-ancestor "$local_sha" origin/main 2>/dev/null || branch_push=1 ;;
     *) branch_push=1 ;;
     esac
 done
 if [ "$branch_push" -eq 0 ]; then
-    echo "arclite gate: push moves no ungated commits (landed tags / deletions) — skipping" >&2
+    echo "arclite gate: push moves no ungated commits — skipping" >&2
     exit 0
 fi
 
-# CI parity (blocking, deterministic): the same checks the GitHub Actions CI workflow runs, so a push
-# that would turn CI red is blocked here first — before any AI spend. Cheapest check first; on a tree
-# already built locally cargo's cache makes the re-check near-instant. (arclite devs have the Rust
-# toolchain; this is arclite's own hook, not the generic `arc init --hook` scaffold.)
-echo "=== arclite gate · cargo fmt / clippy / test (CI parity) ===" >&2
-if ! cargo fmt --check >&2; then
-    echo "arclite gate: push BLOCKED — cargo fmt --check failed (run 'cargo fmt'). Override: 'ARC_GATE=0 git push'." >&2
-    exit 1
-fi
-if ! cargo clippy --all-targets --locked -- -D warnings >&2; then
-    echo "arclite gate: push BLOCKED — cargo clippy found warnings (would break CI). Override: 'ARC_GATE=0 git push'." >&2
-    exit 1
-fi
-if ! cargo test --locked >&2; then
-    echo "arclite gate: push BLOCKED — cargo test failed (would break CI). Override: 'ARC_GATE=0 git push'." >&2
-    exit 1
-fi
+echo "=== arclite gate · cargo fmt / clippy / test ===" >&2
+cargo fmt --check >&2 || { echo "arclite gate: BLOCKED — cargo fmt (run 'cargo fmt')." >&2; exit 1; }
+cargo clippy --all-targets --locked -- -D warnings >&2 || { echo "arclite gate: BLOCKED — cargo clippy." >&2; exit 1; }
+cargo test --locked >&2 || { echo "arclite gate: BLOCKED — cargo test." >&2; exit 1; }
 
-# Advisories are scoped to the source changes being pushed (origin/main..HEAD) with --no-scan, so their
-# signal tracks the change and the cost stays small; the gate, by contrast, re-audits all of src.
-# Paths ride git's NUL-delimited machine form (-z) into quoted positional parameters — no whitespace
-# splitting, no quoting ambiguity, any byte a filename can hold — and each is ./-prefixed so a
-# leading-dash name can't be read as a flag.
 set --
 if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
-    while IFS= read -r -d '' f; do
-        set -- "$@" --include "./$f"
-    done < <(git diff --name-only --diff-filter=d -z origin/main..HEAD -- src 2>/dev/null)
+    while IFS= read -r -d '' f; do set -- "$@" --include "./$f"; done \
+        < <(git diff --name-only --diff-filter=d -z origin/main..HEAD -- src 2>/dev/null)
 fi
 
-# Launch the gate and each advisory concurrently, each to its own temp file (so their streams don't
-# interleave); collect them in order once all finish. --findings feeds the open ledger into the
-# audit so it hunts BEYOND what's already recorded: a finding held open with a curation judgment
-# (or awaiting its fix) is excluded from re-report instead of re-blocking every round.
 gate_out=$(mktemp)
 arc run audit . --include src --findings --fail-on-findings >"$gate_out" 2>&1 &
 gate_pid=$!
-
-# The agenda gate: the tracked items + intended order (auto-loaded by align) judged against the
-# default context baseline (README + manifests + git truth) and the same pushed src diff the
-# advisories see — the ground a change-versus-agenda judgment needs.
 align_out=$(mktemp)
 arc run align . "$@" --fail-on-findings >"$align_out" 2>&1 &
 align_pid=$!
+wait "$gate_pid"; gate=$?
+wait "$align_pid"; align=$?
 
-adv_pids=""
-adv_outs=""
-if [ "$#" -gt 0 ]; then
-    for verb in critique suggest extract; do
-        out=$(mktemp)
-        arc run "$verb" . --no-scan "$@" >"$out" 2>&1 &
-        adv_pids="$adv_pids $!"
-        adv_outs="$adv_outs $out"
-    done
-fi
+echo "=== arclite gate · audit ===" >&2; cat "$gate_out" >&2; rm -f "$gate_out"
+echo "=== arclite gate · align ===" >&2; cat "$align_out" >&2; rm -f "$align_out"
+[ "$gate" -ne 0 ] && { echo "arclite gate: blocked (audit $gate) · arc log --last --command audit · ARC_GATE=0 to skip" >&2; exit "$gate"; }
+[ "$align" -ne 0 ] && { echo "arclite gate: blocked (align $align) · arc log --last --command align · ARC_GATE=0 to skip" >&2; exit "$align"; }
 
-wait "$gate_pid"
-gate=$?
-wait "$align_pid"
-align=$?
-for p in $adv_pids; do wait "$p"; done
-
-echo "=== arclite gate · audit ===" >&2
-cat "$gate_out" >&2
-rm -f "$gate_out"
-echo "=== arclite gate · align (agenda) ===" >&2
-cat "$align_out" >&2
-rm -f "$align_out"
-if [ -n "$adv_outs" ]; then
-    echo "=== arclite advisories · critique / suggest / extract (non-blocking) ===" >&2
-    # shellcheck disable=SC2086  # intended word-split over the temp-file list
-    cat $adv_outs >&2
-    rm -f $adv_outs
-fi
-
-if [ "$gate" -ne 0 ]; then
-    echo "arclite gate: push blocked (arc audit exit $gate) · findings: arc log --last --command audit --repo \"$PWD\" · skip once: ARC_GATE=0 git push" >&2
-    exit "$gate"
-fi
-if [ "$align" -ne 0 ]; then
-    echo "arclite gate: push blocked (arc align exit $align) · findings: arc log --last --command align --repo \"$PWD\" · skip once: ARC_GATE=0 git push" >&2
-    exit "$align"
-fi
-
-# Meta-gate (blocking): when the rules or meta-rules themselves change, audit the ruleset against the
-# rule-quality meta-rules — so a curated rule can't land example-bound or tied to the system's current
-# state (the general-principle discipline, self-enforced). Skipped entirely (zero cost) on a
-# rules-unchanged push; runs only once the src gate above has passed.
 if git rev-parse --verify --quiet origin/main >/dev/null 2>&1 && [ -n "$(git diff --name-only --diff-filter=d origin/main..HEAD -- .arc/rules .arc/meta-rules 2>/dev/null)" ]; then
-    echo "=== arclite meta-gate · rule-quality (rules changed) ===" >&2
-    if ! arc run audit . --include .arc/rules --ruleset rule-quality --no-scan --fail-on-findings >&2; then
-        echo "arclite meta-gate: push BLOCKED. Sharpen the flagged rule(s), or override with 'ARC_GATE=0 git push'." >&2
-        exit 1
-    fi
+    echo "=== arclite meta-gate · rule-quality ===" >&2
+    arc run audit . --include .arc/rules --ruleset rule-quality --no-scan --fail-on-findings >&2 \
+        || { echo "arclite meta-gate: BLOCKED." >&2; exit 1; }
 fi
 exit 0
