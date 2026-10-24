@@ -141,8 +141,9 @@ pub fn run(args: &PromoteArgs, global: &GlobalArgs) -> anyhow::Result<()> {
                 crate::display_path(&p.path),
                 if p.truncated {
                     format!(
-                        " · id truncated to the {}-char budget (ARC_FINDING_SLUG_MAX to change)",
-                        slug_max_chars().0
+                        " · id truncated to the {}-char budget ({} to change)",
+                        slug_max_chars().0,
+                        FINDING_SLUG_MAX_ENV
                     )
                 } else {
                     String::new()

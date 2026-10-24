@@ -344,9 +344,8 @@ pub fn repo_record_string(dir: &std::path::Path) -> String {
         .to_owned()
 }
 
-/// The last path segment of a repo path — the compact way `arc log` and the TUI show *which* repo a
-/// run targeted (the full path stays in `arc status`). `rsplit` always yields at least one piece, so
-/// this is total.
+/// The last path segment of a repo path — the compact way `arc log`, `arc status`, and the TUI show
+/// *which* repo a run targeted. `rsplit` always yields at least one piece, so this is total.
 pub fn repo_basename(repo: &str) -> &str {
     repo.rsplit(['/', '\\'])
         .next()

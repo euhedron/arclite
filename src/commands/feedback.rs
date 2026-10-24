@@ -42,7 +42,12 @@ pub fn run(args: &FeedbackArgs, global: &GlobalArgs) -> anyhow::Result<()> {
     }
     let id = crate::log::new_id();
     if args.inbox {
-        let path = inbox_note(&args.path, &id, message, args.run.as_deref())?;
+        let (path, seed_warning) = inbox_note(&args.path, &id, message, args.run.as_deref())?;
+        // The CLI's own stderr is the right channel for the auxiliary-seed warning here; the TUI
+        // surfaces the same returned warning in its info line instead.
+        if let Some(warning) = &seed_warning {
+            eprintln!("arclite: {warning}");
+        }
         let human = format!("queued for the next session: {}", path.display());
         let payload = serde_json::json!({ "id": id, "inbox": path.display().to_string() });
         return emit(&payload, &human, global.json);
@@ -95,21 +100,24 @@ pub(crate) fn capture(id: &str, message: &str, run: Option<&str>) -> anyhow::Res
 
 /// Queue one inbox note into `<repo>/.arc/inbox/<id>.md` — the whole file is the note (the items
 /// pattern), claimed with an exclusive create so concurrent captures can't collide. Seeds the
-/// directory's README on first use.
+/// directory's README on first use; a failed seed comes back as the warning half of the pair,
+/// carried as data so each surface discloses it on its own channel — the CLI on stderr, the TUI in
+/// its info line — never written to stderr from here, where the TUI may hold the raw-mode viewport
+/// (restore-exclusive-resource-on-every-exit).
 pub(crate) fn inbox_note(
     repo: &Path,
     id: &str,
     message: &str,
     run: Option<&str>,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<(PathBuf, Option<String>)> {
     let dir = crate::inbox_dir(repo);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    // The orientation README is auxiliary to the note — the primary work — so a failed seed warns
-    // and proceeds rather than aborting the capture (promote seeds the ledger README with the same
-    // posture, for the same reason).
-    if let Err(e) = crate::seed_if_absent(&dir.join("README.md"), INBOX_README) {
-        eprintln!("arclite: couldn't seed the inbox README ({e}); continuing with the note");
-    }
+    // The orientation README is auxiliary to the note — the primary work — so a failed seed is a
+    // returned warning and the capture proceeds rather than aborting (promote seeds the ledger
+    // README with the same posture, for the same reason).
+    let seed_warning = crate::seed_if_absent(&dir.join("README.md"), INBOX_README)
+        .err()
+        .map(|e| format!("couldn't seed the inbox README ({e}); continuing with the note"));
     let path = dir.join(format!("{id}.md"));
     let body = match run {
         Some(run) => format!("{message}\n\n(run: {run})\n"),
@@ -122,7 +130,7 @@ pub(crate) fn inbox_note(
         .with_context(|| format!("claiming {}", path.display()))?;
     file.write_all(body.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
-    Ok(path)
+    Ok((path, seed_warning))
 }
 
 /// Characters of the message the prefilled issue keeps as its title — the subject-line display
