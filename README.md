@@ -1,5 +1,7 @@
 # arclite
 
+> **⚠️ arclite is winding down.** The second generation of *arc* is no longer receiving updates: exercising it ran into limits that necessitated an entirely refreshed approach, built from the ground up — a third generation, **enzyme** (working name), currently taking shape — to continue as the next evolution of arc. As with arc's first generation, the fresh start was the move this time; reliably audited, full-scale reformation from the ground up and retransformation in place each carry their own trade-offs, and enabling and measuring both is among enzyme's ambitions. This repository remains as the reference generation.
+
 > *Nothing is canon. Everything can evolve.*
 >
 > **NOTE**: An experimental project under rapid development — treat any part of any file, and any architectural/formatting/structural decision, as in-progress, not settled (expect unfinished, abandoned, or sub-optimal thoughts).
