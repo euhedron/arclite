@@ -54,7 +54,8 @@ struct BuildEntry {
 #[derive(Serialize)]
 struct BuildsReport {
     builds: Vec<BuildEntry>,
-    /// Item-id subdirectories whose name is not a usable id (disclosed, never silently skipped).
+    /// Subdirectories that can't join the listing — a name that is no usable id, or an entry whose
+    /// type couldn't be probed (disclosed, never silently skipped).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unreadable: Vec<String>,
 }
@@ -190,8 +191,15 @@ fn enumerate_worktrees(root: &Path) -> anyhow::Result<(Vec<String>, Vec<String>)
     for entry in entries {
         let entry = entry
             .with_context(|| format!("reading a build worktree entry in {}", dir.display()))?;
-        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
+        match entry.file_type() {
+            Ok(t) if !t.is_dir() => continue,
+            Ok(_) => {}
+            // An entry whose type can't be probed is disclosed like an unusable name — unreadable
+            // must never read as absent and silently drop a worktree from the lifecycle listing.
+            Err(_) => {
+                unreadable.push(entry.file_name().to_string_lossy().into_owned());
+                continue;
+            }
         }
         match entry.file_name().into_string() {
             Ok(name) if valid_item_id(&name) => items.push(name),
